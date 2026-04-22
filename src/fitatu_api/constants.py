@@ -1,0 +1,11 @@
+"""Package constants for Fitatu API integration."""
+
+DEFAULT_FITATU_API_BASE_URL = "https://pl-pl.fitatu.com/api"
+FITATU_SESSION_CONTEXT_SCHEMA_VERSION = "1.0"
+FITATU_MANAGEMENT_REPORT_SCHEMA_VERSION = "1.0"
+
+FITATU_LIFECYCLE_HEALTHY = "healthy"
+FITATU_LIFECYCLE_TOKEN_ONLY = "token_only"
+FITATU_LIFECYCLE_REFRESH_ONLY = "refresh_only"
+FITATU_LIFECYCLE_RELOGIN_REQUIRED = "relogin_required"
+FITATU_LIFECYCLE_REAUTH_FAILED = "reauth_failed"

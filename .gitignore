@@ -1,0 +1,78 @@
+# Virtual environments
+.venv/
+.pdm-python
+
+# IDE and editor
+.idea/
+.vscode/
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage/
+htmlcov/
+coverage.xml
+
+# Build
+dist/
+build/
+
+
+
+# Reverse engineering workspace (kept locally, never published)
+apk_decompilation/
+
+# Project specific - credentials / session files
+session_data.json
+fitatu_tokens.json
+fitatu_operational.sqlite
+
+# Local credentials / secrets
+.env
+.env.*
+!.env.example
+*.secret
+*.secrets
+*secret*.json
+*secret*.yaml
+*secret*.yml
+*credentials*.json
+*credential*.json
+*token_store*.json
+
+# Generated analysis reports and one-off operational scripts
+docs/generated/
+*_report.json
+live_validation*.json
+live_validation*.py
+run_live_validation*.py
+comprehensive_live_api*.py
+comprehensive_live_api*.json
+recipe_search_contract*.json
+current_scope_probe*.json
+
+# Extra docs generated during development (not part of public API)
+docs/FITATU_APP_API_ANALYSIS_*.md
+docs/KEPT_MODULES_ENDPOINT_MAP.md
+docs/LIBRARY_CAPABILITY_MATRIX.md
+docs/LIBRARY_EXPANSION_NOTES.md
+docs/LIVE_API_ENDPOINT_STATUS_REPORT.md
+docs/LIVE_VALIDATION_WORKFLOW.md
+docs/REFOCUS_PLAN.md
+
+# Operational / analysis scripts (not part of the public library)
+scripts/
+fitatu_login.py
+session_data.template.json
+live_validation_payloads.template.json
