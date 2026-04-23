@@ -5,7 +5,7 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Lint](https://img.shields.io/badge/lint-ruff-brightgreen)
 ![Types](https://img.shields.io/badge/types-mypy-informational)
-![CI](https://github.com/Jezue/fitatu_api/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/Jezue/fitatu_library/actions/workflows/ci.yml/badge.svg)
 
 > **Disclaimer:** This is an **unofficial**, **community-built** API client.
 > It is not affiliated with, endorsed by, or connected to Fitatu Sp. z o.o. in any way.
@@ -483,7 +483,6 @@ See [docs/STABILITY_MATRIX.md](docs/STABILITY_MATRIX.md) for the full breakdown.
 - static type checks with `mypy` (`disallow_untyped_defs = true`)
 - input validation with `ValueError` on bad arguments
 - pre-commit hooks for maintainers
-- dependency update automation via Dependabot
 - wheel and sdist builds validated in CI/local build flow
 
 Local verification:
@@ -541,7 +540,7 @@ Useful docs:
 
 ## 🐛 Found a Bug?
 
-Open an issue on [GitHub Issues](https://github.com/Jezue/fitatu_api/issues). Please include:
+Open an issue on [GitHub Issues](https://github.com/Jezue/fitatu_library/issues). Please include:
 
 - Python version and OS
 - the call that failed and the full traceback
@@ -558,7 +557,7 @@ keeping up with app updates, and writing proper tests and docs on top of it all.
 If `fitatu-api` saved you time or made your project possible, a GitHub star goes a long way.
 It helps other people find the project and tells me the work is worth continuing.
 
-[Leave a star on GitHub →](https://github.com/Jezue/fitatu_api)
+[Leave a star on GitHub →](https://github.com/Jezue/fitatu_library)
 
 Thank you.
 
@@ -573,4 +572,3 @@ This repository also includes:
 
 - `.editorconfig` for consistent editor defaults
 - `.pre-commit-config.yaml` for local quality hooks
-- `.github/dependabot.yml` for dependency update PRs

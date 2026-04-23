@@ -49,7 +49,7 @@ Added:
 - richer README examples for recipes, catalog reads, planner writes, and operational state
 - release guide in `docs/RELEASING.md`
 - generic package badges in the README for Python support, status, linting, and typing
-- maintainer tooling via `.editorconfig`, `.pre-commit-config.yaml`, and Dependabot
+- maintainer tooling via `.editorconfig` and `.pre-commit-config.yaml`
 - CI artifact uploads for coverage and built distributions
 
 Changed:

@@ -29,9 +29,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Jezue/fitatu_api"
-Issues = "https://github.com/Jezue/fitatu_api/issues"
-Changelog = "https://github.com/Jezue/fitatu_api/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/Jezue/fitatu_library"
+Issues = "https://github.com/Jezue/fitatu_library/issues"
+Changelog = "https://github.com/Jezue/fitatu_library/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
