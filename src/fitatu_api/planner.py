@@ -287,6 +287,11 @@ class PlannerModule:
         if isinstance(recipe_ai, dict):
             compact["recipeAI"] = recipe_ai
 
+        # The sync endpoint replaces the whole row, so a missing "eaten" key resets the
+        # flag to false on the server. Carry it over or every write unticks the day.
+        if isinstance(item.get("eaten"), bool):
+            compact["eaten"] = item["eaten"]
+
         has_product_id = item.get("productId") is not None
         if has_product_id:
             compact["productId"] = item.get("productId")
