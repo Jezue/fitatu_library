@@ -5,9 +5,11 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import date
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
+from fitatu_api import FitatuPlannerSyncError
 from fitatu_api.api_client import FitatuApiError, PlannerModule
 
 TEST_DAY = date(2026, 1, 15)
@@ -46,7 +48,21 @@ class FakeClient:
         expected = f"/diet-and-activity-plan/{TEST_USER}/day/{TEST_DAY.isoformat()}"
         if method == "GET" and path == expected:
             return deepcopy(self.day_payload)
-        raise AssertionError(f"Unexpected GET: {method} {path}")
+        if method == "POST" and path == f"/diet-plan/{TEST_USER}/days":
+            self.last_request_kwargs = deepcopy({k: v for k, v in kwargs.items() if k != "json_data"})
+            return self._store_sync_payload(kwargs.get("json_data"))
+        raise AssertionError(f"Unexpected request: {method} {path}")
+
+    def _store_sync_payload(self, json_data: Any) -> list[dict[str, Any]]:
+        if not isinstance(json_data, dict):
+            raise AssertionError("missing sync payload")
+        self.last_sync_payload = deepcopy(json_data)
+        day_iso = TEST_DAY.isoformat()
+        payload = json_data.get(day_iso)
+        if not isinstance(payload, dict):
+            raise AssertionError(f"day key {day_iso!r} missing from payload")
+        self.day_payload = deepcopy(payload)
+        return [{"date": day_iso, "revision": "rev-1", "errorMessage": None}]
 
     def request_first_success(
         self,
@@ -61,17 +77,7 @@ class FakeClient:
             if self.delete_ok:
                 return {"status": "ok", "deleted": True}
             raise FitatuApiError("not found", status_code=404)
-        if method != "POST":
-            raise AssertionError(f"Unexpected method: {method}")
-        if json_data is None:
-            raise AssertionError("missing sync payload")
-        self.last_sync_payload = deepcopy(json_data)
-        day_iso = TEST_DAY.isoformat()
-        payload = json_data.get(day_iso)
-        if not isinstance(payload, dict):
-            raise AssertionError(f"day key {day_iso!r} missing from payload")
-        self.day_payload = deepcopy(payload)
-        return {"status": "ok", "savedDay": day_iso, "path": paths[0]}
+        raise AssertionError(f"Unexpected method: {method}")
 
     def get_product_details(self, product_id: int | str) -> dict[str, Any]:
         details = self.product_details.get(str(product_id))
@@ -305,17 +311,29 @@ class TestStaticHelpers:
         assert PlannerModule.normalize_meal_key("LUNCH") == "lunch"
 
     def test_build_day_sync_payload(self) -> None:
-        day = {"dietPlan": {"b": {}}, "toiletItems": [1], "note": "hi", "tagsIds": [2]}
+        day = {"dietPlan": {"b": {}}, "toilet": [1], "water": {"waterConsumption": 500}, "note": "hi", "tagsIds": [2]}
         result = PlannerModule._build_day_sync_payload(day)
-        assert result["dietPlan"] == {"b": {}}
-        assert result["toiletItems"] == [1]
-        assert result["note"] == "hi"
+        assert result == {"dietPlan": {"b": {}}, "note": "hi", "tagsIds": [2]}
 
     def test_build_day_sync_payload_defaults(self) -> None:
         result = PlannerModule._build_day_sync_payload({})
         assert result["dietPlan"] == {}
-        assert result["toiletItems"] == []
         assert result["tagsIds"] == []
+
+    def test_sync_days_returns_per_day_results(self) -> None:
+        client = FakeClient(_empty_day())
+        result = client.planner.sync_days(TEST_USER, {TEST_DAY.isoformat(): {"dietPlan": {}}})
+        assert result == [{"date": TEST_DAY.isoformat(), "revision": "rev-1", "errorMessage": None}]
+
+    def test_sync_days_raises_when_a_day_is_rejected(self) -> None:
+        client = Mock()
+        rejected = [{"date": "2026-10-13", "revision": None, "errorMessage": "Invalid pddiId UUID version"}]
+        client.request.return_value = rejected
+        planner = PlannerModule(client)
+        with pytest.raises(FitatuPlannerSyncError) as excinfo:
+            planner.sync_days(TEST_USER, {"2026-10-13": {"dietPlan": {}}})
+        assert excinfo.value.results == rejected
+        assert "Invalid pddiId UUID version" in str(excinfo.value)
 
     def test_sync_days_supports_synchronous_param(self) -> None:
         client = FakeClient(_empty_day())

@@ -9,7 +9,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, cast
 
-from .exceptions import FitatuApiError
+from .exceptions import FitatuApiError, FitatuPlannerSyncError
 
 logger = logging.getLogger(__name__)
 
@@ -260,10 +260,14 @@ class PlannerModule:
 
     @staticmethod
     def _build_day_sync_payload(day_data: dict[str, Any]) -> dict[str, Any]:
-        """Extract the fields required by the day-sync POST endpoint from a full day snapshot."""
+        """Extract the fields required by the day-sync POST endpoint from a full day snapshot.
+
+        Water, toilet entries and activities are left out on purpose: the server keeps
+        whatever is stored for keys missing from the payload, so a diet-only write cannot
+        clobber them.
+        """
         return {
             "dietPlan": day_data.get("dietPlan") or {},
-            "toiletItems": day_data.get("toiletItems") or [],
             "note": day_data.get("note"),
             "tagsIds": day_data.get("tagsIds") or [],
         }
@@ -1480,17 +1484,27 @@ class PlannerModule:
         not ``date`` objects — the payload is serialised directly to JSON::
 
             planner.sync_days(user_id, {date.today().isoformat(): day_snapshot})
+
+        Returns the server's per-day result list, e.g.
+        ``[{"date": "2026-10-13", "revision": "...", "errorMessage": None}]``.
+
+        Raises:
+            FitatuPlannerSyncError: When any day comes back with an ``errorMessage``.
+                The endpoint still answers 202 in that case and nothing is saved for
+                the rejected day (e.g. a ``planDayDietItemId`` that is not a UUID v1).
         """
-        return self._client.request_first_success(
+        response = self._client.request(
             "POST",
-            [
-                f"/diet-plan/{user_id}/days",
-                f"/v2/diet-plan/{user_id}/days",
-                f"/v3/diet-plan/{user_id}/days",
-            ],
+            f"/diet-plan/{user_id}/days",
             json_data=days_payload,
             params={"synchronous": "true"} if synchronous else None,
         )
+        if isinstance(response, list):
+            rejected = [row for row in response if isinstance(row, dict) and row.get("errorMessage")]
+            if rejected:
+                details = "; ".join(f"{row.get('date')}: {row.get('errorMessage')}" for row in rejected)
+                raise FitatuPlannerSyncError(f"Planner sync rejected: {details}", results=response)
+        return response
 
     def sync_single_day(
         self,

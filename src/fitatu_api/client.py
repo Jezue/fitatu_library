@@ -882,9 +882,9 @@ class FitatuApiClient:
 
         The search endpoint returns both PRODUCT and RECIPE items in the same result
         list.  RECIPE items (``type="RECIPE"`` in search results) have their details
-        under ``/recipes/{id}``, not ``/products/{id}``.  This method tries all product
-        route variants first and falls back to the recipe route on 404, so callers
-        do not need to distinguish item type before calling.
+        under ``/recipes/{id}``, not ``/products/{id}``.  This method tries the product
+        route first and falls back to the recipe route on 404, so callers do not need
+        to distinguish item type before calling.
 
         Measure field names in the returned dict differ by sub-key:
 
@@ -900,12 +900,7 @@ class FitatuApiClient:
         """
         data = self.request_first_success(
             "GET",
-            [
-                f"/products/{product_id}",
-                f"/v2/products/{product_id}",
-                f"/v3/products/{product_id}",
-                f"/recipes/{product_id}",
-            ],
+            [f"/products/{product_id}", f"/recipes/{product_id}"],
         )
         return cast(dict[str, Any], data) if isinstance(data, dict) else {"raw": data}
 
