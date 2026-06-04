@@ -7,7 +7,6 @@ from datetime import date
 from typing import Any, cast
 
 from ._validation import validate_non_negative_int, validate_user_id
-from .exceptions import FitatuApiError
 
 logger = logging.getLogger(__name__)
 
@@ -94,23 +93,17 @@ class UserSettingsModule:
         )
         return cast(dict[str, Any], data) if isinstance(data, dict) else {"raw": data}
 
-    def get_new(self, user_id: str) -> dict[str, Any]:
-        """Fetch the `settings-new` payload.
+    def get_new(self, user_id: str, day: date | None = None) -> dict[str, Any]:
+        """Fetch the `settings-new` payload resolved for ``day`` (defaults to today).
 
-        Returns a structured error dict on 405 (endpoint not available for this account
-        type) rather than raising, so callers can degrade gracefully.
+        This is where the mobile app reads goals from: energy and macro targets
+        (``userDietSettings``), BMR/TMR (``calculatedValues``), the weekly meal schema,
+        water and planner settings. The GET route needs the date segment; the bare
+        ``/settings-new`` path only accepts PATCH, which is why it answered 405.
         """
-        try:
-            data = self._client.request("GET", f"/users/{user_id}/settings-new")
-            return cast(dict[str, Any], data) if isinstance(data, dict) else {"raw": data}
-        except FitatuApiError as exc:
-            if exc.status_code == 405:
-                return {
-                    "status": "not_supported",
-                    "reason": "settings-new endpoint returned 405 — not available for this account type",
-                    "status_code": 405,
-                }
-            raise
+        target_day = day or date.today()
+        data = self._client.request("GET", f"/users/{user_id}/settings-new/{target_day.isoformat()}")
+        return cast(dict[str, Any], data) if isinstance(data, dict) else {"raw": data}
 
     def update_new(self, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Patch the `settings-new` payload."""
@@ -203,6 +196,23 @@ class ActivitiesModule:
     def __init__(self, client: FitatuApiClient) -> None:
         self._client = client
 
-    def get_catalog(self) -> Any:
-        """Fetch the activity catalog."""
-        return self._client.request("GET", "/activities/")
+    def get_catalog(
+        self,
+        *,
+        page: int | None = None,
+        limit: int | None = None,
+        locale: str | None = None,
+        bmr: float | None = None,
+        sex: int | None = None,
+    ) -> Any:
+        """Fetch the activity catalog, grouped by first letter.
+
+        Pass ``bmr`` and ``sex`` (the profile's numeric value) to get ``energy``
+        values computed for the user instead of the generic defaults.
+        """
+        params = {"page": page, "limit": limit, "locale": locale, "bmr": bmr, "sex": sex}
+        return self._client.request(
+            "GET",
+            "/activities",
+            params={key: value for key, value in params.items() if value is not None} or None,
+        )
