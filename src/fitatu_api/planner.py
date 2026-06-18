@@ -1691,10 +1691,15 @@ class PlannerModule:
         day_payload["dietPlan"] = self._compact_diet_plan_for_sync(diet_plan)
         sync_response = self.sync_single_day(user_id, day, day_payload)
 
+        # Compare the whole day on both sides: the item may sit in another meal
+        # (any_meal=True above) and before_count already spans every bucket.
         reloaded_day = self.get_day(user_id, day)
-        reloaded_diet = self._as_dict(reloaded_day.get("dietPlan"))
-        reloaded_meal = self._as_dict(reloaded_diet.get(meal_key) if reloaded_diet else None)
-        reloaded_items = self._as_dict_list(reloaded_meal.get("items") if reloaded_meal else None)
+        reloaded_diet = self._as_dict(reloaded_day.get("dietPlan")) or {}
+        reloaded_items = [
+            item
+            for bucket in reloaded_diet.values()
+            for item in self._as_dict_list((self._as_dict(bucket) or {}).get("items"))
+        ]
         after_count = len(reloaded_items)
 
         removed_id = str(removed_item.get("planDayDietItemId"))
@@ -2025,53 +2030,6 @@ class PlannerModule:
             "attempts": attempts,
         }
 
-    def _hard_delete_day_item(
-        self,
-        user_id: str,
-        day: date,
-        meal_key: str,
-        item_id: str | int,
-        *,
-        delete_all_related_meals: bool,
-    ) -> dict[str, Any]:
-        """Issue a DELETE request across known route variants for a single diet item."""
-        suffix = "true" if delete_all_related_meals else "false"
-        response = self._client.request_first_success(
-            "DELETE",
-            [
-                (
-                    f"/diet-plan/{user_id}/day/{day.isoformat()}/{meal_key}/{item_id}"
-                    f"?deleteAllRelatedMeals={suffix}"
-                ),
-                (
-                    f"/v2/diet-plan/{user_id}/day/{day.isoformat()}/{meal_key}/{item_id}"
-                    f"?deleteAllRelatedMeals={suffix}"
-                ),
-                (
-                    f"/v3/diet-plan/{user_id}/day/{day.isoformat()}/{meal_key}/{item_id}"
-                    f"?deleteAllRelatedMeals={suffix}"
-                ),
-            ],
-        )
-        return {
-            "ok": True,
-            "meal": meal_key,
-            "removedId": str(item_id),
-            "cleanupMode": "hard_deleted",
-            "hardDeleteResponse": response,
-        }
-
-    @staticmethod
-    def _hard_delete_unavailable_attempt() -> dict[str, Any]:
-        """Return a sentinel attempt record indicating hard-delete is not available on this cluster."""
-        return {
-            "step": "hard_delete",
-            "ok": False,
-            "cleanupMode": "not_supported",
-            "skipped": True,
-            "reason": "hard delete route is not functional on the current live cluster",
-        }
-
     @staticmethod
     def _is_cleanup_ok(result: dict[str, Any] | Any) -> bool:
         """Return True when a cleanup attempt result dict indicates success."""
@@ -2137,11 +2095,6 @@ class PlannerModule:
 
         last_result: dict[str, Any] | None = None
 
-        def attempt_hard_delete() -> tuple[bool, dict[str, Any]]:
-            """Record a hard-delete as unavailable on the current cluster."""
-            attempts.append(self._hard_delete_unavailable_attempt())
-            return False, {}
-
         def attempt_snapshot_remove() -> tuple[bool, dict[str, Any]]:
             """Try removing the item by resyncing the day snapshot without it."""
             return run_attempt(
@@ -2188,10 +2141,12 @@ class PlannerModule:
                 ),
             )
 
+        # deletedAt is how the app itself deletes; the server hides such rows from the
+        # day GET. Leaving a row out of the payload never deletes it (upsert by id).
         if resolved_kind == "normal_item":
             for runner in (
-                attempt_snapshot_remove,
                 attempt_soft_deleted_at,
+                attempt_snapshot_remove,
                 attempt_soft_aggressive,
             ):
                 ok, result = runner()

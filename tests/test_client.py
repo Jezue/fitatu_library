@@ -413,14 +413,16 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(compact["recipeId"], 777)
         self.assertEqual(compact["planDayDietItemId"], "recipe-1")
 
-    def test_remove_day_item_falls_back_to_soft_delete_on_404(self) -> None:
+    def test_remove_day_item_marks_the_row_deleted(self) -> None:
         client = FakeClient(_make_day_payload())
 
         result = client.planner.remove_day_item(TEST_USER_ID, TEST_DAY, "breakfast", "item-1")
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["cleanupMode"], "removed")
-        self.assertNotIn("breakfast", client.day_payload["dietPlan"])
+        self.assertEqual(result["cleanupMode"], "deleted_at")
+        synced = client.day_payload["dietPlan"]["breakfast"]["items"]
+        self.assertEqual(synced[0]["planDayDietItemId"], "item-1")
+        self.assertTrue(synced[0]["deletedAt"])
 
     def test_remove_day_item_delegates_to_auto_strategy(self) -> None:
         client = FakeClient(_make_day_payload())
