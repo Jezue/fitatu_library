@@ -6,6 +6,7 @@ import logging
 import re
 import time
 import uuid
+import warnings
 from datetime import date, datetime
 from typing import Any, cast
 
@@ -15,6 +16,17 @@ logger = logging.getLogger(__name__)
 
 if False:  # pragma: no cover
     from .client import FitatuApiClient
+
+
+def _warn_unsupported_route(name: str, replacement: str) -> None:
+    """Emit a DeprecationWarning for helpers built on routes the API does not serve."""
+    warnings.warn(
+        f"{name}() calls a route that does not exist in the Fitatu API (it was a mobile app "
+        f"screen path or a guessed variant) and always fails with 404. Use {replacement} instead. "
+        "It will be removed in a future release.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
 
 class PlannerModule:
@@ -1357,7 +1369,8 @@ class PlannerModule:
         return result
 
     def get_product_for_meal(self, product_id: str, meal_type: str, day: date) -> Any:
-        """Try known route variants for planner product lookup."""
+        """Deprecated: ``/product/{id}/{meal}/{day}`` is an app screen route, not an API path."""
+        _warn_unsupported_route("get_product_for_meal", "client.get_product_details()")
         return self._client.request_first_success(
             "GET",
             [
@@ -1367,7 +1380,8 @@ class PlannerModule:
         )
 
     def quick_add_form(self, payload: dict[str, Any]) -> Any:
-        """Call the quick-add endpoint directly."""
+        """Deprecated: ``/food/quick-add/form`` is an app screen route, not an API path."""
+        _warn_unsupported_route("quick_add_form", "add_custom_item_to_day_meal()")
         return self._client.request_first_success(
             "POST",
             ["/food/quick-add/form", "/v2/food/quick-add/form"],
@@ -1375,16 +1389,15 @@ class PlannerModule:
         )
 
     def quick_add_form_with_fallback(self, payload: dict[str, Any]) -> Any:
-        """Attempt quick-add and fall back to search+add behavior on 404."""
-        try:
-            return self.quick_add_form(payload)
-        except FitatuApiError as exc:
-            if exc.status_code != 404:
-                raise
-            fallback = self._quick_add_form_fallback(payload)
-            if fallback is not None:
-                return fallback
-            raise
+        """Add a quick-add style payload through search + planner sync.
+
+        There is no quick-add endpoint (the app's quick add is a ``CUSTOM_ITEM`` row
+        in the day sync), so this goes straight to the search-based add.
+        """
+        fallback = self._quick_add_form_fallback(payload)
+        if fallback is None:
+            raise FitatuApiError("quick add payload needs name, mealType, mealDate and userId")
+        return fallback
 
     def _quick_add_form_fallback(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         """Fall back to a search-based add when the quick-add endpoint is unavailable."""
@@ -1452,7 +1465,8 @@ class PlannerModule:
         return mapping.get(number, "snack")
 
     def send_changes(self, payload: dict[str, Any], method: str = "POST") -> Any:
-        """Send a planner changes payload to the first route variant that works."""
+        """Deprecated: there is no planner changes endpoint; changes go through day sync."""
+        _warn_unsupported_route("send_changes", "sync_days()")
         return self._client.request_first_success(
             method.upper(),
             ["/planner/changes", "/v2/planner/changes", "/v2/diet-plan/planner/changes"],
@@ -1460,7 +1474,8 @@ class PlannerModule:
         )
 
     def add_day_items(self, user_id: str, day: date, items: list[dict[str, Any]]) -> Any:
-        """Try known route variants for adding day items directly."""
+        """Deprecated: there is no day-items endpoint; rows are added through day sync."""
+        _warn_unsupported_route("add_day_items", "sync_single_day()")
         return self._client.request_first_success(
             "POST",
             [
@@ -2222,7 +2237,12 @@ class PlannerModule:
         )
 
     def remove_activity_day_item(self, user_id: str, day: date, item_id: str | int) -> Any:
-        """Try known route variants for deleting an activity item."""
+        """Deprecated: activities have no DELETE route.
+
+        The app removes an activity by re-sending it in the day sync ``activities`` list
+        with ``deletedAt`` set.
+        """
+        _warn_unsupported_route("remove_activity_day_item", "a day sync with deletedAt on the activity")
         return self._client.request_first_success(
             "DELETE",
             [

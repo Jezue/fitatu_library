@@ -581,10 +581,6 @@ class PlannerTests(unittest.TestCase):
         search_item = {"id": 55, "name": "Banan", "measureId": 7}
 
         with patch.object(
-            client.planner,
-            "quick_add_form",
-            side_effect=FitatuApiError("missing", status_code=404),
-        ), patch.object(
             client,
             "search_food",
             return_value=[search_item],
@@ -722,18 +718,29 @@ class PlannerTests(unittest.TestCase):
                 strict_measure=True,
             )
 
-    def test_route_variant_helpers_call_first_success(self) -> None:
+    def test_unsupported_route_helpers_warn_but_still_call_through(self) -> None:
         client = Mock()
         client.auth.fitatu_user_id = TEST_USER_ID
         client.request_first_success.return_value = {"status": "ok"}
         module = PlannerModule(client)
 
-        module.get_product_for_meal("10", "breakfast", TEST_DAY)
-        module.send_changes({"items": []})
-        module.add_day_items(TEST_USER_ID, TEST_DAY, [{"id": 1}])
-        module.remove_activity_day_item(TEST_USER_ID, TEST_DAY, "act-1")
+        calls = (
+            lambda: module.get_product_for_meal("10", "breakfast", TEST_DAY),
+            lambda: module.quick_add_form({"name": "x"}),
+            lambda: module.send_changes({"items": []}),
+            lambda: module.add_day_items(TEST_USER_ID, TEST_DAY, [{"id": 1}]),
+            lambda: module.remove_activity_day_item(TEST_USER_ID, TEST_DAY, "act-1"),
+        )
+        for call in calls:
+            with self.assertWarns(DeprecationWarning):
+                call()
 
-        self.assertEqual(client.request_first_success.call_count, 4)
+        self.assertEqual(client.request_first_success.call_count, 5)
+
+    def test_quick_add_form_with_fallback_rejects_incomplete_payload(self) -> None:
+        module = PlannerModule(Mock())
+        with self.assertRaises(FitatuApiError):
+            module.quick_add_form_with_fallback({"name": "banan"})
 
     def test_sync_single_day_posts_to_the_single_days_route(self) -> None:
         client = Mock()
