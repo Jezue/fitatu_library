@@ -23,6 +23,7 @@ from fitatu_api.api_client import (
     UserSettingsModule,
     WaterModule,
 )
+from fitatu_api.exceptions import FitatuAuthError, FitatuConnectionError, FitatuRateLimitError
 from fitatu_api.fitatu_api import FitatuLibrary
 
 TEST_DAY = date(2026, 4, 19)
@@ -1285,8 +1286,27 @@ class ApiClientTests(unittest.TestCase):
             "fitatu_api.client.requests.request",
             side_effect=requests.RequestException("boom"),
         ):
-            with self.assertRaises(FitatuApiError):
+            with self.assertRaises(FitatuConnectionError):
                 client.request("GET", "/ping")
+
+    def test_request_raises_typed_errors_by_status(self) -> None:
+        cases = {401: FitatuAuthError, 403: FitatuAuthError, 429: FitatuRateLimitError, 422: FitatuApiError}
+        for status, expected in cases.items():
+            client = self._make_client()
+            client.auth.refresh_token = None
+            response = Mock(status_code=status, text="{}", headers={})
+            with self.subTest(status=status), patch(
+                "fitatu_api.client.requests.request", return_value=response
+            ), patch("fitatu_api.client.time.sleep", return_value=None):
+                with self.assertRaises(expected) as ctx:
+                    client.request("GET", "/ping")
+                self.assertEqual(ctx.exception.status_code, status)
+
+    def test_api_error_exposes_codename_from_body(self) -> None:
+        error = FitatuApiError("quota", status_code=403, body='{"codename": "NUMBER_OF_USES_EXCEEDED"}')
+        self.assertEqual(error.codename, "NUMBER_OF_USES_EXCEEDED")
+        self.assertIsNone(FitatuApiError("x", body="not json").codename)
+        self.assertIsNone(FitatuApiError("x").codename)
 
     def test_request_retries_get_on_429_then_succeeds(self) -> None:
         client = self._make_client()
