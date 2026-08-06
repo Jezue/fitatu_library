@@ -1521,6 +1521,16 @@ class PlannerModule:
                 raise FitatuPlannerSyncError(f"Planner sync rejected: {details}", results=response)
         return response
 
+    def get_day_revisions(self, user_id: str, day: date) -> list[str]:
+        """Return the day's revision ids, newest first.
+
+        Every accepted sync adds one, so comparing this list with a previously seen
+        one is a cheap way to notice changes made elsewhere (e.g. on the phone)
+        without downloading the whole day.
+        """
+        data = self._client.request("GET", f"/diet-plan/{user_id}/days/{day.isoformat()}/revisions")
+        return [str(rev) for rev in data] if isinstance(data, list) else []
+
     def sync_single_day(
         self,
         user_id: str,

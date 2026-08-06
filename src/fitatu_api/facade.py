@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 from .auth import FitatuAuthContext
@@ -1005,6 +1006,183 @@ class FitatuLibrary:
             }
         except FitatuApiError as exc:
             return self._error_result("get_day_summary_via_api", exc)
+
+    def get_daily_targets_via_api(
+        self,
+        *,
+        target_date: date | None = None,
+        user_id: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Return the user's energy and macro targets for a day.
+
+        Reads ``settings-new`` and flattens the parts most callers want: energy (kcal),
+        protein/fat/carbohydrate in grams and percent, plus BMR/TMR. The full payload is
+        under ``raw``.
+        """
+        client, fitatu_user_id, error = self._planner_result("get_daily_targets_via_api", user_id=user_id, **kwargs)
+        if error is not None:
+            return error
+        assert client is not None and fitatu_user_id is not None
+        try:
+            settings = client.user_settings.get_new(fitatu_user_id, target_date)
+        except FitatuApiError as exc:
+            return self._error_result("get_daily_targets_via_api", exc)
+        diet = settings.get("userDietSettings") or {}
+        calculated = settings.get("calculatedValues") or {}
+        return {
+            "status": "ok",
+            "result": {
+                "date": settings.get("date"),
+                "energy": diet.get("energy"),
+                "protein": {"grams": diet.get("proteinWeight"), "percent": diet.get("proteinPercentage")},
+                "fat": {"grams": diet.get("fatWeight"), "percent": diet.get("fatPercentage")},
+                "carbohydrate": {
+                    "grams": diet.get("carbohydrateWeight"),
+                    "percent": diet.get("carbohydratePercentage"),
+                },
+                "bmr": calculated.get("BMR"),
+                "tmr": calculated.get("TMR"),
+                "raw": settings,
+            },
+        }
+
+    def log_weight_via_api(
+        self,
+        *,
+        weight: float,
+        target_date: date | None = None,
+        unit: str | None = None,
+        user_id: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Log body weight for a day (today by default), keeping other measurements of that day."""
+        client, fitatu_user_id, error = self._planner_result("log_weight_via_api", user_id=user_id, **kwargs)
+        if error is not None:
+            return error
+        assert client is not None and fitatu_user_id is not None
+        try:
+            result = client.measurements.set_day(
+                fitatu_user_id,
+                target_date or date.today(),
+                weight=weight,
+                weight_unit=unit,
+            )
+            return {"status": "ok", "result": result}
+        except FitatuApiError as exc:
+            return self._error_result("log_weight_via_api", exc)
+
+    def get_weight_history_via_api(
+        self,
+        *,
+        from_date: date | None = None,
+        to_date: date | None = None,
+        user_id: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Return weight entries (``[{date, value, difference, direction}]``) for a range."""
+        client, fitatu_user_id, error = self._planner_result("get_weight_history_via_api", user_id=user_id, **kwargs)
+        if error is not None:
+            return error
+        assert client is not None and fitatu_user_id is not None
+        try:
+            history = client.measurements.get_weight_history(fitatu_user_id, from_date=from_date, to_date=to_date)
+            return {"status": "ok", "result": history}
+        except FitatuApiError as exc:
+            return self._error_result("get_weight_history_via_api", exc)
+
+    def get_range_summary_via_api(
+        self,
+        *,
+        from_date: date,
+        to_date: date,
+        user_id: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Return server-side nutrition and activity totals for a date range."""
+        client, fitatu_user_id, error = self._planner_result("get_range_summary_via_api", user_id=user_id, **kwargs)
+        if error is not None:
+            return error
+        assert client is not None and fitatu_user_id is not None
+        try:
+            return {
+                "status": "ok",
+                "result": {
+                    "from_date": from_date.isoformat(),
+                    "to_date": to_date.isoformat(),
+                    "nutrition": client.summary.get_nutrition(fitatu_user_id, from_date, to_date),
+                    "activities": client.summary.get_activities(fitatu_user_id, from_date, to_date),
+                },
+            }
+        except FitatuApiError as exc:
+            return self._error_result("get_range_summary_via_api", exc)
+
+    def export_diary_via_api(
+        self,
+        *,
+        from_date: date,
+        to_date: date,
+        fmt: str = "csv",
+        path: str | Path | None = None,
+        user_id: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Export the food diary; writes it to ``path`` when given.
+
+        ``result["content"]`` holds the bytes when no ``path`` is passed. An empty range
+        returns ``status: "empty"`` rather than an error.
+        """
+        client, fitatu_user_id, error = self._planner_result("export_diary_via_api", user_id=user_id, **kwargs)
+        if error is not None:
+            return error
+        assert client is not None and fitatu_user_id is not None
+        try:
+            content = client.summary.export_diary(fitatu_user_id, from_date, to_date, fmt=fmt)
+        except FitatuApiError as exc:
+            return self._error_result("export_diary_via_api", exc)
+        if content is None:
+            return {"status": "empty", "result": None}
+        result: dict[str, Any] = {"format": fmt, "size_bytes": len(content)}
+        if path is not None:
+            Path(path).write_bytes(content)
+            result["path"] = str(path)
+        else:
+            result["content"] = content
+        return {"status": "ok", "result": result}
+
+    def get_favorite_foods_via_api(
+        self,
+        *,
+        phrase: str | None = None,
+        user_id: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Return the user's favourite products and recipes."""
+        client, fitatu_user_id, error = self._planner_result("get_favorite_foods_via_api", user_id=user_id, **kwargs)
+        if error is not None:
+            return error
+        assert client is not None and fitatu_user_id is not None
+        try:
+            return {"status": "ok", "result": client.foods.get_favorites(fitatu_user_id, phrase=phrase)}
+        except FitatuApiError as exc:
+            return self._error_result("get_favorite_foods_via_api", exc)
+
+    def get_recent_foods_via_api(
+        self,
+        *,
+        meal_key: str,
+        user_id: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Return foods recently logged in a meal - handy for "the usual breakfast" agents."""
+        client, fitatu_user_id, error = self._planner_result("get_recent_foods_via_api", user_id=user_id, **kwargs)
+        if error is not None:
+            return error
+        assert client is not None and fitatu_user_id is not None
+        try:
+            return {"status": "ok", "result": client.foods.get_recent(fitatu_user_id, meal_key)}
+        except FitatuApiError as exc:
+            return self._error_result("get_recent_foods_via_api", exc)
 
     def search_food(
         self,
