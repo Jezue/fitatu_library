@@ -14,7 +14,13 @@ Optional env vars:
     FITATU_LIVE_RECIPE_ID     Recipe ID for add-recipe tests   (default: skipped)
     FITATU_LIVE_PRODUCT_ID    Known product ID                 (default: searched live)
     FITATU_LIVE_MEAL_KEY      Meal slot for write tests        (default: snack)
-    FITATU_LIVE_DAY           ISO date for planner tests       (default: yesterday)
+    FITATU_LIVE_DAY           ISO date for planner tests       (default: a year from today)
+    FITATU_LIVE_MEASUREMENT_DAY  ISO date with no body measurement, used for the
+                              measurement write round trip     (default: 2020-01-01)
+
+Planner tests clear the test meal on FITATU_LIVE_DAY before and after the run, so
+never point it at a day with entries you care about. The default is a day a year
+ahead, which a normal diary does not have.
     FITATU_LIVE_RUN_WRITE_RECIPE=1   Enable create_recipe test
     FITATU_LIVE_RUN_WRITE_PRODUCT=1  Enable create_product test
 """
@@ -51,6 +57,11 @@ def _env(key: str, default: str | None = None) -> str | None:
     return value if value is not None else default
 
 
+def _default_live_day() -> date:
+    # Write tests clear the test meal on this day; keep them away from the real diary.
+    return date.today() + timedelta(days=365)
+
+
 def _require_env(key: str) -> str:
     value = _env(key)
     if not value:
@@ -76,7 +87,7 @@ def meal_clean_slate(
         yield
         return
     raw = _env("FITATU_LIVE_DAY")
-    day = date.fromisoformat(raw) if raw else date.today() - timedelta(days=1)
+    day = date.fromisoformat(raw) if raw else _default_live_day()
     mk = _env("FITATU_LIVE_MEAL_KEY", "snack") or "snack"
 
     auth = FitatuAuthContext.from_session_data(session_data)
@@ -124,7 +135,7 @@ def test_date() -> date:
     raw = _env("FITATU_LIVE_DAY")
     if raw:
         return date.fromisoformat(raw)
-    return date.today() - timedelta(days=1)
+    return _default_live_day()
 
 
 @pytest.fixture(scope="module")
@@ -1291,3 +1302,86 @@ class TestFullCycleAddRemove:
             f"Meal not empty after removing all items. Remaining: "
             f"{[(i.get('planDayDietItemId'), i.get('productId'), i.get('recipeId')) for i in active_after]}"
         )
+
+
+@skip_unless_live
+class TestEatenFlagSurvivesSync:
+    def test_adding_an_item_keeps_eaten_on_existing_items(
+        self,
+        client: FitatuApiClient,
+        user_id: str,
+        test_date: date,
+        meal_key: str,
+        added_product_item: dict[str, Any],
+    ) -> None:
+        item_id = added_product_item["addedItem"]["planDayDietItemId"]
+        client.planner.update_day_item(user_id, test_date, meal_type=meal_key, item_id=item_id, eaten=True)
+        client.planner.add_custom_item_to_day_meal(
+            user_id, test_date, meal_type=meal_key,
+            name="__eaten_regression__", calories=1, protein_g=0, fat_g=0, carbs_g=0,
+        )
+        time.sleep(1)
+        items = client.planner.list_meal_items(user_id, test_date, meal_key)
+        target = next(i for i in items if i.get("planDayDietItemId") == item_id)
+        assert target.get("eaten") is True
+        for kind in ("custom_add_item", "custom_recipe_item"):
+            try:
+                client.planner.remove_day_items_by_kind(user_id, test_date, item_kind=kind, meal_key=meal_key)
+            except FitatuApiError:
+                pass
+
+
+@skip_unless_live
+class TestNewReadOnlyEndpoints:
+    def test_settings_new_for_a_day(self, client: FitatuApiClient, user_id: str) -> None:
+        settings = client.user_settings.get_new(user_id, date.today())
+        assert "userDietSettings" in settings
+
+    def test_day_revisions(self, client: FitatuApiClient, user_id: str) -> None:
+        assert isinstance(client.planner.get_day_revisions(user_id, date.today()), list)
+
+    def test_measurement_reads(self, client: FitatuApiClient, user_id: str) -> None:
+        start, end = date.today() - timedelta(days=365), date.today()
+        assert isinstance(client.measurements.get_weight_history(user_id, from_date=start, to_date=end), list)
+        assert "weights" in client.measurements.get_weight_chart(user_id, from_date=start, to_date=end)
+        assert isinstance(client.measurements.get_size_summary(user_id, from_date=start, to_date=end), dict)
+
+    def test_range_summaries(self, client: FitatuApiClient, user_id: str) -> None:
+        start, end = date.today() - timedelta(days=6), date.today()
+        assert "energy" in client.summary.get_nutrition(user_id, start, end)
+        assert isinstance(client.summary.get_nutrient_by_day(user_id, "protein", start, end), dict)
+        assert isinstance(client.summary.get_top_products(user_id, "protein", start, end, limit=3), dict)
+        assert isinstance(client.summary.get_activities(user_id, start, end), dict)
+
+    def test_export_diary(self, client: FitatuApiClient, user_id: str) -> None:
+        content = client.summary.export_diary(user_id, date.today() - timedelta(days=6), date.today())
+        assert content is None or content.startswith(b"Date")
+
+    def test_recent_and_favourite_foods(self, client: FitatuApiClient, user_id: str) -> None:
+        assert isinstance(client.foods.get_recent(user_id, "breakfast"), list)
+        assert isinstance(client.foods.get_recent_own(user_id, limit=5), list)
+        assert isinstance(client.foods.get_favorites(user_id), list)
+
+    def test_activity_search(self, client: FitatuApiClient, user_id: str) -> None:
+        assert isinstance(client.activities.search("bieganie", limit=2), list)
+        assert isinstance(client.activities.get_recent(user_id), list)
+
+    def test_daily_targets_via_facade(self, facade: FitatuLibrary, user_id: str) -> None:
+        result = facade.get_daily_targets_via_api(user_id=user_id)
+        assert result["status"] == "ok"
+        assert result["result"]["energy"]
+
+
+@skip_unless_live
+class TestMeasurementWriteRoundTrip:
+    def test_set_and_delete_on_an_empty_day(self, client: FitatuApiClient, user_id: str) -> None:
+        day = date.fromisoformat(_env("FITATU_LIVE_MEASUREMENT_DAY", "2020-01-01") or "2020-01-01")
+        if client.measurements.get_day(user_id, day) is not None:
+            pytest.skip(f"{day} already has a measurement; set FITATU_LIVE_MEASUREMENT_DAY")
+        try:
+            saved = client.measurements.set_day(user_id, day, weight=70.0, waist=80.0)
+            assert float(saved["weight"]) == 70.0
+            assert float(saved["waist"]) == 80.0
+        finally:
+            client.measurements.delete_day(user_id, day)
+        assert client.measurements.get_day(user_id, day) is None
