@@ -18,4 +18,8 @@ repos:
     rev: v2.4.1
     hooks:
       - id: codespell
-        args: [--skip=dist,.git,.mypy_cache,.pytest_cache,.ruff_cache]
+        # Block style on purpose: in a [flow, list] the commas inside --skip split it into items.
+        # hevy (fitness app) and bloc (Flutter state library) appear in the app API catalog.
+        args:
+          - --skip=dist,.git,.mypy_cache,.pytest_cache,.ruff_cache
+          - --ignore-words-list=hevy,bloc

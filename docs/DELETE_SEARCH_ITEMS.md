@@ -63,10 +63,12 @@ print((remove_result.get("result") or {}).get("cleanupMode"))
 
 The delete helper uses a failover chain:
 
-1. Hard DELETE endpoint variants.
-2. Snapshot real-delete by omitting the item and syncing the day.
-3. Frontend-compatible soft-delete (`deletedAt` + minimal quantity).
-4. Optional aggressive fallback (`measureQuantity=0.0`).
+1. Frontend-compatible soft-delete (`deletedAt` + minimal quantity). This is what the app does.
+2. Snapshot sync without the item (kept as a fallback; the server upserts, so this alone
+   does not delete).
+3. Optional aggressive fallback (`measureQuantity=0.0`).
+
+There is no hard DELETE route for planner rows.
 
 For search-added `PRODUCT` items, real delete or soft-delete fallback usually succeeds.
 

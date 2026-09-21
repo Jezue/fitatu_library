@@ -6,7 +6,10 @@ from .service_modules import (
     AuthModule,
     CmsModule,
     DietPlanModule,
+    FoodsModule,
+    MeasurementsModule,
     ResourcesModule,
+    SummaryModule,
     UserSettingsModule,
     WaterModule,
 )
@@ -19,5 +22,8 @@ __all__ = [
     "UserSettingsModule",
     "DietPlanModule",
     "WaterModule",
+    "MeasurementsModule",
+    "SummaryModule",
+    "FoodsModule",
     "ActivitiesModule",
 ]

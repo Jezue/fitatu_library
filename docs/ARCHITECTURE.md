@@ -33,27 +33,25 @@ Planner-specific read and write helpers. This is where the day sync and meal mut
 - `add_search_result_to_day_meal()` - add product from search
 - `update_day_item()` - modify item quantity/details
 - `remove_day_item()` - delete item (with fallback)
-- `soft_remove_day_item_via_snapshot()` - soft-delete by reducing quantity to 0.01
-- `remove_day_item_via_snapshot()` - remove by syncing a trimmed day snapshot
+- `soft_remove_day_item_via_snapshot()` - delete by syncing the row with `deletedAt` (plus quantity 0.01)
+- `remove_day_item_via_snapshot()` - fallback that syncs the day without the row (omission alone does not delete)
+- `get_day_revisions()` - revision ids for cheap change detection
 - `sync_days(..., synchronous=True)` - opt into backend synchronous day sync
 - `move_day_item()` - move helper, live-tested (2026-04-22), cross-meal fallback included
 - `replace_day_item_with_custom_item()` - replace helper, live-tested (2026-04-22), cross-meal fallback included
 
 #### Planner Item Deletion Flow
 
-The `remove_day_item()` method is snapshot-first on the current live cluster.
-
-There is no working planner hard-delete route in practice right now. Live testing on
-`2026-04-19` observed `0/N` successful hard deletes, so the library treats hard delete
-as unsupported in the normal planner removal flow.
+There is no DELETE route for planner rows (neither live nor in the decompiled 4.17.1 app).
+`remove_day_item()` deletes the way the app does: it re-syncs the row with `deletedAt`.
 
 **Current practical flow**
 ```
-GET /diet-plan/{userId}/day/{dateISO}
+GET /diet-and-activity-plan/{userId}/day/{dateISO}
   → Classify the runtime item shape
-  → Try snapshot remove and/or deletedAt-style soft delete
-  → POST /diet-plan/{userId}/days with modified snapshot
-  → GET /diet-plan/{userId}/day/{dateISO} to verify
+  → Set deletedAt on the row (fallbacks: omission, then quantity 0 / visible false)
+  → POST /diet-plan/{userId}/days
+  → GET /diet-and-activity-plan/{userId}/day/{dateISO} and check the id is gone from every meal
 ```
 
 #### Runtime removal kinds

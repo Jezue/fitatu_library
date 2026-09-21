@@ -1,6 +1,6 @@
 """Public package exports for fitatu-api."""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from .api_client import (
     ActivitiesModule,
@@ -11,8 +11,11 @@ from .api_client import (
     FitatuApiError,
     FitatuAuthContext,
     FitatuTokenStore,
+    FoodsModule,
+    MeasurementsModule,
     PlannerModule,
     ResourcesModule,
+    SummaryModule,
     UserSettingsModule,
     WaterModule,
 )
@@ -23,6 +26,12 @@ from .constants import (
     FITATU_LIFECYCLE_RELOGIN_REQUIRED,
     FITATU_LIFECYCLE_TOKEN_ONLY,
 )
+from .exceptions import (
+    FitatuAuthError,
+    FitatuConnectionError,
+    FitatuPlannerSyncError,
+    FitatuRateLimitError,
+)
 from .facade import FitatuLibrary
 from .operational_store import FitatuOperationalEvent, FitatuOperationalStore
 
@@ -31,6 +40,10 @@ __all__ = [
     "FitatuApiClient",
     "FitatuAuthContext",
     "FitatuApiError",
+    "FitatuAuthError",
+    "FitatuConnectionError",
+    "FitatuRateLimitError",
+    "FitatuPlannerSyncError",
     "FitatuTokenStore",
     "AuthModule",
     "ActivitiesModule",
@@ -38,6 +51,9 @@ __all__ = [
     "UserSettingsModule",
     "DietPlanModule",
     "WaterModule",
+    "MeasurementsModule",
+    "SummaryModule",
+    "FoodsModule",
     "ResourcesModule",
     "CmsModule",
     "FitatuOperationalStore",

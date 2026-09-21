@@ -25,7 +25,7 @@ from .constants import (
     FITATU_LIFECYCLE_TOKEN_ONLY,
     FITATU_MANAGEMENT_REPORT_SCHEMA_VERSION,
 )
-from .exceptions import FitatuApiError
+from .exceptions import FitatuApiError, FitatuAuthError, FitatuConnectionError, FitatuRateLimitError
 from .operational_store import FitatuOperationalStore
 from .planner import PlannerModule
 from .service_modules import (
@@ -33,7 +33,10 @@ from .service_modules import (
     AuthModule,
     CmsModule,
     DietPlanModule,
+    FoodsModule,
+    MeasurementsModule,
     ResourcesModule,
+    SummaryModule,
     UserSettingsModule,
     WaterModule,
 )
@@ -113,6 +116,9 @@ class FitatuApiClient:
         self.activities = ActivitiesModule(self)
         self.resources = ResourcesModule(self)
         self.cms = CmsModule(self)
+        self.measurements = MeasurementsModule(self)
+        self.summary = SummaryModule(self)
+        self.foods = FoodsModule(self)
 
     @classmethod
     def login(
@@ -135,8 +141,9 @@ class FitatuApiClient:
             **kwargs: Forwarded verbatim to :meth:`__init__` (e.g. ``timeout_seconds``).
 
         Raises:
-            FitatuApiError: When the server rejects the credentials or returns
-                a response without a token field.
+            FitatuAuthError: When the server rejects the credentials (401).
+            FitatuConnectionError: When the login request gets no HTTP response.
+            FitatuApiError: For any other failure, e.g. a response without a token field.
         """
         defaults = FitatuAuthContext()
         url = f"{base_url.rstrip('/')}/login"
@@ -145,14 +152,18 @@ class FitatuApiClient:
             "api-secret": defaults.api_secret,
             "Content-Type": "application/json",
         }
-        resp = requests.post(
-            url,
-            json={"_username": email, "_password": password},
-            headers=headers,
-            timeout=kwargs.get("timeout_seconds", 25),
-        )
+        try:
+            resp = requests.post(
+                url,
+                json={"_username": email, "_password": password},
+                headers=headers,
+                timeout=kwargs.get("timeout_seconds", 25),
+            )
+        except requests.RequestException as exc:
+            raise FitatuConnectionError(f"Fitatu login network error: {exc}", body=str(exc)) from exc
         if not resp.ok:
-            raise FitatuApiError(
+            error_type = FitatuAuthError if resp.status_code == 401 else FitatuApiError
+            raise error_type(
                 f"Login failed with status {resp.status_code}",
                 status_code=resp.status_code,
                 body=resp.text,
@@ -506,8 +517,13 @@ class FitatuApiClient:
         json_data: Any | None = None,
         include_auth: bool = True,
         allow_refresh_on_401: bool = True,
+        raw: bool = False,
     ) -> Any:
-        """Perform a Fitatu HTTP request with retries and optional auto-refresh."""
+        """Perform a Fitatu HTTP request with retries and optional auto-refresh.
+
+        With ``raw=True`` the response body is returned as ``bytes`` (``None`` when
+        empty) instead of being decoded as JSON, e.g. for file downloads.
+        """
         correlation_id = _new_correlation_id()
         method_upper = method.upper()
         retryable_method = self._is_retryable_method(method_upper)
@@ -546,7 +562,7 @@ class FitatuApiClient:
                 if retryable_method and attempt < self.retry_max_attempts:
                     time.sleep(self._backoff_delay_seconds(attempt))
                     continue
-                raise FitatuApiError(
+                raise FitatuConnectionError(
                     message=f"Fitatu API network error: {method_upper} {path}: {exc}",
                     body=str(exc),
                 ) from exc
@@ -564,7 +580,7 @@ class FitatuApiClient:
                             timeout=self.timeout_seconds,
                         )
                     except requests.RequestException as exc:
-                        raise FitatuApiError(
+                        raise FitatuConnectionError(
                             message=f"Fitatu API network error after refresh: {method_upper} {path}: {exc}",
                             body=str(exc),
                         ) from exc
@@ -574,7 +590,13 @@ class FitatuApiClient:
                 continue
 
             if response.status_code >= 400:
-                error = FitatuApiError(
+                error_type: type[FitatuApiError] = FitatuApiError
+                # 403 is also used for premium/quota refusals, so only 401 means "log in again".
+                if response.status_code == 401:
+                    error_type = FitatuAuthError
+                elif response.status_code == 429:
+                    error_type = FitatuRateLimitError
+                error = error_type(
                     message=f"Fitatu API request failed: {method_upper} {path}",
                     status_code=response.status_code,
                     body=response.text,
@@ -599,6 +621,17 @@ class FitatuApiClient:
                     },
                 )
                 raise error
+
+            if raw:
+                _log_event(
+                    "fitatu.request.ok",
+                    correlation_id=correlation_id,
+                    method=method_upper,
+                    path=path,
+                    status_code=response.status_code,
+                    result_type="bytes",
+                )
+                return response.content or None
 
             if not response.text:
                 _log_event(
@@ -863,7 +896,8 @@ class FitatuApiClient:
                 "page": page,
                 "locale": locale or self.auth.app_search_locale,
                 "limit": limit,
-                "accessType": ["FREE", "PREMIUM"],
+                # PHP-style list key, as the app sends it; a bare repeated key is not the same param.
+                "accessType[]": ["FREE", "PREMIUM"],
             },
         )
         if isinstance(data, list):
@@ -882,9 +916,9 @@ class FitatuApiClient:
 
         The search endpoint returns both PRODUCT and RECIPE items in the same result
         list.  RECIPE items (``type="RECIPE"`` in search results) have their details
-        under ``/recipes/{id}``, not ``/products/{id}``.  This method tries all product
-        route variants first and falls back to the recipe route on 404, so callers
-        do not need to distinguish item type before calling.
+        under ``/recipes/{id}``, not ``/products/{id}``.  This method tries the product
+        route first and falls back to the recipe route on 404, so callers do not need
+        to distinguish item type before calling.
 
         Measure field names in the returned dict differ by sub-key:
 
@@ -900,12 +934,7 @@ class FitatuApiClient:
         """
         data = self.request_first_success(
             "GET",
-            [
-                f"/products/{product_id}",
-                f"/v2/products/{product_id}",
-                f"/v3/products/{product_id}",
-                f"/recipes/{product_id}",
-            ],
+            [f"/products/{product_id}", f"/recipes/{product_id}"],
         )
         return cast(dict[str, Any], data) if isinstance(data, dict) else {"raw": data}
 
@@ -1262,9 +1291,9 @@ class FitatuApiClient:
         """Fetch current user settings, optionally scoped by day."""
         return self.user_settings.get(user_id, day=day)
 
-    def get_user_settings_new(self, user_id: str) -> dict[str, Any]:
-        """Fetch the `settings-new` payload via the convenience surface."""
-        return self.user_settings.get_new(user_id)
+    def get_user_settings_new(self, user_id: str, day: date | None = None) -> dict[str, Any]:
+        """Fetch the `settings-new` payload (goals, targets, meal schema) for a day."""
+        return self.user_settings.get_new(user_id, day)
 
     def get_diet_plan_settings(self, user_id: str) -> dict[str, Any]:
         """Fetch diet plan settings for a user."""
@@ -1291,11 +1320,11 @@ class FitatuApiClient:
         checks: list[tuple[str, str]] = [
             ("GET", f"/users/{user_id}"),
             ("GET", f"/users/{user_id}/settings/{day.isoformat()}"),
-            ("GET", f"/users/{user_id}/settings-new"),
+            ("GET", f"/users/{user_id}/settings-new/{day.isoformat()}"),
             ("GET", f"/diet-plan/{user_id}/settings"),
             ("GET", f"/diet-and-activity-plan/{user_id}/day/{day.isoformat()}"),
             ("GET", "/resources/food-tags/recipe"),
-            ("GET", "/activities/"),
+            ("GET", "/activities"),
             ("GET", f"/water/{user_id}/{day.isoformat()}"),
         ]
         out: list[dict[str, Any]] = []
