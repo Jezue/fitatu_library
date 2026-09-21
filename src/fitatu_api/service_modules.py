@@ -317,6 +317,19 @@ class MeasurementsModule:
         if fat_percentage is not None:
             values["fatPercentage"] = fat_percentage
         values.update(body_parts)
+        # Units label the whole record. Switching unit while keeping stored values would
+        # silently reinterpret them (40 cm -> 40 in), so make the caller decide.
+        for unit, unit_key, keys in (
+            (weight_unit, "weightUnit", ("weight",)),
+            (size_unit, "sizeUnit", self.BODY_PARTS),
+        ):
+            stored_unit = existing.get(unit_key)
+            kept = [k for k in keys if existing.get(k) is not None and k not in body_parts and not (k == "weight" and weight is not None)]
+            if unit and stored_unit and unit != stored_unit and kept:
+                raise ValueError(
+                    f"{unit_key} {unit} differs from the stored {stored_unit}; pass {kept} in {unit} too, "
+                    "or use merge=False"
+                )
         if not any(value is not None for value in values.values()):
             raise ValueError("provide weight, fat_percentage or at least one body part")
 
@@ -353,9 +366,11 @@ class MeasurementsModule:
         page: int = 1,
         limit: int = 41,
     ) -> list[dict[str, Any]]:
-        """Return weight entries as ``[{date, value, difference, direction}, ...]``.
+        """Return one page of weight entries as ``[{date, value, difference, direction}, ...]``.
 
         ``direction`` follows the goal type: 1 = gain, -1 = reduction, 0 = maintenance.
+        The endpoint is paged (the app asks for 41 rows); keep increasing ``page`` until a
+        page comes back shorter than ``limit``.
         """
         validate_user_id(user_id)
         params: dict[str, Any] = {**_date_range_params(from_date, to_date), "limit": limit, "page": page}

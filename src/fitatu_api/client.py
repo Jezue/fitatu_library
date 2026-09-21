@@ -141,8 +141,9 @@ class FitatuApiClient:
             **kwargs: Forwarded verbatim to :meth:`__init__` (e.g. ``timeout_seconds``).
 
         Raises:
-            FitatuApiError: When the server rejects the credentials or returns
-                a response without a token field.
+            FitatuAuthError: When the server rejects the credentials (401).
+            FitatuConnectionError: When the login request gets no HTTP response.
+            FitatuApiError: For any other failure, e.g. a response without a token field.
         """
         defaults = FitatuAuthContext()
         url = f"{base_url.rstrip('/')}/login"
@@ -151,14 +152,18 @@ class FitatuApiClient:
             "api-secret": defaults.api_secret,
             "Content-Type": "application/json",
         }
-        resp = requests.post(
-            url,
-            json={"_username": email, "_password": password},
-            headers=headers,
-            timeout=kwargs.get("timeout_seconds", 25),
-        )
+        try:
+            resp = requests.post(
+                url,
+                json={"_username": email, "_password": password},
+                headers=headers,
+                timeout=kwargs.get("timeout_seconds", 25),
+            )
+        except requests.RequestException as exc:
+            raise FitatuConnectionError(f"Fitatu login network error: {exc}", body=str(exc)) from exc
         if not resp.ok:
-            raise FitatuApiError(
+            error_type = FitatuAuthError if resp.status_code == 401 else FitatuApiError
+            raise error_type(
                 f"Login failed with status {resp.status_code}",
                 status_code=resp.status_code,
                 body=resp.text,
@@ -586,7 +591,8 @@ class FitatuApiClient:
 
             if response.status_code >= 400:
                 error_type: type[FitatuApiError] = FitatuApiError
-                if response.status_code in {401, 403}:
+                # 403 is also used for premium/quota refusals, so only 401 means "log in again".
+                if response.status_code == 401:
                     error_type = FitatuAuthError
                 elif response.status_code == 429:
                     error_type = FitatuRateLimitError
