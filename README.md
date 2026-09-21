@@ -161,8 +161,9 @@ How planner writes behave (all confirmed live):
   out of the payload are kept, so omission never deletes anything.
 - A row is deleted by sending it with `deletedAt`; the day GET then hides it.
 - Keys missing from the day payload (`water`, `toilet`, `activities`) keep their stored values.
-- Each row is replaced as a whole: a field you leave out goes back to its default (this is why the
-  library always carries `eaten` over).
+- A row sent without `eaten` gets `eaten=false`, so the library always carries the flag over.
+  Custom rows only keep `name`, `energy`, `protein`, `fat` and `carbohydrate` server-side, and
+  product rows take the rest from the product.
 - The response is `[{date, revision, errorMessage}]` with HTTP 202. A non-null `errorMessage`
   means the day was not saved; `sync_days()` raises `FitatuPlannerSyncError` for it.
 
@@ -427,7 +428,7 @@ try:
 except FitatuPlannerSyncError as exc:
     print(exc.results)        # [{"date": ..., "revision": None, "errorMessage": "..."}]
 except FitatuAuthError:
-    ...                       # refresh failed: log in again
+    ...                       # 401 even after a refresh: log in again
 except FitatuApiError as exc:
     print(exc.status_code, exc.codename)
 ```
@@ -634,6 +635,10 @@ hatch run typecheck
 - add GitHub release automation once the public repository layout is finalised
 - expand docs with cookbook-style automation and AI agent scenarios
 - increase endpoint coverage: activities in the planner, text/photo AI estimation, fasting, habits
+- planner writes: send only the rows that changed instead of re-syncing the whole day (the
+  endpoint upserts by id, so it is safe and avoids overwriting edits made on the phone meanwhile)
+- `FitatuApiClient.from_token_store(path)`: resume a session from saved tokens without a password,
+  like `Garmin.login(tokenstore)` in python-garminconnect
 - optional mobile header profile (`APP-OS: ANDROID`) and base URL derived from the user's storage locale
 
 ## 👨‍💻 Development

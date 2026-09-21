@@ -121,55 +121,27 @@ You get:
 **New in v0.2.1**: The library now implements a two-tier soft-delete strategy for items
 that fail normal soft-deletion (particularly API-created CUSTOM_ITEMs):
 
-### Why API-Created Items Fail Normal Deletion
-
-When you try to delete an API-created CUSTOM_ITEM (source="API"), the backend:
-
-1. **Accepts** your snapshot sync (ok=true temporarily)
-2. **Reconstructs** the item after sync completes
-3. Returns the item with full quantity intact
-
-This is **intentional** - backend protects API-sourced items to maintain sync state
-with external integrations. Items created via API need backend persistence.
-
 ### The Failover Chain
 
-1. **Soft-delete with `deletedAt` via snapshot** (what the app does; tried first since 0.4.0)
-   ```
-   POST /diet-plan/{userId}/days
-   Item: {..., deletedAt: "yyyy-MM-dd HH:mm:ss"}
-   ```
+This is what `remove_day_item_with_strategy()` runs (0.4.0):
 
-2. **Try soft-delete via snapshot** (standard, qty=0.01)
-   ```
-   POST /diet-plan/{userId}/days
-   Item: {measureQuantity: 0.01, visible: false}
-   ```
-   - Works for PRODUCT items and user-created CUSTOM_ITEMs
-   - Fails for API-created CUSTOM_ITEMs (backend reconstructs)
+1. **`deletedAt` + quantity 0.01** via `POST /diet-plan/{userId}/days` (`visible` untouched).
+   This is how the app deletes; the day GET then hides the row.
+2. **Day sync without the row.** Kept as a fallback only: the endpoint upserts by
+   `planDayDietItemId`, so leaving a row out never deletes it.
+3. **Aggressive soft-delete** (`measureQuantity: 0.0`, `visible: false`) when
+   `use_aggressive_soft_delete=True`.
 
-3. **Try aggressive soft-delete via snapshot** (qty=0.0)
-   ```
-   POST /diet-plan/{userId}/days
-   Item: {measureQuantity: 0.0, visible: false}
-   ```
-   - Extreme soft-delete for edge cases
-   - Still doesn't delete API-items (backend protection)
-   - Useful for debugging or when qty=0.01 fails
+Recipe-like rows (`custom_recipe_item`) retry step 1, then go to 3, then 2.
 
-### Key Finding: Backend Protection is Intentional
+### Historical note: "backend-protected" API items
 
-| Item Type | Hard DELETE | Soft-Delete | Why Protected? |
-|-----------|-----------|------------|----------------|
-| PRODUCT | ❌ 404 | ✅ Works | N/A |
-| CUSTOM_ITEM (user) | ❌ 404 | ✅ Works | User owns it |
-| CUSTOM_ITEM (API) | ❌ 404 | ❌ Backend reconstructs | External integration dependency |
-
-**API-created items are protected for a reason:**
-- They're created by integrated systems (health devices, fitness apps, etc.)
-- Backend owns the sync state
-- Frontend can soft-delete them visually (local state)
-- API cannot delete them permanently (would break sync)
+Older revisions of this guide said the backend "reconstructs" API-created `CUSTOM_ITEM` rows.
+That, and the protection tables, detection snippets and `soft_deleted` sample outputs further
+down, describe 2026-04 behaviour seen with quantity/visibility-only soft deletes (the server
+normalises custom rows to quantity 1, which looked like a reconstruction). With `deletedAt`,
+`CUSTOM_ITEM` rows with `source="API"` are deleted like any other row, and a successful removal
+now reports `cleanupMode="removed"`.
 
 ### Enabling aggressive soft-delete fallback
 
