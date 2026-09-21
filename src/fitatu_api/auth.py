@@ -219,7 +219,11 @@ class FitatuTokenStore:
             "refresh_token": refresh_token or "",
             "updated_at": datetime.now(UTC).isoformat(),
         }
-        self.path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
+        # Owner-only: the file holds a refresh token that is as good as the password.
+        fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2, ensure_ascii=True))
+        self.path.chmod(0o600)  # O_CREAT's mode does not apply to an existing file
 
     def clear(self) -> None:
         """Remove the token file when it exists."""

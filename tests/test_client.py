@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from copy import deepcopy
@@ -1698,6 +1699,17 @@ class AuthStoreTests(unittest.TestCase):
 
             store.clear()
             self.assertEqual(store.load(), {})
+
+    @unittest.skipIf(os.name == "nt", "POSIX permissions")
+    def test_token_store_file_is_owner_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "tokens.json"
+            path.write_text("{}", encoding="utf-8")
+            path.chmod(0o644)
+
+            FitatuTokenStore(path).save(bearer_token="a", refresh_token="b")
+
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_token_store_ignores_invalid_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
