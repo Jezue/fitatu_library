@@ -17,12 +17,11 @@ Core responsibilities:
 
 Default base URL behavior:
 
-- when no explicit `base_url` override is provided, the client resolves to
-  `https://fitatu.com/api`
-- `www.fitatu.com/api` is normalized to `fitatu.com/api` because the `www` host
-  can return landing HTML for API paths
-- cluster endpoints remain available as explicit overrides, e.g.
-  `https://pl-pl0.fitatu.com/api`
+- when no explicit `base_url` override is provided, the client uses
+  `https://pl-pl.fitatu.com/api`
+- the app picks the host from the user's `storageLocale` (`pl_PL` → `pl-pl`,
+  `de_DE` → `de-de`, ...); pass `base_url=` for non-Polish accounts
+- the `www` host can return landing HTML for API paths, so do not use it
 
 Attached modules:
 
@@ -36,6 +35,9 @@ Attached modules:
 | `client.activities` | Activity catalog reads. |
 | `client.resources` | Static resource endpoints such as recipe food tags. |
 | `client.cms` | CMS GraphQL requests. |
+| `client.measurements` | Weight and body measurements. |
+| `client.summary` | Range summaries and diary export. |
+| `client.foods` | Favourite and recently used foods. |
 
 ### `FitatuLibrary`
 
@@ -44,7 +46,6 @@ Use this when you want a higher-level facade built from a `session_data` payload
 This layer is useful for:
 
 - easy construction from stored session data
-- login bootstrap via `login_with_email_via_api(...)`
 - planner convenience helpers
 - simplified product/recipe flows
 - user-food search, duplicate cleanup, and product proposal helpers
@@ -69,7 +70,13 @@ Login note:
 | Product proposals | `client.set_product_proposal()`, `client.set_product_raw_ingredients()` | `POST /products/{id}/proposals` | Unit-tested, integration-derived. |
 | User-product cleanup | `client.find_matching_user_product()`, `client.cleanup_duplicate_user_products()` | User-food search + product delete | Helper-level API. Requires explicit brand or predicate for cleanup. |
 | Planner read | `client.get_day_plan()`, `client.planner.get_day()` | `/diet-and-activity-plan/{id}/day/{day}` | Stable with caution. |
-| Planner sync | `client.planner.sync_days()`, `client.planner.sync_single_day()` | `/v2/diet-plan/{id}/days` | Stable with caution. Optional `synchronous=True` sends `synchronous=true`. |
+| Planner sync | `client.planner.sync_days()`, `client.planner.sync_single_day()` | `POST /diet-plan/{id}/days` | Stable with caution. Returns `[{date, revision, errorMessage}]`; raises `FitatuPlannerSyncError` when a day is rejected. Optional `synchronous=True`. |
+| Planner revisions | `client.planner.get_day_revisions()` | `GET /diet-plan/{id}/days/{day}/revisions` | New in 0.4.0. |
+| Goals/targets | `client.user_settings.get_new(user_id, day)`, `FitatuLibrary.get_daily_targets_via_api()` | `GET /users/{id}/settings-new/{day}` | New in 0.4.0 (the dated route fixed the old 405). |
+| Measurements | `client.measurements.*`, `FitatuLibrary.log_weight_via_api()`, `get_weight_history_via_api()` | `/users/{id}/measurements/...` | New in 0.4.0, checked live. |
+| Range summaries | `client.summary.*`, `FitatuLibrary.get_range_summary_via_api()` | `/v2/diet-plan/{id}/summary/...`, `/activity-plan/{id}/summary/custom` | New in 0.4.0, checked live. |
+| Diary export | `client.summary.export_diary()`, `FitatuLibrary.export_diary_via_api()` | `GET /diet-plan/{id}/export` | New in 0.4.0; `None` / `status: "empty"` for an empty range. |
+| Favourite/recent foods | `client.foods.*`, `FitatuLibrary.get_favorite_foods_via_api()`, `get_recent_foods_via_api()` | `/users/{id}/favorite/...`, `/search/food/.../last-used` | New in 0.4.0. |
 | Planner add/update/remove | `client.planner.*`, `FitatuLibrary.*_via_api()` | Planner day snapshot and sync routes | Stable with caution. Removal uses snapshot/soft-delete fallback. |
 | Planner move/replace | `client.planner.move_day_item()`, `client.planner.replace_day_item_with_custom_item()` | Planner day snapshot + synchronous sync | Live-tested (2026-04-22). Cross-meal fallback added. |
 | Day macros | `FitatuLibrary.get_day_macros_via_api()` | Derived from planner day snapshot | Helper-level API. |
@@ -118,7 +125,7 @@ between Fitatu clusters.
 Use `FitatuLibrary.remove_day_item_via_api()` when you want a structured,
 high-level delete flow.
 
-- planner hard `DELETE` is not treated as a reliable removal method on the current live cluster
+- there is no planner `DELETE` route; rows are removed by day sync with `deletedAt`
 - the preferred live strategy is marker-based day sync: `deletedAt` plus reduced `measureQuantity`
 - delete targets should be planner row ids (`planDayDietItemId`), not `productId`
 - the lower-level `client.planner.remove_day_item()` exposes the same behavior

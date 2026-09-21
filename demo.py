@@ -68,7 +68,7 @@ def _print_user_settings(client: FitatuApiClient, user_id: str, target_day: date
 
 def _print_recipe_catalog(client: FitatuApiClient) -> None:
     _print_section("Recipe catalog preview")
-    catalog = client.get_recipes_catalog(params={"page": 1})
+    catalog = client.get_recipes_catalog()
     if isinstance(catalog, dict):
         items = catalog.get("items") or catalog.get("data") or []
         if isinstance(items, list) and items:

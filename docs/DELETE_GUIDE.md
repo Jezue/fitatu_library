@@ -5,6 +5,17 @@
 Planner deletion on the live cluster is snapshot/soft-delete based. There is no working
 planner hard-delete route in practice.
 
+> **Update for 0.4.0 (checked live on 2026-10-13 and against the decompiled 4.17.1 app):**
+>
+> - There is no DELETE route for planner rows at all; the app deletes a row by re-sending it
+>   in `POST /diet-plan/{id}/days` with `deletedAt` set. The day GET then no longer returns it.
+> - Leaving a row out of the sync payload never deletes it: the endpoint upserts by
+>   `planDayDietItemId`. `remove_day_item()` therefore tries `deletedAt` first for every kind.
+> - A `CUSTOM_ITEM` created through the API (`source="API"`) was deleted with `deletedAt` without
+>   any problem. The "backend reconstructs API items" behaviour described further down was
+>   observed with quantity/visibility-only soft deletes; the server normalises `measureQuantity`
+>   of custom rows to 1, which looked like a reconstruction. Treat those sections as history.
+
 ## The Problem
 
 The historical hard-delete endpoint is unavailable:
@@ -123,11 +134,11 @@ with external integrations. Items created via API need backend persistence.
 
 ### The Failover Chain
 
-1. **Try hard DELETE endpoint**
+1. **Soft-delete with `deletedAt` via snapshot** (what the app does; tried first since 0.4.0)
    ```
-   DELETE /diet-plan/{userId}/day/{dateISO}/{mealKey}/{itemId}
+   POST /diet-plan/{userId}/days
+   Item: {..., deletedAt: "yyyy-MM-dd HH:mm:ss"}
    ```
-   - Returns 404 (endpoint unavailable on current cluster)
 
 2. **Try soft-delete via snapshot** (standard, qty=0.01)
    ```

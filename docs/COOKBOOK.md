@@ -132,8 +132,8 @@ result = client.cleanup_duplicate_user_products(
     keep_product_id="product-id-to-keep",
 )
 
-print(result["deleted"])
-print(result["kept"])
+print(result["deletedCount"], result["deletedProductIds"])
+print(result["keptProductId"])
 ```
 
 For custom matching logic:
