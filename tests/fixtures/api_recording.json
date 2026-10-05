@@ -1,0 +1,3312 @@
+{
+ "recordedAt": "2026-10-05T12:32:28.234Z",
+ "userId": "1234567",
+ "calls": {
+  "day_empty": {
+   "request": {
+    "method": "GET",
+    "path": "/diet-and-activity-plan/1234567/day/2027-01-03",
+    "query": null,
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": {
+    "planDayRevisions": [
+     "9666bfb4-c6fc-11f1-9288-669947abdde4",
+     "9650463a-c6fc-11f1-9bb2-c6cd9cb28da1",
+     "9623b6e2-c6fc-11f1-9188-a688511e9246",
+     "3878f862-c6f8-11f1-b8cd-bac839b06761",
+     "2ee0c9ec-c6f8-11f1-bfa7-a688511e9246",
+     "2ea8fb8e-c6f8-11f1-ae85-a688511e9246",
+     "1e263218-c6f8-11f1-a463-5a9240095da0",
+     "1c2d35ec-c6f8-11f1-9a5e-ee45776cf4dc",
+     "1c0044e2-c6f8-11f1-9212-c6cd9cb28da1",
+     "0df253cc-c6f8-11f1-a971-bac839b06761",
+     "0dcae95e-c6f8-11f1-93d2-a688511e9246",
+     "0da4a596-c6f8-11f1-9c65-0626e06d8371",
+     "0279f694-c6f8-11f1-a07d-96888e43543d"
+    ],
+    "activityPlan": [],
+    "dietPlan": {
+     "breakfast": {
+      "mealName": "Breakfast",
+      "mealTime": "08:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 20
+     },
+     "second_breakfast": {
+      "mealName": "Second breakfast",
+      "mealTime": "11:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     },
+     "lunch": {
+      "mealName": "Lunch",
+      "mealTime": "14:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 30
+     },
+     "dinner": {
+      "mealName": "Dinner",
+      "mealTime": "17:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     },
+     "snack": {
+      "mealName": "Snack",
+      "mealTime": "19:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 20
+     },
+     "supper": {
+      "mealName": "Supper",
+      "mealTime": "21:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     }
+    },
+    "dietPlanGenerated": {
+     "breakfast": {
+      "items": []
+     },
+     "second_breakfast": {
+      "items": []
+     },
+     "lunch": {
+      "items": []
+     },
+     "dinner": {
+      "items": []
+     },
+     "snack": {
+      "items": []
+     },
+     "supper": {
+      "items": []
+     }
+    },
+    "toilet": [],
+    "note": null,
+    "tagsIds": [],
+    "water": {
+     "waterConsumption": 0
+    }
+   }
+  },
+  "search_food": {
+   "request": {
+    "method": "GET",
+    "path": "/search/new/food",
+    "query": {
+     "phrase": "jajko kurze",
+     "page": 1,
+     "limit": 5,
+     "locale": "pl_PL"
+    },
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": [
+    {
+     "isInitialFood": false,
+     "availableInRecipesCatalog": false,
+     "premiumInRecipesCatalog": false,
+     "favorite": false,
+     "verified": true,
+     "generic": true,
+     "containNutritions": true,
+     "accessType": 1,
+     "numberOfUse": 25366234,
+     "userNumberOfUse": 0,
+     "lang": "pl_PL",
+     "type": "PRODUCT",
+     "foodId": 24881865,
+     "name": "Jaja kurze",
+     "brand": "",
+     "manufacturer": null,
+     "measure": {
+      "measureId": 46,
+      "measureName": "piece",
+      "measureQuantity": 1,
+      "measureWeight": 60,
+      "measureEnergy": 84,
+      "measureCapacity": null
+     },
+     "rating": null,
+     "ratingCount": 0,
+     "reviewsCount": 0,
+     "score": 0,
+     "extraScore": 0,
+     "mergedScore": 0,
+     "index": "SEARCH",
+     "photo": null,
+     "mainPhoto": null,
+     "items": [],
+     "cookingTime": 0,
+     "preparationTime": 0,
+     "energy": 84,
+     "tags": [],
+     "meals": [],
+     "source": 2,
+     "saturatedFat": 1.8000001,
+     "sugars": 0,
+     "salt": 0.21000001,
+     "sodium": 84.72,
+     "iron": 1.32,
+     "fiber": null,
+     "liquid": false
+    },
+    {
+     "isInitialFood": false,
+     "availableInRecipesCatalog": false,
+     "premiumInRecipesCatalog": false,
+     "favorite": false,
+     "verified": false,
+     "generic": false,
+     "containNutritions": true,
+     "accessType": 1,
+     "numberOfUse": 98,
+     "userNumberOfUse": 0,
+     "lang": "pl_PL",
+     "type": "PRODUCT",
+     "foodId": 117902958,
+     "name": "Jajko kurze M (INVEST MICHEL)",
+     "brand": "Invest Michel",
+     "manufacturer": null,
+     "measure": {
+      "measureId": 2,
+      "measureName": "package",
+      "measureQuantity": 1,
+      "measureWeight": 1740,
+      "measureEnergy": 2418.6,
+      "measureCapacity": null
+     },
+     "rating": null,
+     "ratingCount": 0,
+     "reviewsCount": 0,
+     "score": 0,
+     "extraScore": 0,
+     "mergedScore": 0,
+     "index": "SEARCH",
+     "photo": null,
+     "mainPhoto": null,
+     "items": [],
+     "cookingTime": 0,
+     "preparationTime": 0,
+     "energy": 2418.5999,
+     "tags": [],
+     "meals": [],
+     "source": 12,
+     "saturatedFat": 52.199997,
+     "sugars": 0,
+     "salt": 6.96,
+     "sodium": null,
+     "iron": null,
+     "fiber": null,
+     "liquid": false
+    }
+   ]
+  },
+  "product_details": {
+   "request": {
+    "method": "GET",
+    "path": "/products/15956231",
+    "query": null,
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": {
+    "id": 15956231,
+    "name": "Białko jaja kurzego",
+    "rawIngredients": null,
+    "editable": false,
+    "favorite": false,
+    "userId": 0,
+    "foodType": "PRODUCT",
+    "username": "Dietitian",
+    "sfdLink": null,
+    "brand": null,
+    "manufacturer": null,
+    "category": 31,
+    "customStatuses": [],
+    "hasBarcodes": false,
+    "initialMeasure": {
+     "key": "PORTION",
+     "weight": 35,
+     "unitKey": "GRAM"
+    },
+    "productScore": {
+     "value": null
+    },
+    "measures": [
+     {
+      "id": 39,
+      "name": "portion",
+      "energyPerUnit": 16.8,
+      "weightPerUnit": 35
+     },
+     {
+      "id": 1,
+      "name": "g",
+      "energyPerUnit": 0.48,
+      "weightPerUnit": 1
+     }
+    ],
+    "ingredients": [],
+    "proposals": [],
+    "currentUserPrivateBarcode": null,
+    "barcode": null,
+    "liquid": false,
+    "simpleMeasures": [
+     {
+      "portion": 2,
+      "weight": 70,
+      "name": "portion",
+      "id": 39,
+      "energy": 33.6,
+      "selected": false,
+      "acceptableByGenerator": false,
+      "capacity": null,
+      "isLiquid": false,
+      "userMeasure": true
+     },
+     {
+      "portion": 1,
+      "weight": 35,
+      "name": "portion",
+      "id": 39,
+      "energy": 16.799999999999997,
+      "selected": false,
+      "acceptableByGenerator": false,
+      "capacity": null,
+      "isLiquid": false,
+      "userMeasure": false
+     },
+     {
+      "portion": 3,
+      "weight": 105,
+      "name": "portion",
+      "id": 39,
+      "energy": 50.39999999999999,
+      "selected": false,
+      "acceptableByGenerator": false,
+      "capacity": null,
+      "isLiquid": false,
+      "userMeasure": false
+     },
+     {
+      "portion": 4,
+      "weight": 140,
+      "name": "portion",
+      "id": 39,
+      "energy": 67.19999999999999,
+      "selected": false,
+      "acceptableByGenerator": false,
+      "capacity": null,
+      "isLiquid": false,
+      "userMeasure": false
+     }
+    ],
+    "source": 3,
+    "energyCalories": 48,
+    "proteinFatExchangers": 0.45,
+    "glycemicLoad": null,
+    "carbohydrateExchangers": 0.07,
+    "energy": 48,
+    "protein": 10.9,
+    "vegetableProtein": null,
+    "animalProtein": 10.9,
+    "fat": 0.2,
+    "saturatedFat": 0,
+    "polyunsaturatedFat": 0,
+    "monounsaturatedFat": 0,
+    "carbohydrate": 0.7,
+    "cholesterol": null,
+    "fiber": null,
+    "sodium": 200,
+    "salt": 0.5,
+    "calcium": 6,
+    "potassium": 154,
+    "iron": 0.2,
+    "magnesium": 11,
+    "zinc": 0.3,
+    "phosphorus": 17,
+    "iodine": 6.8,
+    "copper": 0.03,
+    "selenium": null,
+    "vitaminA": 0,
+    "vitaminB1": 0.01,
+    "vitaminB2": 0.43,
+    "vitaminB5": null,
+    "vitaminB6": 0.01,
+    "vitaminB7": null,
+    "vitaminB12": 0.1,
+    "vitaminC": 0,
+    "vitaminD": 0,
+    "vitaminE": 0,
+    "vitaminK": null,
+    "vitaminPP": 0.07,
+    "folicAcid": 20,
+    "sugars": null,
+    "omega3": 0,
+    "omega6": 0,
+    "caffeine": null,
+    "glycemicIndex": null,
+    "visible": true,
+    "private": false,
+    "deleted": false,
+    "containNutritions": true,
+    "accessType": 1,
+    "genericProduct": true,
+    "duplicate": false,
+    "verified": true,
+    "verificationType": 2,
+    "verifiedAt": "2026-01-08T10:59:13+00:00"
+   }
+  },
+  "recipe_details": {
+   "request": {
+    "method": "GET",
+    "path": "/recipes/590200",
+    "query": null,
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": {
+    "weight": 248,
+    "serving": 1,
+    "energyCalories": 125.91,
+    "proteinFatExchangers": 0.52,
+    "glycemicLoad": null,
+    "carbohydrateExchangers": 1.86,
+    "energy": 125.91,
+    "protein": 6.66,
+    "vegetableProtein": 0,
+    "animalProtein": 3.91,
+    "fat": 2.85,
+    "saturatedFat": 1.84,
+    "polyunsaturatedFat": 0.01,
+    "monounsaturatedFat": 0.35,
+    "carbohydrate": 18.6,
+    "cholesterol": 5.75,
+    "fiber": 0.47,
+    "sodium": 56.15,
+    "salt": 0,
+    "calcium": 143.2,
+    "potassium": 242.23,
+    "iron": 0.23,
+    "magnesium": 19,
+    "zinc": 0.5,
+    "phosphorus": 124.99,
+    "iodine": null,
+    "copper": 0.03,
+    "selenium": 0.09,
+    "vitaminA": 23,
+    "vitaminB1": 0.02,
+    "vitaminB2": 0.23,
+    "vitaminB5": null,
+    "vitaminB6": 0.18,
+    "vitaminB7": null,
+    "vitaminB12": 0.46,
+    "vitaminC": 1.45,
+    "vitaminD": 0,
+    "vitaminE": 0.14,
+    "vitaminK": null,
+    "vitaminPP": 0.4,
+    "folicAcid": 5.75,
+    "sugars": 0.38,
+    "omega3": null,
+    "omega6": null,
+    "caffeine": null,
+    "glycemicIndex": null,
+    "id": 590200,
+    "name": "Gorąca czekolada",
+    "searchAlias": null,
+    "visible": false,
+    "private": true,
+    "deleted": false,
+    "accessType": 1,
+    "publishedAt": null,
+    "verified": true,
+    "verificationType": 2,
+    "verifiedAt": "2026-07-16 12:15:18",
+    "source": 1,
+    "sourceId": null,
+    "importerStateId": null,
+    "recipeDescription": "1. Rozrobić mąkę w wodzie i wlać do garnka.\n2. Dolać mleko i dodać kakao.\n3. Podgrzewać, mieszając.\n4. Dodać cukier/maltitol.",
+    "seasonStartDate": null,
+    "seasonEndDate": null,
+    "freshSeasonStartDate": null,
+    "freshSeasonEndDate": null,
+    "needsCooking": false,
+    "needsReheating": false,
+    "preparationTime": null,
+    "cookingTime": 5,
+    "piece": 1,
+    "userId": 2491807,
+    "createdAt": "2017-01-30 20:37:59",
+    "mealSchema": [
+     "second_breakfast",
+     "lunch",
+     "snack",
+     "supper"
+    ],
+    "numberOfUse": 33559,
+    "shared": true,
+    "availableInRecipesCatalog": false,
+    "premiumInRecipesCatalog": false,
+    "hasPhotos": true,
+    "measures": [
+     {
+      "id": 1,
+      "name": "g",
+      "energyPerUnit": 0.5077016129032258,
+      "weightPerUnit": 1
+     },
+     {
+      "id": 39,
+      "name": "portion",
+      "energyPerUnit": 125.91,
+      "weightPerUnit": 248
+     }
+    ],
+    "items": [
+     {
+      "itemId": 14440,
+      "name": "Mąka ziemniaczana",
+      "energy": 28.560000000000002,
+      "verified": false,
+      "measureId": 19,
+      "measureName": "teaspoon",
+      "measureWeight": "8.00",
+      "measureCapacity": null,
+      "measureQuantity": "1.00",
+      "hint": null,
+      "recipeId": null,
+      "productId": 14440,
+      "liquid": false,
+      "type": "PRODUCT"
+     },
+     {
+      "itemId": 31141,
+      "name": "Kakao ciemne o obniżonej zawartości tłuszczu",
+      "energy": 31.3,
+      "verified": false,
+      "measureId": 20,
+      "measureName": "tablespoon",
+      "measureWeight": "10.00",
+      "measureCapacity": null,
+      "measureQuantity": "1.00",
+      "hint": null,
+      "recipeId": null,
+      "productId": 31141,
+      "liquid": false,
+      "type": "PRODUCT"
+     },
+     {
+      "itemId": 1233810,
+      "name": "Maltitol",
+      "energy": 12,
+      "verified": false,
+      "measureId": 19,
+      "measureName": "teaspoon",
+      "measureWeight": "5.00",
+      "measureCapacity": null,
+      "measureQuantity": "1.00",
+      "hint": null,
+      "recipeId": null,
+      "productId": 1233810,
+      "liquid": false,
+      "type": "PRODUCT"
+     },
+     {
+      "itemId": 1331,
+      "name": "Woda",
+      "energy": 0,
+      "verified": false,
+      "measureId": 32,
+      "measureName": "glass",
+      "measureWeight": "220.00",
+      "measureCapacity": 220,
+      "measureQuantity": "0.50",
+      "hint": null,
+      "recipeId": null,
+      "productId": 1331,
+      "liquid": true,
+      "type": "PRODUCT"
+     },
+     {
+      "itemId": 1431,
+      "name": "Mleko spożywcze 1.5 % tłuszczu",
+      "energy": 54.05,
+      "verified": false,
+      "measureId": 32,
+      "measureName": "glass",
+      "measureWeight": "230.00",
+      "measureCapacity": 230,
+      "measureQuantity": "0.50",
+      "hint": null,
+      "recipeId": null,
+      "productId": 1431,
+      "liquid": true,
+      "type": "PRODUCT"
+     }
+    ],
+    "simpleMeasures": [
+     {
+      "id": 39,
+      "portion": 1,
+      "capacity": null,
+      "weight": 248,
+      "energy": 125.91
+     }
+    ],
+    "favorite": false,
+    "username": "user",
+    "updatedAt": "2026-07-16 12:15:18",
+    "editable": false,
+    "photos": [
+     {
+      "id": 29302534,
+      "path": "https://images.fitatu.com/recipes/590200/phpcHxqeM.png",
+      "alt": "recipe",
+      "authorId": 32661467,
+      "isMain": true,
+      "step": null,
+      "isIngredientsPhoto": false,
+      "ai": false,
+      "sizes": {
+       "small": "https://images.fitatu.com/recipes/590200/thumbnails/phpcHxqeM.png",
+       "medium": "https://images.fitatu.com/recipes/590200/big-thumbnails/phpcHxqeM.png",
+       "large": "https://images.fitatu.com/recipes/590200/large-thumbnails/phpcHxqeM.png",
+       "gallery": "https://images.fitatu.com/recipes/590200/phpcHxqeM.png"
+      }
+     },
+     {
+      "id": 41360686,
+      "path": "https://images.fitatu.com/recipes/590200/phpYeR0pR.png",
+      "alt": "recipe",
+      "authorId": 46693141,
+      "isMain": false,
+      "step": null,
+      "isIngredientsPhoto": false,
+      "ai": false,
+      "sizes": {
+       "small": "https://images.fitatu.com/recipes/590200/thumbnails/phpYeR0pR.png",
+       "medium": "https://images.fitatu.com/recipes/590200/big-thumbnails/phpYeR0pR.png",
+       "large": "https://images.fitatu.com/recipes/590200/large-thumbnails/phpYeR0pR.png",
+       "gallery": "https://images.fitatu.com/recipes/590200/phpYeR0pR.png"
+      }
+     },
+     {
+      "id": 24934729,
+      "path": "https://images.fitatu.com/recipes/590200/phpUPmf2E.png",
+      "alt": "recipe",
+      "authorId": 39707112,
+      "isMain": false,
+      "step": null,
+      "isIngredientsPhoto": false,
+      "ai": false,
+      "sizes": {
+       "small": "https://images.fitatu.com/recipes/590200/thumbnails/phpUPmf2E.png",
+       "medium": "https://images.fitatu.com/recipes/590200/big-thumbnails/phpUPmf2E.png",
+       "large": "https://images.fitatu.com/recipes/590200/large-thumbnails/phpUPmf2E.png",
+       "gallery": "https://images.fitatu.com/recipes/590200/phpUPmf2E.png"
+      }
+     },
+     {
+      "id": 5364889,
+      "path": "https://images.fitatu.com/recipes/590200/phpS954gx.png",
+      "alt": "recipe",
+      "authorId": 41364858,
+      "isMain": false,
+      "step": null,
+      "isIngredientsPhoto": false,
+      "ai": false,
+      "sizes": {
+       "small": "https://images.fitatu.com/recipes/590200/thumbnails/phpS954gx.png",
+       "medium": "https://images.fitatu.com/recipes/590200/big-thumbnails/phpS954gx.png",
+       "large": "https://images.fitatu.com/recipes/590200/large-thumbnails/phpS954gx.png",
+       "gallery": "https://images.fitatu.com/recipes/590200/phpS954gx.png"
+      }
+     },
+     {
+      "id": 21755827,
+      "path": "https://images.fitatu.com/recipes/590200/phpYb0rau.png",
+      "alt": "recipe",
+      "authorId": 32201538,
+      "isMain": false,
+      "step": null,
+      "isIngredientsPhoto": false,
+      "ai": false,
+      "sizes": {
+       "small": "https://images.fitatu.com/recipes/590200/thumbnails/phpYb0rau.png",
+       "medium": "https://images.fitatu.com/recipes/590200/big-thumbnails/phpYb0rau.png",
+       "large": "https://images.fitatu.com/recipes/590200/large-thumbnails/phpYb0rau.png",
+       "gallery": "https://images.fitatu.com/recipes/590200/phpYb0rau.png"
+      }
+     }
+    ],
+    "likeables": {
+     "dislikesCount": 1,
+     "likesCount": 2,
+     "userAction": "NEUTRAL"
+    },
+    "rating": {
+     "userVote": null,
+     "rating": {
+      "rate": 3.33,
+      "votes": 3
+     }
+    },
+    "categories": [
+     9
+    ],
+    "status": null,
+    "reported": false,
+    "tags": null
+   }
+  },
+  "sync_add_product": {
+   "request": {
+    "method": "POST",
+    "path": "/diet-plan/1234567/days",
+    "query": {
+     "synchronous": "true"
+    },
+    "body": {
+     "2027-01-03": {
+      "dietPlan": {
+       "breakfast": {
+        "items": [
+         {
+          "planDayDietItemId": "2425e4b1-c702-11f1-9f5f-a416d05353c6",
+          "foodType": "PRODUCT",
+          "productId": 15956231,
+          "measureId": 39,
+          "measureQuantity": 1,
+          "source": "API"
+         }
+        ]
+       }
+      }
+     }
+    }
+   },
+   "status": 202,
+   "contentType": "application/json",
+   "body": [
+    {
+     "date": "2027-01-03",
+     "revision": "24338480-c702-11f1-8d11-5a9240095da0",
+     "errorMessage": null
+    }
+   ]
+  },
+  "sync_add_recipe": {
+   "request": {
+    "method": "POST",
+    "path": "/diet-plan/1234567/days",
+    "query": {
+     "synchronous": "true"
+    },
+    "body": {
+     "2027-01-03": {
+      "dietPlan": {
+       "lunch": {
+        "items": [
+         {
+          "planDayDietItemId": "2425e0c6-c702-11f1-ad1f-c350cf842e16",
+          "foodType": "RECIPE",
+          "recipeId": 590200,
+          "measureId": 39,
+          "measureQuantity": 1,
+          "ingredientsServing": 1,
+          "source": "API"
+         }
+        ]
+       }
+      }
+     }
+    }
+   },
+   "status": 202,
+   "contentType": "application/json",
+   "body": [
+    {
+     "date": "2027-01-03",
+     "revision": "24439a1e-c702-11f1-ba55-bed92fcfc201",
+     "errorMessage": null
+    }
+   ]
+  },
+  "sync_add_custom": {
+   "request": {
+    "method": "POST",
+    "path": "/diet-plan/1234567/days",
+    "query": {
+     "synchronous": "true"
+    },
+    "body": {
+     "2027-01-03": {
+      "dietPlan": {
+       "snack": {
+        "items": [
+         {
+          "planDayDietItemId": "2425e494-c702-11f1-9e21-e14f00f74eee",
+          "foodType": "CUSTOM_ITEM",
+          "name": "fitatu-api fixture",
+          "measureId": 1,
+          "measureQuantity": 1,
+          "energy": 250,
+          "protein": 10,
+          "fat": 8,
+          "carbohydrate": 30,
+          "source": "API"
+         }
+        ]
+       }
+      }
+     }
+    }
+   },
+   "status": 202,
+   "contentType": "application/json",
+   "body": [
+    {
+     "date": "2027-01-03",
+     "revision": "2454771c-c702-11f1-9cab-5a9240095da0",
+     "errorMessage": null
+    }
+   ]
+  },
+  "day_three_rows": {
+   "request": {
+    "method": "GET",
+    "path": "/diet-and-activity-plan/1234567/day/2027-01-03",
+    "query": null,
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": {
+    "planDayRevisions": [
+     "2454771c-c702-11f1-9cab-5a9240095da0",
+     "24439a1e-c702-11f1-ba55-bed92fcfc201",
+     "24338480-c702-11f1-8d11-5a9240095da0",
+     "9666bfb4-c6fc-11f1-9288-669947abdde4",
+     "9650463a-c6fc-11f1-9bb2-c6cd9cb28da1",
+     "9623b6e2-c6fc-11f1-9188-a688511e9246",
+     "3878f862-c6f8-11f1-b8cd-bac839b06761",
+     "2ee0c9ec-c6f8-11f1-bfa7-a688511e9246",
+     "2ea8fb8e-c6f8-11f1-ae85-a688511e9246",
+     "1e263218-c6f8-11f1-a463-5a9240095da0",
+     "1c2d35ec-c6f8-11f1-9a5e-ee45776cf4dc",
+     "1c0044e2-c6f8-11f1-9212-c6cd9cb28da1",
+     "0df253cc-c6f8-11f1-a971-bac839b06761",
+     "0dcae95e-c6f8-11f1-93d2-a688511e9246",
+     "0da4a596-c6f8-11f1-9c65-0626e06d8371",
+     "0279f694-c6f8-11f1-a07d-96888e43543d"
+    ],
+    "activityPlan": [],
+    "dietPlan": {
+     "breakfast": {
+      "mealName": "Breakfast",
+      "mealTime": "08:00",
+      "recommendedEnergy": null,
+      "items": [
+       {
+        "planDayDietItemId": "2425e4b1-c702-11f1-9f5f-a416d05353c6",
+        "source": "API",
+        "name": "Białko jaja kurzego",
+        "foodType": "PRODUCT",
+        "measureId": 39,
+        "measureName": "portion",
+        "measureQuantity": 1,
+        "energy": 16.799999999999997,
+        "protein": 3.815,
+        "fat": 0.06999999999999999,
+        "carbohydrate": 0.24499999999999997,
+        "weight": 35,
+        "capacity": null,
+        "ingredientsServing": null,
+        "ingredients": null,
+        "preparationTime": null,
+        "cookingTime": null,
+        "mealNumber": null,
+        "numberOfMeals": null,
+        "visible": true,
+        "updatedAt": "2026-10-05 12:32:23",
+        "fiber": null,
+        "cholesterol": null,
+        "saturatedFat": 0,
+        "sugars": null,
+        "salt": 0.175,
+        "sodium": 70,
+        "iron": 0.06999999999999999,
+        "liquid": false,
+        "eaten": false,
+        "productId": 15956231,
+        "brand": null
+       }
+      ],
+      "recommendedPercent": 20
+     },
+     "second_breakfast": {
+      "mealName": "Second breakfast",
+      "mealTime": "11:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     },
+     "lunch": {
+      "mealName": "Lunch",
+      "mealTime": "14:00",
+      "recommendedEnergy": null,
+      "items": [
+       {
+        "planDayDietItemId": "2425e0c6-c702-11f1-ad1f-c350cf842e16",
+        "source": "API",
+        "name": "Gorąca czekolada",
+        "foodType": "RECIPE",
+        "measureId": 39,
+        "measureName": "portion",
+        "measureQuantity": 1,
+        "energy": 125.91,
+        "protein": 6.66,
+        "fat": 2.85,
+        "carbohydrate": 18.6,
+        "weight": 248,
+        "capacity": null,
+        "ingredientsServing": 1,
+        "ingredients": null,
+        "preparationTime": null,
+        "cookingTime": 5,
+        "mealNumber": null,
+        "numberOfMeals": null,
+        "visible": true,
+        "updatedAt": "2026-10-05 12:32:23",
+        "fiber": 0.47,
+        "cholesterol": 5.75,
+        "saturatedFat": 1.84,
+        "sugars": 0.38,
+        "salt": 0,
+        "sodium": 56.15,
+        "iron": 0.23,
+        "liquid": false,
+        "eaten": false,
+        "recipeId": 590200,
+        "photo": "https://images.fitatu.com/recipes/590200/big-thumbnails/phpcHxqeM.png",
+        "mainPhoto": {
+         "id": 29302534,
+         "path": "https://images.fitatu.com/recipes/590200/phpcHxqeM.png",
+         "pathThumbnail": "https://images.fitatu.com/recipes/590200/thumbnails/phpcHxqeM.png",
+         "pathBigThumbnail": "https://images.fitatu.com/recipes/590200/big-thumbnails/phpcHxqeM.png",
+         "pathLargeThumbnail": "https://images.fitatu.com/recipes/590200/large-thumbnails/phpcHxqeM.png",
+         "alt": "recipe",
+         "ai": false
+        }
+       }
+      ],
+      "recommendedPercent": 30
+     },
+     "dinner": {
+      "mealName": "Dinner",
+      "mealTime": "17:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     },
+     "snack": {
+      "mealName": "Snack",
+      "mealTime": "19:00",
+      "recommendedEnergy": null,
+      "items": [
+       {
+        "planDayDietItemId": "2425e494-c702-11f1-9e21-e14f00f74eee",
+        "source": "API",
+        "name": "fitatu-api fixture",
+        "foodType": "CUSTOM_ITEM",
+        "measureId": 39,
+        "measureName": "portion",
+        "measureQuantity": 1,
+        "energy": 250,
+        "protein": 10,
+        "fat": 8,
+        "carbohydrate": 30,
+        "weight": null,
+        "capacity": null,
+        "ingredientsServing": null,
+        "ingredients": null,
+        "preparationTime": null,
+        "cookingTime": null,
+        "mealNumber": null,
+        "numberOfMeals": null,
+        "visible": true,
+        "updatedAt": "2026-10-05 12:32:23",
+        "fiber": null,
+        "cholesterol": null,
+        "saturatedFat": null,
+        "sugars": null,
+        "salt": null,
+        "sodium": null,
+        "iron": null,
+        "liquid": false,
+        "eaten": false
+       }
+      ],
+      "recommendedPercent": 20
+     },
+     "supper": {
+      "mealName": "Supper",
+      "mealTime": "21:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     }
+    },
+    "dietPlanGenerated": {
+     "breakfast": {
+      "items": []
+     },
+     "second_breakfast": {
+      "items": []
+     },
+     "lunch": {
+      "items": []
+     },
+     "dinner": {
+      "items": []
+     },
+     "snack": {
+      "items": []
+     },
+     "supper": {
+      "items": []
+     }
+    },
+    "toilet": [],
+    "note": null,
+    "tagsIds": [],
+    "water": {
+     "waterConsumption": 0
+    }
+   }
+  },
+  "sync_update_product": {
+   "request": {
+    "method": "POST",
+    "path": "/diet-plan/1234567/days",
+    "query": {
+     "synchronous": "true"
+    },
+    "body": {
+     "2027-01-03": {
+      "dietPlan": {
+       "breakfast": {
+        "items": [
+         {
+          "planDayDietItemId": "2425e4b1-c702-11f1-9f5f-a416d05353c6",
+          "source": "API",
+          "name": "Białko jaja kurzego",
+          "foodType": "PRODUCT",
+          "measureId": 39,
+          "measureName": "portion",
+          "measureQuantity": 2,
+          "energy": 16.799999999999997,
+          "protein": 3.815,
+          "fat": 0.06999999999999999,
+          "carbohydrate": 0.24499999999999997,
+          "weight": 35,
+          "capacity": null,
+          "ingredientsServing": null,
+          "ingredients": null,
+          "preparationTime": null,
+          "cookingTime": null,
+          "mealNumber": null,
+          "numberOfMeals": null,
+          "visible": true,
+          "updatedAt": "2026-10-05 12:32:23",
+          "fiber": null,
+          "cholesterol": null,
+          "saturatedFat": 0,
+          "sugars": null,
+          "salt": 0.175,
+          "sodium": 70,
+          "iron": 0.06999999999999999,
+          "liquid": false,
+          "eaten": true,
+          "productId": 15956231,
+          "brand": null
+         }
+        ]
+       }
+      }
+     }
+    }
+   },
+   "status": 202,
+   "contentType": "application/json",
+   "body": [
+    {
+     "date": "2027-01-03",
+     "revision": "2481339c-c702-11f1-bc83-96888e43543d",
+     "errorMessage": null
+    }
+   ]
+  },
+  "day_after_update": {
+   "request": {
+    "method": "GET",
+    "path": "/diet-and-activity-plan/1234567/day/2027-01-03",
+    "query": null,
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": {
+    "planDayRevisions": [
+     "2481339c-c702-11f1-bc83-96888e43543d",
+     "2454771c-c702-11f1-9cab-5a9240095da0",
+     "24439a1e-c702-11f1-ba55-bed92fcfc201",
+     "24338480-c702-11f1-8d11-5a9240095da0",
+     "9666bfb4-c6fc-11f1-9288-669947abdde4",
+     "9650463a-c6fc-11f1-9bb2-c6cd9cb28da1",
+     "9623b6e2-c6fc-11f1-9188-a688511e9246",
+     "3878f862-c6f8-11f1-b8cd-bac839b06761",
+     "2ee0c9ec-c6f8-11f1-bfa7-a688511e9246",
+     "2ea8fb8e-c6f8-11f1-ae85-a688511e9246",
+     "1e263218-c6f8-11f1-a463-5a9240095da0",
+     "1c2d35ec-c6f8-11f1-9a5e-ee45776cf4dc",
+     "1c0044e2-c6f8-11f1-9212-c6cd9cb28da1",
+     "0df253cc-c6f8-11f1-a971-bac839b06761",
+     "0dcae95e-c6f8-11f1-93d2-a688511e9246",
+     "0da4a596-c6f8-11f1-9c65-0626e06d8371",
+     "0279f694-c6f8-11f1-a07d-96888e43543d"
+    ],
+    "activityPlan": [],
+    "dietPlan": {
+     "breakfast": {
+      "mealName": "Breakfast",
+      "mealTime": "08:00",
+      "recommendedEnergy": null,
+      "items": [
+       {
+        "planDayDietItemId": "2425e4b1-c702-11f1-9f5f-a416d05353c6",
+        "source": "API",
+        "name": "Białko jaja kurzego",
+        "foodType": "PRODUCT",
+        "measureId": 39,
+        "measureName": "portion",
+        "measureQuantity": 2,
+        "energy": 33.599999999999994,
+        "protein": 7.63,
+        "fat": 0.13999999999999999,
+        "carbohydrate": 0.48999999999999994,
+        "weight": 70,
+        "capacity": null,
+        "ingredientsServing": null,
+        "ingredients": null,
+        "preparationTime": null,
+        "cookingTime": null,
+        "mealNumber": null,
+        "numberOfMeals": null,
+        "visible": true,
+        "updatedAt": "2026-10-05 12:32:23",
+        "fiber": null,
+        "cholesterol": null,
+        "saturatedFat": 0,
+        "sugars": null,
+        "salt": 0.35,
+        "sodium": 140,
+        "iron": 0.13999999999999999,
+        "liquid": false,
+        "eaten": true,
+        "productId": 15956231,
+        "brand": null
+       }
+      ],
+      "recommendedPercent": 20
+     },
+     "second_breakfast": {
+      "mealName": "Second breakfast",
+      "mealTime": "11:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     },
+     "lunch": {
+      "mealName": "Lunch",
+      "mealTime": "14:00",
+      "recommendedEnergy": null,
+      "items": [
+       {
+        "planDayDietItemId": "2425e0c6-c702-11f1-ad1f-c350cf842e16",
+        "source": "API",
+        "name": "Gorąca czekolada",
+        "foodType": "RECIPE",
+        "measureId": 39,
+        "measureName": "portion",
+        "measureQuantity": 1,
+        "energy": 125.91,
+        "protein": 6.66,
+        "fat": 2.85,
+        "carbohydrate": 18.6,
+        "weight": 248,
+        "capacity": null,
+        "ingredientsServing": 1,
+        "ingredients": null,
+        "preparationTime": null,
+        "cookingTime": 5,
+        "mealNumber": null,
+        "numberOfMeals": null,
+        "visible": true,
+        "updatedAt": "2026-10-05 12:32:23",
+        "fiber": 0.47,
+        "cholesterol": 5.75,
+        "saturatedFat": 1.84,
+        "sugars": 0.38,
+        "salt": 0,
+        "sodium": 56.15,
+        "iron": 0.23,
+        "liquid": false,
+        "eaten": false,
+        "recipeId": 590200,
+        "photo": "https://images.fitatu.com/recipes/590200/big-thumbnails/phpcHxqeM.png",
+        "mainPhoto": {
+         "id": 29302534,
+         "path": "https://images.fitatu.com/recipes/590200/phpcHxqeM.png",
+         "pathThumbnail": "https://images.fitatu.com/recipes/590200/thumbnails/phpcHxqeM.png",
+         "pathBigThumbnail": "https://images.fitatu.com/recipes/590200/big-thumbnails/phpcHxqeM.png",
+         "pathLargeThumbnail": "https://images.fitatu.com/recipes/590200/large-thumbnails/phpcHxqeM.png",
+         "alt": "recipe",
+         "ai": false
+        }
+       }
+      ],
+      "recommendedPercent": 30
+     },
+     "dinner": {
+      "mealName": "Dinner",
+      "mealTime": "17:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     },
+     "snack": {
+      "mealName": "Snack",
+      "mealTime": "19:00",
+      "recommendedEnergy": null,
+      "items": [
+       {
+        "planDayDietItemId": "2425e494-c702-11f1-9e21-e14f00f74eee",
+        "source": "API",
+        "name": "fitatu-api fixture",
+        "foodType": "CUSTOM_ITEM",
+        "measureId": 39,
+        "measureName": "portion",
+        "measureQuantity": 1,
+        "energy": 250,
+        "protein": 10,
+        "fat": 8,
+        "carbohydrate": 30,
+        "weight": null,
+        "capacity": null,
+        "ingredientsServing": null,
+        "ingredients": null,
+        "preparationTime": null,
+        "cookingTime": null,
+        "mealNumber": null,
+        "numberOfMeals": null,
+        "visible": true,
+        "updatedAt": "2026-10-05 12:32:23",
+        "fiber": null,
+        "cholesterol": null,
+        "saturatedFat": null,
+        "sugars": null,
+        "salt": null,
+        "sodium": null,
+        "iron": null,
+        "liquid": false,
+        "eaten": false
+       }
+      ],
+      "recommendedPercent": 20
+     },
+     "supper": {
+      "mealName": "Supper",
+      "mealTime": "21:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     }
+    },
+    "dietPlanGenerated": {
+     "breakfast": {
+      "items": []
+     },
+     "second_breakfast": {
+      "items": []
+     },
+     "lunch": {
+      "items": []
+     },
+     "dinner": {
+      "items": []
+     },
+     "snack": {
+      "items": []
+     },
+     "supper": {
+      "items": []
+     }
+    },
+    "toilet": [],
+    "note": null,
+    "tagsIds": [],
+    "water": {
+     "waterConsumption": 0
+    }
+   }
+  },
+  "sync_row_without_eaten": {
+   "request": {
+    "method": "POST",
+    "path": "/diet-plan/1234567/days",
+    "query": {
+     "synchronous": "true"
+    },
+    "body": {
+     "2027-01-03": {
+      "dietPlan": {
+       "breakfast": {
+        "items": [
+         {
+          "planDayDietItemId": "2425e4b1-c702-11f1-9f5f-a416d05353c6",
+          "foodType": "PRODUCT",
+          "productId": 15956231,
+          "measureId": 39,
+          "measureQuantity": 2,
+          "source": "API"
+         }
+        ]
+       }
+      }
+     }
+    }
+   },
+   "status": 202,
+   "contentType": "application/json",
+   "body": [
+    {
+     "date": "2027-01-03",
+     "revision": "24b1686e-c702-11f1-8dba-ee45776cf4dc",
+     "errorMessage": null
+    }
+   ]
+  },
+  "day_after_row_without_eaten": {
+   "request": {
+    "method": "GET",
+    "path": "/diet-and-activity-plan/1234567/day/2027-01-03",
+    "query": null,
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": {
+    "planDayRevisions": [
+     "24b1686e-c702-11f1-8dba-ee45776cf4dc",
+     "2481339c-c702-11f1-bc83-96888e43543d",
+     "2454771c-c702-11f1-9cab-5a9240095da0",
+     "24439a1e-c702-11f1-ba55-bed92fcfc201",
+     "24338480-c702-11f1-8d11-5a9240095da0",
+     "9666bfb4-c6fc-11f1-9288-669947abdde4",
+     "9650463a-c6fc-11f1-9bb2-c6cd9cb28da1",
+     "9623b6e2-c6fc-11f1-9188-a688511e9246",
+     "3878f862-c6f8-11f1-b8cd-bac839b06761",
+     "2ee0c9ec-c6f8-11f1-bfa7-a688511e9246",
+     "2ea8fb8e-c6f8-11f1-ae85-a688511e9246",
+     "1e263218-c6f8-11f1-a463-5a9240095da0",
+     "1c2d35ec-c6f8-11f1-9a5e-ee45776cf4dc",
+     "1c0044e2-c6f8-11f1-9212-c6cd9cb28da1",
+     "0df253cc-c6f8-11f1-a971-bac839b06761",
+     "0dcae95e-c6f8-11f1-93d2-a688511e9246",
+     "0da4a596-c6f8-11f1-9c65-0626e06d8371",
+     "0279f694-c6f8-11f1-a07d-96888e43543d"
+    ],
+    "activityPlan": [],
+    "dietPlan": {
+     "breakfast": {
+      "mealName": "Breakfast",
+      "mealTime": "08:00",
+      "recommendedEnergy": null,
+      "items": [
+       {
+        "planDayDietItemId": "2425e4b1-c702-11f1-9f5f-a416d05353c6",
+        "source": "API",
+        "name": "Białko jaja kurzego",
+        "foodType": "PRODUCT",
+        "measureId": 39,
+        "measureName": "portion",
+        "measureQuantity": 2,
+        "energy": 33.599999999999994,
+        "protein": 7.63,
+        "fat": 0.13999999999999999,
+        "carbohydrate": 0.48999999999999994,
+        "weight": 70,
+        "capacity": null,
+        "ingredientsServing": null,
+        "ingredients": null,
+        "preparationTime": null,
+        "cookingTime": null,
+        "mealNumber": null,
+        "numberOfMeals": null,
+        "visible": true,
+        "updatedAt": "2026-10-05 12:32:24",
+        "fiber": null,
+        "cholesterol": null,
+        "saturatedFat": 0,
+        "sugars": null,
+        "salt": 0.35,
+        "sodium": 140,
+        "iron": 0.13999999999999999,
+        "liquid": false,
+        "eaten": false,
+        "productId": 15956231,
+        "brand": null
+       }
+      ],
+      "recommendedPercent": 20
+     },
+     "second_breakfast": {
+      "mealName": "Second breakfast",
+      "mealTime": "11:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     },
+     "lunch": {
+      "mealName": "Lunch",
+      "mealTime": "14:00",
+      "recommendedEnergy": null,
+      "items": [
+       {
+        "planDayDietItemId": "2425e0c6-c702-11f1-ad1f-c350cf842e16",
+        "source": "API",
+        "name": "Gorąca czekolada",
+        "foodType": "RECIPE",
+        "measureId": 39,
+        "measureName": "portion",
+        "measureQuantity": 1,
+        "energy": 125.91,
+        "protein": 6.66,
+        "fat": 2.85,
+        "carbohydrate": 18.6,
+        "weight": 248,
+        "capacity": null,
+        "ingredientsServing": 1,
+        "ingredients": null,
+        "preparationTime": null,
+        "cookingTime": 5,
+        "mealNumber": null,
+        "numberOfMeals": null,
+        "visible": true,
+        "updatedAt": "2026-10-05 12:32:23",
+        "fiber": 0.47,
+        "cholesterol": 5.75,
+        "saturatedFat": 1.84,
+        "sugars": 0.38,
+        "salt": 0,
+        "sodium": 56.15,
+        "iron": 0.23,
+        "liquid": false,
+        "eaten": false,
+        "recipeId": 590200,
+        "photo": "https://images.fitatu.com/recipes/590200/big-thumbnails/phpcHxqeM.png",
+        "mainPhoto": {
+         "id": 29302534,
+         "path": "https://images.fitatu.com/recipes/590200/phpcHxqeM.png",
+         "pathThumbnail": "https://images.fitatu.com/recipes/590200/thumbnails/phpcHxqeM.png",
+         "pathBigThumbnail": "https://images.fitatu.com/recipes/590200/big-thumbnails/phpcHxqeM.png",
+         "pathLargeThumbnail": "https://images.fitatu.com/recipes/590200/large-thumbnails/phpcHxqeM.png",
+         "alt": "recipe",
+         "ai": false
+        }
+       }
+      ],
+      "recommendedPercent": 30
+     },
+     "dinner": {
+      "mealName": "Dinner",
+      "mealTime": "17:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     },
+     "snack": {
+      "mealName": "Snack",
+      "mealTime": "19:00",
+      "recommendedEnergy": null,
+      "items": [
+       {
+        "planDayDietItemId": "2425e494-c702-11f1-9e21-e14f00f74eee",
+        "source": "API",
+        "name": "fitatu-api fixture",
+        "foodType": "CUSTOM_ITEM",
+        "measureId": 39,
+        "measureName": "portion",
+        "measureQuantity": 1,
+        "energy": 250,
+        "protein": 10,
+        "fat": 8,
+        "carbohydrate": 30,
+        "weight": null,
+        "capacity": null,
+        "ingredientsServing": null,
+        "ingredients": null,
+        "preparationTime": null,
+        "cookingTime": null,
+        "mealNumber": null,
+        "numberOfMeals": null,
+        "visible": true,
+        "updatedAt": "2026-10-05 12:32:23",
+        "fiber": null,
+        "cholesterol": null,
+        "saturatedFat": null,
+        "sugars": null,
+        "salt": null,
+        "sodium": null,
+        "iron": null,
+        "liquid": false,
+        "eaten": false
+       }
+      ],
+      "recommendedPercent": 20
+     },
+     "supper": {
+      "mealName": "Supper",
+      "mealTime": "21:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     }
+    },
+    "dietPlanGenerated": {
+     "breakfast": {
+      "items": []
+     },
+     "second_breakfast": {
+      "items": []
+     },
+     "lunch": {
+      "items": []
+     },
+     "dinner": {
+      "items": []
+     },
+     "snack": {
+      "items": []
+     },
+     "supper": {
+      "items": []
+     }
+    },
+    "toilet": [],
+    "note": null,
+    "tagsIds": [],
+    "water": {
+     "waterConsumption": 0
+    }
+   }
+  },
+  "sync_omit_rows": {
+   "request": {
+    "method": "POST",
+    "path": "/diet-plan/1234567/days",
+    "query": {
+     "synchronous": "true"
+    },
+    "body": {
+     "2027-01-03": {
+      "dietPlan": {
+       "lunch": {
+        "items": []
+       }
+      }
+     }
+    }
+   },
+   "status": 202,
+   "contentType": "application/json",
+   "body": [
+    {
+     "date": "2027-01-03",
+     "revision": "24d9f02c-c702-11f1-9ceb-86b86184f79d",
+     "errorMessage": null
+    }
+   ]
+  },
+  "day_after_omission": {
+   "request": {
+    "method": "GET",
+    "path": "/diet-and-activity-plan/1234567/day/2027-01-03",
+    "query": null,
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": {
+    "planDayRevisions": [
+     "24d9f02c-c702-11f1-9ceb-86b86184f79d",
+     "24b1686e-c702-11f1-8dba-ee45776cf4dc",
+     "2481339c-c702-11f1-bc83-96888e43543d",
+     "2454771c-c702-11f1-9cab-5a9240095da0",
+     "24439a1e-c702-11f1-ba55-bed92fcfc201",
+     "24338480-c702-11f1-8d11-5a9240095da0",
+     "9666bfb4-c6fc-11f1-9288-669947abdde4",
+     "9650463a-c6fc-11f1-9bb2-c6cd9cb28da1",
+     "9623b6e2-c6fc-11f1-9188-a688511e9246",
+     "3878f862-c6f8-11f1-b8cd-bac839b06761",
+     "2ee0c9ec-c6f8-11f1-bfa7-a688511e9246",
+     "2ea8fb8e-c6f8-11f1-ae85-a688511e9246",
+     "1e263218-c6f8-11f1-a463-5a9240095da0",
+     "1c2d35ec-c6f8-11f1-9a5e-ee45776cf4dc",
+     "1c0044e2-c6f8-11f1-9212-c6cd9cb28da1",
+     "0df253cc-c6f8-11f1-a971-bac839b06761",
+     "0dcae95e-c6f8-11f1-93d2-a688511e9246",
+     "0da4a596-c6f8-11f1-9c65-0626e06d8371",
+     "0279f694-c6f8-11f1-a07d-96888e43543d"
+    ],
+    "activityPlan": [],
+    "dietPlan": {
+     "breakfast": {
+      "mealName": "Breakfast",
+      "mealTime": "08:00",
+      "recommendedEnergy": null,
+      "items": [
+       {
+        "planDayDietItemId": "2425e4b1-c702-11f1-9f5f-a416d05353c6",
+        "source": "API",
+        "name": "Białko jaja kurzego",
+        "foodType": "PRODUCT",
+        "measureId": 39,
+        "measureName": "portion",
+        "measureQuantity": 2,
+        "energy": 33.599999999999994,
+        "protein": 7.63,
+        "fat": 0.13999999999999999,
+        "carbohydrate": 0.48999999999999994,
+        "weight": 70,
+        "capacity": null,
+        "ingredientsServing": null,
+        "ingredients": null,
+        "preparationTime": null,
+        "cookingTime": null,
+        "mealNumber": null,
+        "numberOfMeals": null,
+        "visible": true,
+        "updatedAt": "2026-10-05 12:32:24",
+        "fiber": null,
+        "cholesterol": null,
+        "saturatedFat": 0,
+        "sugars": null,
+        "salt": 0.35,
+        "sodium": 140,
+        "iron": 0.13999999999999999,
+        "liquid": false,
+        "eaten": false,
+        "productId": 15956231,
+        "brand": null
+       }
+      ],
+      "recommendedPercent": 20
+     },
+     "second_breakfast": {
+      "mealName": "Second breakfast",
+      "mealTime": "11:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     },
+     "lunch": {
+      "mealName": "Lunch",
+      "mealTime": "14:00",
+      "recommendedEnergy": null,
+      "items": [
+       {
+        "planDayDietItemId": "2425e0c6-c702-11f1-ad1f-c350cf842e16",
+        "source": "API",
+        "name": "Gorąca czekolada",
+        "foodType": "RECIPE",
+        "measureId": 39,
+        "measureName": "portion",
+        "measureQuantity": 1,
+        "energy": 125.91,
+        "protein": 6.66,
+        "fat": 2.85,
+        "carbohydrate": 18.6,
+        "weight": 248,
+        "capacity": null,
+        "ingredientsServing": 1,
+        "ingredients": null,
+        "preparationTime": null,
+        "cookingTime": 5,
+        "mealNumber": null,
+        "numberOfMeals": null,
+        "visible": true,
+        "updatedAt": "2026-10-05 12:32:23",
+        "fiber": 0.47,
+        "cholesterol": 5.75,
+        "saturatedFat": 1.84,
+        "sugars": 0.38,
+        "salt": 0,
+        "sodium": 56.15,
+        "iron": 0.23,
+        "liquid": false,
+        "eaten": false,
+        "recipeId": 590200,
+        "photo": "https://images.fitatu.com/recipes/590200/big-thumbnails/phpcHxqeM.png",
+        "mainPhoto": {
+         "id": 29302534,
+         "path": "https://images.fitatu.com/recipes/590200/phpcHxqeM.png",
+         "pathThumbnail": "https://images.fitatu.com/recipes/590200/thumbnails/phpcHxqeM.png",
+         "pathBigThumbnail": "https://images.fitatu.com/recipes/590200/big-thumbnails/phpcHxqeM.png",
+         "pathLargeThumbnail": "https://images.fitatu.com/recipes/590200/large-thumbnails/phpcHxqeM.png",
+         "alt": "recipe",
+         "ai": false
+        }
+       }
+      ],
+      "recommendedPercent": 30
+     },
+     "dinner": {
+      "mealName": "Dinner",
+      "mealTime": "17:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     },
+     "snack": {
+      "mealName": "Snack",
+      "mealTime": "19:00",
+      "recommendedEnergy": null,
+      "items": [
+       {
+        "planDayDietItemId": "2425e494-c702-11f1-9e21-e14f00f74eee",
+        "source": "API",
+        "name": "fitatu-api fixture",
+        "foodType": "CUSTOM_ITEM",
+        "measureId": 39,
+        "measureName": "portion",
+        "measureQuantity": 1,
+        "energy": 250,
+        "protein": 10,
+        "fat": 8,
+        "carbohydrate": 30,
+        "weight": null,
+        "capacity": null,
+        "ingredientsServing": null,
+        "ingredients": null,
+        "preparationTime": null,
+        "cookingTime": null,
+        "mealNumber": null,
+        "numberOfMeals": null,
+        "visible": true,
+        "updatedAt": "2026-10-05 12:32:23",
+        "fiber": null,
+        "cholesterol": null,
+        "saturatedFat": null,
+        "sugars": null,
+        "salt": null,
+        "sodium": null,
+        "iron": null,
+        "liquid": false,
+        "eaten": false
+       }
+      ],
+      "recommendedPercent": 20
+     },
+     "supper": {
+      "mealName": "Supper",
+      "mealTime": "21:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     }
+    },
+    "dietPlanGenerated": {
+     "breakfast": {
+      "items": []
+     },
+     "second_breakfast": {
+      "items": []
+     },
+     "lunch": {
+      "items": []
+     },
+     "dinner": {
+      "items": []
+     },
+     "snack": {
+      "items": []
+     },
+     "supper": {
+      "items": []
+     }
+    },
+    "toilet": [],
+    "note": null,
+    "tagsIds": [],
+    "water": {
+     "waterConsumption": 0
+    }
+   }
+  },
+  "sync_rejected": {
+   "request": {
+    "method": "POST",
+    "path": "/diet-plan/1234567/days",
+    "query": {
+     "synchronous": "true"
+    },
+    "body": {
+     "2027-01-03": {
+      "dietPlan": {
+       "snack": {
+        "items": [
+         {
+          "planDayDietItemId": "eb9c104f-a325-4532-9c37-bd4fc19e64bf",
+          "foodType": "CUSTOM_ITEM",
+          "name": "rejected",
+          "measureId": 1,
+          "measureQuantity": 1,
+          "energy": 1,
+          "protein": 0,
+          "fat": 0,
+          "carbohydrate": 0,
+          "source": "API"
+         }
+        ]
+       }
+      }
+     }
+    }
+   },
+   "status": 202,
+   "contentType": "application/json",
+   "body": [
+    {
+     "date": "2027-01-03",
+     "revision": null,
+     "errorMessage": "Invalid pddiId UUID version, only version 1 is acceptable,UUID: eb9c104f-a325-4532-9c37-bd4fc19e64bf."
+    }
+   ]
+  },
+  "sync_delete_product": {
+   "request": {
+    "method": "POST",
+    "path": "/diet-plan/1234567/days",
+    "query": {
+     "synchronous": "true"
+    },
+    "body": {
+     "2027-01-03": {
+      "dietPlan": {
+       "breakfast": {
+        "items": [
+         {
+          "planDayDietItemId": "2425e4b1-c702-11f1-9f5f-a416d05353c6",
+          "source": "API",
+          "name": "Białko jaja kurzego",
+          "foodType": "PRODUCT",
+          "measureId": 39,
+          "measureName": "portion",
+          "measureQuantity": 2,
+          "energy": 33.599999999999994,
+          "protein": 7.63,
+          "fat": 0.13999999999999999,
+          "carbohydrate": 0.48999999999999994,
+          "weight": 70,
+          "capacity": null,
+          "ingredientsServing": null,
+          "ingredients": null,
+          "preparationTime": null,
+          "cookingTime": null,
+          "mealNumber": null,
+          "numberOfMeals": null,
+          "visible": true,
+          "updatedAt": "2026-10-05 12:32:24",
+          "fiber": null,
+          "cholesterol": null,
+          "saturatedFat": 0,
+          "sugars": null,
+          "salt": 0.35,
+          "sodium": 140,
+          "iron": 0.13999999999999999,
+          "liquid": false,
+          "eaten": false,
+          "productId": 15956231,
+          "brand": null,
+          "deletedAt": "2026-10-05 12:32:24"
+         }
+        ]
+       }
+      }
+     }
+    }
+   },
+   "status": 202,
+   "contentType": "application/json",
+   "body": [
+    {
+     "date": "2027-01-03",
+     "revision": "2507b8fe-c702-11f1-8fbe-5a9240095da0",
+     "errorMessage": null
+    }
+   ]
+  },
+  "day_after_delete": {
+   "request": {
+    "method": "GET",
+    "path": "/diet-and-activity-plan/1234567/day/2027-01-03",
+    "query": null,
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": {
+    "planDayRevisions": [
+     "2507b8fe-c702-11f1-8fbe-5a9240095da0",
+     "24d9f02c-c702-11f1-9ceb-86b86184f79d",
+     "24b1686e-c702-11f1-8dba-ee45776cf4dc",
+     "2481339c-c702-11f1-bc83-96888e43543d",
+     "2454771c-c702-11f1-9cab-5a9240095da0",
+     "24439a1e-c702-11f1-ba55-bed92fcfc201",
+     "24338480-c702-11f1-8d11-5a9240095da0",
+     "9666bfb4-c6fc-11f1-9288-669947abdde4",
+     "9650463a-c6fc-11f1-9bb2-c6cd9cb28da1",
+     "9623b6e2-c6fc-11f1-9188-a688511e9246",
+     "3878f862-c6f8-11f1-b8cd-bac839b06761",
+     "2ee0c9ec-c6f8-11f1-bfa7-a688511e9246",
+     "2ea8fb8e-c6f8-11f1-ae85-a688511e9246",
+     "1e263218-c6f8-11f1-a463-5a9240095da0",
+     "1c2d35ec-c6f8-11f1-9a5e-ee45776cf4dc",
+     "1c0044e2-c6f8-11f1-9212-c6cd9cb28da1",
+     "0df253cc-c6f8-11f1-a971-bac839b06761",
+     "0dcae95e-c6f8-11f1-93d2-a688511e9246",
+     "0da4a596-c6f8-11f1-9c65-0626e06d8371",
+     "0279f694-c6f8-11f1-a07d-96888e43543d"
+    ],
+    "activityPlan": [],
+    "dietPlan": {
+     "breakfast": {
+      "mealName": "Breakfast",
+      "mealTime": "08:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 20
+     },
+     "second_breakfast": {
+      "mealName": "Second breakfast",
+      "mealTime": "11:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     },
+     "lunch": {
+      "mealName": "Lunch",
+      "mealTime": "14:00",
+      "recommendedEnergy": null,
+      "items": [
+       {
+        "planDayDietItemId": "2425e0c6-c702-11f1-ad1f-c350cf842e16",
+        "source": "API",
+        "name": "Gorąca czekolada",
+        "foodType": "RECIPE",
+        "measureId": 39,
+        "measureName": "portion",
+        "measureQuantity": 1,
+        "energy": 125.91,
+        "protein": 6.66,
+        "fat": 2.85,
+        "carbohydrate": 18.6,
+        "weight": 248,
+        "capacity": null,
+        "ingredientsServing": 1,
+        "ingredients": null,
+        "preparationTime": null,
+        "cookingTime": 5,
+        "mealNumber": null,
+        "numberOfMeals": null,
+        "visible": true,
+        "updatedAt": "2026-10-05 12:32:23",
+        "fiber": 0.47,
+        "cholesterol": 5.75,
+        "saturatedFat": 1.84,
+        "sugars": 0.38,
+        "salt": 0,
+        "sodium": 56.15,
+        "iron": 0.23,
+        "liquid": false,
+        "eaten": false,
+        "recipeId": 590200,
+        "photo": "https://images.fitatu.com/recipes/590200/big-thumbnails/phpcHxqeM.png",
+        "mainPhoto": {
+         "id": 29302534,
+         "path": "https://images.fitatu.com/recipes/590200/phpcHxqeM.png",
+         "pathThumbnail": "https://images.fitatu.com/recipes/590200/thumbnails/phpcHxqeM.png",
+         "pathBigThumbnail": "https://images.fitatu.com/recipes/590200/big-thumbnails/phpcHxqeM.png",
+         "pathLargeThumbnail": "https://images.fitatu.com/recipes/590200/large-thumbnails/phpcHxqeM.png",
+         "alt": "recipe",
+         "ai": false
+        }
+       }
+      ],
+      "recommendedPercent": 30
+     },
+     "dinner": {
+      "mealName": "Dinner",
+      "mealTime": "17:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     },
+     "snack": {
+      "mealName": "Snack",
+      "mealTime": "19:00",
+      "recommendedEnergy": null,
+      "items": [
+       {
+        "planDayDietItemId": "2425e494-c702-11f1-9e21-e14f00f74eee",
+        "source": "API",
+        "name": "fitatu-api fixture",
+        "foodType": "CUSTOM_ITEM",
+        "measureId": 39,
+        "measureName": "portion",
+        "measureQuantity": 1,
+        "energy": 250,
+        "protein": 10,
+        "fat": 8,
+        "carbohydrate": 30,
+        "weight": null,
+        "capacity": null,
+        "ingredientsServing": null,
+        "ingredients": null,
+        "preparationTime": null,
+        "cookingTime": null,
+        "mealNumber": null,
+        "numberOfMeals": null,
+        "visible": true,
+        "updatedAt": "2026-10-05 12:32:23",
+        "fiber": null,
+        "cholesterol": null,
+        "saturatedFat": null,
+        "sugars": null,
+        "salt": null,
+        "sodium": null,
+        "iron": null,
+        "liquid": false,
+        "eaten": false
+       }
+      ],
+      "recommendedPercent": 20
+     },
+     "supper": {
+      "mealName": "Supper",
+      "mealTime": "21:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     }
+    },
+    "dietPlanGenerated": {
+     "breakfast": {
+      "items": []
+     },
+     "second_breakfast": {
+      "items": []
+     },
+     "lunch": {
+      "items": []
+     },
+     "dinner": {
+      "items": []
+     },
+     "snack": {
+      "items": []
+     },
+     "supper": {
+      "items": []
+     }
+    },
+    "toilet": [],
+    "note": null,
+    "tagsIds": [],
+    "water": {
+     "waterConsumption": 0
+    }
+   }
+  },
+  "day_revisions": {
+   "request": {
+    "method": "GET",
+    "path": "/diet-plan/1234567/days/2027-01-03/revisions",
+    "query": null,
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": [
+    "2507b8fe-c702-11f1-8fbe-5a9240095da0",
+    "24d9f02c-c702-11f1-9ceb-86b86184f79d",
+    "24b1686e-c702-11f1-8dba-ee45776cf4dc"
+   ]
+  },
+  "summary_nutrition": {
+   "request": {
+    "method": "GET",
+    "path": "/v2/diet-plan/1234567/summary/custom",
+    "query": {
+     "fromDate": "2027-01-03",
+     "toDate": "2027-01-03"
+    },
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": {
+    "energy": {
+     "current": 376,
+     "min": null,
+     "max": 100,
+     "eaten": null
+    },
+    "dietEnergy": {
+     "current": null,
+     "min": null,
+     "max": 100,
+     "eaten": null
+    },
+    "activityEnergy": {
+     "current": null,
+     "min": null,
+     "max": null,
+     "eaten": null
+    },
+    "addedActivityEnergy": {
+     "current": null,
+     "min": null,
+     "max": null,
+     "eaten": null
+    },
+    "water": {
+     "current": 0,
+     "min": null,
+     "max": 100,
+     "eaten": null
+    },
+    "protein": {
+     "current": 16.66,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "vegetableProtein": {
+     "current": 0,
+     "min": null,
+     "max": 100,
+     "eaten": null
+    },
+    "animalProtein": {
+     "current": 3.91,
+     "min": null,
+     "max": 100,
+     "eaten": null
+    },
+    "fat": {
+     "current": 10.85,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "saturatedFat": {
+     "current": 1.84,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "polyunsaturatedFat": {
+     "current": 0.01,
+     "min": null,
+     "max": 100,
+     "eaten": null
+    },
+    "monounsaturatedFat": {
+     "current": 0.35,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "carbohydrate": {
+     "current": 48.6,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "cholesterol": {
+     "current": 5.75,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "fiber": {
+     "current": 0.47,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "sodium": {
+     "current": 56.15,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "calcium": {
+     "current": 143.2,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "potassium": {
+     "current": 242.23,
+     "min": null,
+     "max": 100,
+     "eaten": null
+    },
+    "iron": {
+     "current": 0.23,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "magnesium": {
+     "current": 19,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "zinc": {
+     "current": 0.5,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "phosphorus": {
+     "current": 124.99,
+     "min": null,
+     "max": 100,
+     "eaten": null
+    },
+    "iodine": {
+     "current": 0,
+     "min": null,
+     "max": 100,
+     "eaten": null
+    },
+    "copper": {
+     "current": 0.03,
+     "min": null,
+     "max": 100,
+     "eaten": null
+    },
+    "selenium": {
+     "current": 0.09,
+     "min": null,
+     "max": 100,
+     "eaten": null
+    },
+    "vitaminA": {
+     "current": 23,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "vitaminB1": {
+     "current": 0.02,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "vitaminB12": {
+     "current": 0.46,
+     "min": null,
+     "max": 100,
+     "eaten": null
+    },
+    "vitaminB2": {
+     "current": 0.23,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "vitaminB5": {
+     "current": 0,
+     "min": null,
+     "max": 100,
+     "eaten": null
+    },
+    "vitaminB6": {
+     "current": 0.18,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "vitaminB7": {
+     "current": 0,
+     "min": null,
+     "max": 100,
+     "eaten": null
+    },
+    "vitaminC": {
+     "current": 1.45,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "vitaminD": {
+     "current": 0,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "vitaminE": {
+     "current": 0.14,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "vitaminK": {
+     "current": 0,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "vitaminPP": {
+     "current": 0.4,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "folicAcid": {
+     "current": 5.75,
+     "min": null,
+     "max": 100,
+     "eaten": null
+    },
+    "sugars": {
+     "current": 0.38,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "omega3": {
+     "current": 0,
+     "min": null,
+     "max": 100,
+     "eaten": null
+    },
+    "omega6": {
+     "current": 0,
+     "min": null,
+     "max": 100,
+     "eaten": null
+    },
+    "caffeine": {
+     "current": 0,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    },
+    "salt": {
+     "current": 0,
+     "min": 100,
+     "max": 100,
+     "eaten": null
+    }
+   }
+  },
+  "summary_nutrient_energy": {
+   "request": {
+    "method": "GET",
+    "path": "/v2/diet-plan/1234567/summary/energy/custom",
+    "query": {
+     "fromDate": "2027-01-03",
+     "toDate": "2027-01-03"
+    },
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": {
+    "targets": {
+     "2027-01-03": 2000
+    },
+    "measures": {
+     "2027-01-03": 376
+    }
+   }
+  },
+  "summary_top_products_energy": {
+   "request": {
+    "method": "GET",
+    "path": "/diet-plan/1234567/summary-product/energy/custom",
+    "query": {
+     "fromDate": "2027-01-03",
+     "toDate": "2027-01-03",
+     "page": 1,
+     "limit": 5
+    },
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": {
+    "list": [
+     {
+      "id": 12178460704,
+      "name": "fitatu-api fixture",
+      "amount": {
+       "per100": null,
+       "current": "250.00"
+      }
+     },
+     {
+      "id": 1431,
+      "name": "Mleko spożywcze 1.5 % tłuszczu",
+      "amount": {
+       "per100": "47.00",
+       "current": "54.05"
+      }
+     },
+     {
+      "id": 31141,
+      "name": "Kakao ciemne o obniżonej zawartości tłuszczu",
+      "amount": {
+       "per100": "313.00",
+       "current": "31.30"
+      }
+     },
+     {
+      "id": 14440,
+      "name": "Mąka ziemniaczana",
+      "amount": {
+       "per100": "357.00",
+       "current": "28.56"
+      }
+     },
+     {
+      "id": 1233810,
+      "name": "Maltitol",
+      "amount": {
+       "per100": "240.00",
+       "current": "12.00"
+      }
+     }
+    ],
+    "count": 5
+   }
+  },
+  "summary_activities": {
+   "request": {
+    "method": "GET",
+    "path": "/activity-plan/1234567/summary/custom",
+    "query": {
+     "fromDate": "2027-01-03",
+     "toDate": "2027-01-03"
+    },
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": {
+    "energy": 0,
+    "targetEnergy": 300,
+    "activities": [],
+    "summaryMeasures": []
+   }
+  },
+  "export_csv": {
+   "request": {
+    "method": "GET",
+    "path": "/diet-plan/1234567/export",
+    "query": {
+     "format": "csv",
+     "fromDate": "2027-01-03",
+     "toDate": "2027-01-03"
+    },
+    "body": null
+   },
+   "status": 200,
+   "contentType": "text/csv; charset=UTF-8",
+   "body": "Date,Meal,\"Products and dishes\",\"Kitchen measure\",\"quantity (g)\",\"calories (kcal)\",\"Protein (g)\",\"Plant (g)\",\"Animal (g)\",\"Fats (g)\",\"Saturated (g)\",\"Monounsaturated (g)\",\"Polyunsaturated (g)\",\"Omega 3 fatty acid (g)\",\"Omega 6 fatty acid (g)\",\"Carbohydrates (g)\",\"Sugars (g)\",\"Cholesterol (mg)\",\"Fibre (g)\",\"Caffeine (mg)\",\"Folic acid (ug)\",\"Vitamin A (ug)\",\"Vitamin B1 (mg)\",\"Vitamin B2 (mg)\",\"Vitamin B5 (mg)\",\"Vitamin B6 (mg)\",\"Biotin (ug)\",\"Vitamin B12 (ug)\",\"Vitamin C (mg)\",\"Vitamin D (ug)\",\"Vitamin E (mg)\",\"Vitamin PP (mg)\",\"Vitamin K (ug)\",\"Zinc (mg)\",\"Phosphorous (mg)\",\"Iodine (ug)\",\"Magnesium (mg)\",\"Copper (mg)\",\"Potassium (mg)\",\"Selenium (ug)\",\"Sodium (mg)\",\"Calcium (mg)\",\"Iron (mg)\",\"Salt (g)\"\n2027-01-03,\"Lunch\",\"Gorąca czekolada\",\"1x portion\",248,125.91,6.66,0,3.91,2.85,1.84,0.35,0.01,,,18.6,0.38,5.75,0.47,,5.75,23,0.02,0.23,,0.18,,0.46,1.45,0,0.14,0.4,,0.5,124.99,,19,0.03,242.23,0.09,56.15,143.2,0.23,0\n2027-01-03,Snack,\"fitatu-api fixture\",\"1x portion\",,250,10,,,8,,,,,,30,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"
+  },
+  "export_empty_range": {
+   "request": {
+    "method": "GET",
+    "path": "/diet-plan/1234567/export",
+    "query": {
+     "format": "csv",
+     "fromDate": "2027-02-01",
+     "toDate": "2027-02-02"
+    },
+    "body": null
+   },
+   "status": 204,
+   "contentType": null,
+   "body": ""
+  },
+  "export_reversed_range": {
+   "request": {
+    "method": "GET",
+    "path": "/diet-plan/1234567/export",
+    "query": {
+     "format": "csv",
+     "fromDate": "2027-01-04",
+     "toDate": "2027-01-03"
+    },
+    "body": null
+   },
+   "status": 422,
+   "contentType": "application/json",
+   "body": {
+    "code": 422,
+    "message": "Unprocessable Content"
+   }
+  },
+  "sync_cleanup": {
+   "request": {
+    "method": "POST",
+    "path": "/diet-plan/1234567/days",
+    "query": {
+     "synchronous": "true"
+    },
+    "body": {
+     "2027-01-03": {
+      "dietPlan": {
+       "lunch": {
+        "items": [
+         {
+          "planDayDietItemId": "2425e0c6-c702-11f1-ad1f-c350cf842e16",
+          "source": "API",
+          "name": "Gorąca czekolada",
+          "foodType": "RECIPE",
+          "measureId": 39,
+          "measureName": "portion",
+          "measureQuantity": 1,
+          "energy": 125.91,
+          "protein": 6.66,
+          "fat": 2.85,
+          "carbohydrate": 18.6,
+          "weight": 248,
+          "capacity": null,
+          "ingredientsServing": 1,
+          "ingredients": null,
+          "preparationTime": null,
+          "cookingTime": 5,
+          "mealNumber": null,
+          "numberOfMeals": null,
+          "visible": true,
+          "updatedAt": "2026-10-05 12:32:23",
+          "fiber": 0.47,
+          "cholesterol": 5.75,
+          "saturatedFat": 1.84,
+          "sugars": 0.38,
+          "salt": 0,
+          "sodium": 56.15,
+          "iron": 0.23,
+          "liquid": false,
+          "eaten": false,
+          "recipeId": 590200,
+          "photo": "https://images.fitatu.com/recipes/590200/big-thumbnails/phpcHxqeM.png",
+          "mainPhoto": {
+           "id": 29302534,
+           "path": "https://images.fitatu.com/recipes/590200/phpcHxqeM.png",
+           "pathThumbnail": "https://images.fitatu.com/recipes/590200/thumbnails/phpcHxqeM.png",
+           "pathBigThumbnail": "https://images.fitatu.com/recipes/590200/big-thumbnails/phpcHxqeM.png",
+           "pathLargeThumbnail": "https://images.fitatu.com/recipes/590200/large-thumbnails/phpcHxqeM.png",
+           "alt": "recipe",
+           "ai": false
+          },
+          "deletedAt": "2026-10-05 12:32:26"
+         }
+        ]
+       },
+       "snack": {
+        "items": [
+         {
+          "planDayDietItemId": "2425e494-c702-11f1-9e21-e14f00f74eee",
+          "source": "API",
+          "name": "fitatu-api fixture",
+          "foodType": "CUSTOM_ITEM",
+          "measureId": 39,
+          "measureName": "portion",
+          "measureQuantity": 1,
+          "energy": 250,
+          "protein": 10,
+          "fat": 8,
+          "carbohydrate": 30,
+          "weight": null,
+          "capacity": null,
+          "ingredientsServing": null,
+          "ingredients": null,
+          "preparationTime": null,
+          "cookingTime": null,
+          "mealNumber": null,
+          "numberOfMeals": null,
+          "visible": true,
+          "updatedAt": "2026-10-05 12:32:23",
+          "fiber": null,
+          "cholesterol": null,
+          "saturatedFat": null,
+          "sugars": null,
+          "salt": null,
+          "sodium": null,
+          "iron": null,
+          "liquid": false,
+          "eaten": false,
+          "deletedAt": "2026-10-05 12:32:26"
+         }
+        ]
+       }
+      }
+     }
+    }
+   },
+   "status": 202,
+   "contentType": "application/json",
+   "body": [
+    {
+     "date": "2027-01-03",
+     "revision": "25d84b5e-c702-11f1-a08a-bac839b06761",
+     "errorMessage": null
+    }
+   ]
+  },
+  "day_after_cleanup": {
+   "request": {
+    "method": "GET",
+    "path": "/diet-and-activity-plan/1234567/day/2027-01-03",
+    "query": null,
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": {
+    "planDayRevisions": [
+     "25d84b5e-c702-11f1-a08a-bac839b06761",
+     "2507b8fe-c702-11f1-8fbe-5a9240095da0",
+     "24d9f02c-c702-11f1-9ceb-86b86184f79d",
+     "24b1686e-c702-11f1-8dba-ee45776cf4dc",
+     "2481339c-c702-11f1-bc83-96888e43543d",
+     "2454771c-c702-11f1-9cab-5a9240095da0",
+     "24439a1e-c702-11f1-ba55-bed92fcfc201",
+     "24338480-c702-11f1-8d11-5a9240095da0",
+     "9666bfb4-c6fc-11f1-9288-669947abdde4",
+     "9650463a-c6fc-11f1-9bb2-c6cd9cb28da1",
+     "9623b6e2-c6fc-11f1-9188-a688511e9246",
+     "3878f862-c6f8-11f1-b8cd-bac839b06761",
+     "2ee0c9ec-c6f8-11f1-bfa7-a688511e9246",
+     "2ea8fb8e-c6f8-11f1-ae85-a688511e9246",
+     "1e263218-c6f8-11f1-a463-5a9240095da0",
+     "1c2d35ec-c6f8-11f1-9a5e-ee45776cf4dc",
+     "1c0044e2-c6f8-11f1-9212-c6cd9cb28da1",
+     "0df253cc-c6f8-11f1-a971-bac839b06761",
+     "0dcae95e-c6f8-11f1-93d2-a688511e9246",
+     "0da4a596-c6f8-11f1-9c65-0626e06d8371",
+     "0279f694-c6f8-11f1-a07d-96888e43543d"
+    ],
+    "activityPlan": [],
+    "dietPlan": {
+     "breakfast": {
+      "mealName": "Breakfast",
+      "mealTime": "08:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 20
+     },
+     "second_breakfast": {
+      "mealName": "Second breakfast",
+      "mealTime": "11:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     },
+     "lunch": {
+      "mealName": "Lunch",
+      "mealTime": "14:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 30
+     },
+     "dinner": {
+      "mealName": "Dinner",
+      "mealTime": "17:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     },
+     "snack": {
+      "mealName": "Snack",
+      "mealTime": "19:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 20
+     },
+     "supper": {
+      "mealName": "Supper",
+      "mealTime": "21:00",
+      "recommendedEnergy": null,
+      "items": [],
+      "recommendedPercent": 10
+     }
+    },
+    "dietPlanGenerated": {
+     "breakfast": {
+      "items": []
+     },
+     "second_breakfast": {
+      "items": []
+     },
+     "lunch": {
+      "items": []
+     },
+     "dinner": {
+      "items": []
+     },
+     "snack": {
+      "items": []
+     },
+     "supper": {
+      "items": []
+     }
+    },
+    "toilet": [],
+    "note": null,
+    "tagsIds": [],
+    "water": {
+     "waterConsumption": 0
+    }
+   }
+  },
+  "measurement_missing": {
+   "request": {
+    "method": "GET",
+    "path": "/users/1234567/measurements/2020-01-01",
+    "query": null,
+    "body": null
+   },
+   "status": 404,
+   "contentType": "application/json",
+   "body": {
+    "message": "Measurement not found"
+   }
+  },
+  "measurement_put": {
+   "request": {
+    "method": "PUT",
+    "path": "/users/1234567/measurements/2020-01-01",
+    "query": null,
+    "body": {
+     "date": "2020-01-01",
+     "weight": "70.0",
+     "waist": "80.0",
+     "fatPercentage": "0.0",
+     "weightUnit": "KG",
+     "sizeUnit": "CM"
+    }
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": {
+    "weight": 70,
+    "neck": null,
+    "chest": null,
+    "waist": 80,
+    "stomach": null,
+    "hips": null,
+    "thigh": null,
+    "calf": null,
+    "biceps": null,
+    "fatPercentage": null,
+    "weightUnit": "KG",
+    "sizeUnit": "CM"
+   }
+  },
+  "measurement_day": {
+   "request": {
+    "method": "GET",
+    "path": "/users/1234567/measurements/2020-01-01",
+    "query": null,
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": {
+    "weight": 70,
+    "neck": null,
+    "chest": null,
+    "waist": 80,
+    "stomach": null,
+    "hips": null,
+    "thigh": null,
+    "calf": null,
+    "biceps": null,
+    "fatPercentage": null,
+    "weightUnit": "KG",
+    "sizeUnit": "CM"
+   }
+  },
+  "measurement_weight_history": {
+   "request": {
+    "method": "GET",
+    "path": "/users/1234567/measurements/summary/weight",
+    "query": {
+     "fromDate": "2020-01-01",
+     "toDate": "2020-01-01",
+     "limit": 41,
+     "page": 1
+    },
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": [
+    {
+     "date": "2020-01-01",
+     "value": 70,
+     "difference": null,
+     "direction": 0
+    }
+   ]
+  },
+  "measurement_weight_chart": {
+   "request": {
+    "method": "GET",
+    "path": "/users/1234567/measurements/chart/weight",
+    "query": {
+     "fromDate": "2020-01-01",
+     "toDate": "2020-01-01"
+    },
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": {
+    "weights": {
+     "2020-01-01": 70
+    },
+    "targets": {
+     "2020-01-01": 75
+    },
+    "weightUnit": "KG"
+   }
+  },
+  "measurement_body_part_waist": {
+   "request": {
+    "method": "GET",
+    "path": "/users/1234567/measurements/size/waist",
+    "query": {
+     "fromDate": "2020-01-01",
+     "toDate": "2020-01-01",
+     "limit": 41,
+     "page": 1
+    },
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": [
+    {
+     "date": "2020-01-01",
+     "value": 80
+    }
+   ]
+  },
+  "measurement_size_summary": {
+   "request": {
+    "method": "GET",
+    "path": "/users/1234567/measurements/summary/size",
+    "query": {
+     "fromDate": "2020-01-01",
+     "toDate": "2020-01-01"
+    },
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": {
+    "neck": {
+     "startValue": null,
+     "endValue": null,
+     "difference": null
+    },
+    "chest": {
+     "startValue": null,
+     "endValue": null,
+     "difference": null
+    },
+    "waist": {
+     "startValue": 80,
+     "endValue": 80,
+     "difference": 0
+    },
+    "stomach": {
+     "startValue": null,
+     "endValue": null,
+     "difference": null
+    },
+    "hips": {
+     "startValue": null,
+     "endValue": null,
+     "difference": null
+    },
+    "thigh": {
+     "startValue": null,
+     "endValue": null,
+     "difference": null
+    },
+    "calf": {
+     "startValue": null,
+     "endValue": null,
+     "difference": null
+    },
+    "biceps": {
+     "startValue": null,
+     "endValue": null,
+     "difference": null
+    },
+    "fatPercentage": {
+     "startValue": null,
+     "endValue": null,
+     "difference": null
+    }
+   }
+  },
+  "measurement_delete": {
+   "request": {
+    "method": "DELETE",
+    "path": "/users/1234567/measurements/2020-01-01",
+    "query": null,
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": ""
+  },
+  "measurement_after_delete": {
+   "request": {
+    "method": "GET",
+    "path": "/users/1234567/measurements/2020-01-01",
+    "query": null,
+    "body": null
+   },
+   "status": 404,
+   "contentType": "application/json",
+   "body": {
+    "message": "Measurement not found"
+   }
+  },
+  "settings_new": {
+   "request": {
+    "method": "GET",
+    "path": "/users/1234567/settings-new/2027-01-03",
+    "query": null,
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json",
+   "body": {
+    "userId": 1234567,
+    "date": "2026-10-05T11:13:37+00:00",
+    "userSettings": {
+     "sex": 1,
+     "birthDate": "1990-01-01",
+     "height": 180,
+     "heightCm": 180,
+     "weightStart": 85,
+     "weightStartKg": 85,
+     "weightCurrent": 80,
+     "weightCurrentKg": 80,
+     "weightTarget": 75,
+     "weightTargetKg": 75,
+     "age": 36,
+     "heightUnit": 1,
+     "weightCurrentUnit": 4,
+     "weightStartUnit": 4,
+     "weightTargetUnit": 4
+    },
+    "plannerSettings": {
+     "appearance": {
+      "switchers": [],
+      "nutritions": []
+     }
+    },
+    "userDietSettings": {
+     "activityBase": 1.4,
+     "activityTraining": 1.4,
+     "activityEnergyInclusionMode": 0,
+     "weightChangeSpeed": 0,
+     "weightChangeSpeedKg": 0,
+     "weightChangeSpeedUnit": 4,
+     "weightChangeDirection": 0,
+     "energy": 2000,
+     "proteinPercentage": 20,
+     "proteinWeight": 100,
+     "fatPercentage": 30,
+     "fatWeight": 67,
+     "carbohydratePercentage": 50,
+     "carbohydrateWeight": 250,
+     "excludedProducts": [],
+     "meatlessFridays": false,
+     "nutritionSchema": [],
+     "multiDayMealConfig": {
+      "defaultMeal": null,
+      "meals": []
+     },
+     "intermittentFastingConfig": {
+      "weekDays": [],
+      "type": null,
+      "default": null,
+      "startDate": null
+     },
+     "manualEnergyTarget": false,
+     "firstDayDiet": 0,
+     "defaultActivityTraining": false
+    },
+    "calculatedValues": {
+     "BMR": 1700,
+     "BMRConstant": {
+      "formulaCoefficient": 0,
+      "formulaElement": 0
+     },
+     "TMR": 2300,
+     "PAL": 1.4,
+     "calculatedEnergy": 2000,
+     "calculatedTempo": 0,
+     "deficit": 0,
+     "activityEnergy": 0
+    },
+    "foodProposalSettings": null,
+    "updatedAt": null,
+    "defaultDietSettings": false,
+    "defaultUserSettings": false,
+    "weekMealSchema": {
+     "userId": 1234567,
+     "date": "2026-10-05T11:13:37+00:00",
+     "default": {
+      "meals": {
+       "1": {
+        "active": false,
+        "label": "breakfast",
+        "meal": 1,
+        "mealName": "Breakfast",
+        "mealTime": "08:00",
+        "required": true,
+        "selected": true
+       },
+       "2": {
+        "active": false,
+        "label": "second_breakfast",
+        "meal": 2,
+        "mealName": "Second breakfast",
+        "mealTime": "11:00",
+        "required": false,
+        "selected": true
+       },
+       "3": {
+        "active": false,
+        "label": "lunch",
+        "meal": 3,
+        "mealName": "Lunch",
+        "mealTime": "14:00",
+        "required": false,
+        "selected": true
+       },
+       "4": {
+        "active": false,
+        "label": "dinner",
+        "meal": 4,
+        "mealName": "Dinner",
+        "mealTime": "17:00",
+        "required": false,
+        "selected": true
+       },
+       "5": {
+        "active": false,
+        "label": "snack",
+        "meal": 5,
+        "mealName": "Snack",
+        "mealTime": "19:00",
+        "required": false,
+        "selected": true
+       },
+       "6": {
+        "active": false,
+        "label": "supper",
+        "meal": 6,
+        "mealName": "Supper",
+        "mealTime": "21:00",
+        "required": false,
+        "selected": true
+       }
+      }
+     },
+     "dayMealSchemaCustomList": []
+    },
+    "waterSettings": {
+     "unitCapacity": 0
+    },
+    "weekMealRecommendedEnergy": {
+     "default": {
+      "meals": []
+     },
+     "custom": []
+    }
+   }
+  },
+  "settings_new_without_date": {
+   "request": {
+    "method": "GET",
+    "path": "/users/1234567/settings-new",
+    "query": null,
+    "body": null
+   },
+   "status": 405,
+   "contentType": "application/json",
+   "body": {
+    "code": 405,
+    "message": "Method Not Allowed"
+   }
+  },
+  "activities_catalog": {
+   "request": {
+    "method": "GET",
+    "path": "/activities",
+    "query": {
+     "page": 1,
+     "limit": 2,
+     "locale": "pl_PL"
+    },
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json; charset=utf-8",
+   "body": [
+    {
+     "letter": "0-9",
+     "activities": [
+      {
+       "activityId": 451,
+       "name": "10 minute BUM (Mel B)",
+       "type": 2,
+       "intensity": 3,
+       "energy": 72,
+       "measures": [
+        {
+         "measureId": 1,
+         "measureShort": "min",
+         "measureName": "Minuty",
+         "measureType": "TIME",
+         "scale": 60,
+         "value": 10
+        },
+        {
+         "measureId": 1,
+         "measureShort": "min",
+         "measureName": "Minuty",
+         "measureType": "TIME",
+         "scale": 60,
+         "value": 15
+        },
+        {
+         "measureId": 1,
+         "measureShort": "min",
+         "measureName": "Minuty",
+         "measureType": "TIME",
+         "scale": 60,
+         "value": 30
+        },
+        {
+         "measureId": 1,
+         "measureShort": "min",
+         "measureName": "Minuty",
+         "measureType": "TIME",
+         "scale": 60,
+         "value": 45
+        }
+       ],
+       "measuresDescription": "10 min",
+       "score": 1
+      },
+      {
+       "activityId": 457,
+       "name": "10 minute TUM (Mel B)",
+       "type": 2,
+       "intensity": 3,
+       "energy": 72,
+       "measures": [
+        {
+         "measureId": 1,
+         "measureShort": "min",
+         "measureName": "Minuty",
+         "measureType": "TIME",
+         "scale": 60,
+         "value": 10
+        },
+        {
+         "measureId": 1,
+         "measureShort": "min",
+         "measureName": "Minuty",
+         "measureType": "TIME",
+         "scale": 60,
+         "value": 15
+        },
+        {
+         "measureId": 1,
+         "measureShort": "min",
+         "measureName": "Minuty",
+         "measureType": "TIME",
+         "scale": 60,
+         "value": 30
+        },
+        {
+         "measureId": 1,
+         "measureShort": "min",
+         "measureName": "Minuty",
+         "measureType": "TIME",
+         "scale": 60,
+         "value": 45
+        }
+       ],
+       "measuresDescription": "10 min",
+       "score": 1
+      }
+     ]
+    }
+   ]
+  },
+  "activity_search": {
+   "request": {
+    "method": "GET",
+    "path": "/search/activity/bieganie",
+    "query": {
+     "page": 1,
+     "limit": 2,
+     "locale": "pl_PL"
+    },
+    "body": null
+   },
+   "status": 200,
+   "contentType": "application/json; charset=utf-8",
+   "body": [
+    {
+     "activityId": 535,
+     "name": "Bieganie",
+     "type": 2,
+     "intensity": 4,
+     "energy": 340,
+     "measures": [
+      {
+       "measureId": 1,
+       "measureShort": "min",
+       "measureName": "Minuty",
+       "measureType": "TIME",
+       "scale": 60,
+       "value": 30
+      },
+      {
+       "measureId": 1,
+       "measureShort": "min",
+       "measureName": "Minuty",
+       "measureType": "TIME",
+       "scale": 60,
+       "value": 60
+      },
+      {
+       "measureId": 4,
+       "measureShort": "km",
+       "measureName": "Kilometry",
+       "measureType": "DISTANCE",
+       "scale": 1000,
+       "value": 5
+      },
+      {
+       "measureId": 4,
+       "measureShort": "km",
+       "measureName": "Kilometry",
+       "measureType": "DISTANCE",
+       "scale": 1000,
+       "value": 10
+      }
+     ],
+     "measuresDescription": "5 km w 00:30:00",
+     "score": 916.77856
+    },
+    {
+     "activityId": 1322,
+     "name": "Bieganie na bieżni",
+     "type": 2,
+     "intensity": 4,
+     "energy": 340,
+     "measures": [
+      {
+       "measureId": 1,
+       "measureShort": "min",
+       "measureName": "Minuty",
+       "measureType": "TIME",
+       "scale": 60,
+       "value": 30
+      },
+      {
+       "measureId": 1,
+       "measureShort": "min",
+       "measureName": "Minuty",
+       "measureType": "TIME",
+       "scale": 60,
+       "value": 60
+      },
+      {
+       "measureId": 4,
+       "measureShort": "km",
+       "measureName": "Kilometry",
+       "measureType": "DISTANCE",
+       "scale": 1000,
+       "value": 5
+      },
+      {
+       "measureId": 4,
+       "measureShort": "km",
+       "measureName": "Kilometry",
+       "measureType": "DISTANCE",
+       "scale": 1000,
+       "value": 10
+      }
+     ],
+     "measuresDescription": "5 km w 00:30:00",
+     "score": 858.6342
+    }
+   ]
+  }
+ }
+}
