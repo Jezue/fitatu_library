@@ -5,12 +5,13 @@ import json
 import os
 import tempfile
 import unittest
-from copy import deepcopy
 from datetime import date
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock, patch
 
 import requests
+from fake_server import FakeFitatuServer
 
 from fitatu_api.api_client import (
     ActivitiesModule,
@@ -33,67 +34,42 @@ TEST_DAY = date(2026, 4, 19)
 TEST_USER_ID = "user-123"
 
 
-class FakeClient:
+class FakeClient(FakeFitatuServer):
+    """The recorded-behaviour fake server, seeded with one test day."""
+
     def __init__(
         self,
-        day_payload: dict[str, object],
+        day_payload: dict[str, Any],
         *,
-        search_results: dict[str, list[dict[str, object]]] | None = None,
-        product_details: dict[str, dict[str, object]] | None = None,
-        recipe_details: dict[str, dict[str, object]] | None = None,
+        product_details: dict[str, dict[str, Any]] | None = None,
+        recipe_details: dict[str, dict[str, Any]] | None = None,
+        search_results: dict[str, list[dict[str, Any]]] | None = None,
     ) -> None:
-        self.day_payload = deepcopy(day_payload)
-        self.request_log: list[tuple[str, str]] = []
-        self.last_sync_payload: dict[str, object] | None = None
-        self.search_results = search_results or {}
-        self.product_details = product_details or {}
-        self.recipe_details = recipe_details or {}
-        self.planner = PlannerModule(self)
+        super().__init__(
+            day_payload,
+            products=product_details,
+            recipes=recipe_details,
+            search_results=search_results,
+            user_id=TEST_USER_ID,
+        )
 
-    def request(self, method: str, path: str, **kwargs: object) -> object:
-        self.request_log.append((method, path))
-        expected_path = f"/diet-and-activity-plan/{TEST_USER_ID}/day/{TEST_DAY.isoformat()}"
-        if method == "GET" and path == expected_path:
-            return deepcopy(self.day_payload)
-        if method == "POST" and path == f"/diet-plan/{TEST_USER_ID}/days":
-            json_data = kwargs.get("json_data")
-            if not isinstance(json_data, dict):
-                raise AssertionError("sync payload missing")
-            self.last_sync_payload = deepcopy(json_data)
-            day_key = TEST_DAY.isoformat()
-            payload = json_data.get(day_key)
-            if not isinstance(payload, dict):
-                raise AssertionError("day payload missing")
-            self.day_payload = deepcopy(payload)
-            return [{"date": day_key, "revision": "rev-1", "errorMessage": None}]
-        raise AssertionError(f"Unexpected request: {method} {path} {kwargs}")
+    @property
+    def day_payload(self) -> dict[str, Any]:
+        """The test day as the day GET would return it now."""
+        return self.day_view(TEST_DAY.isoformat())
 
-    def request_first_success(
-        self,
-        method: str,
-        paths: list[str],
-        json_data: dict[str, object] | None = None,
-        **kwargs: object,
-    ) -> object:
-        self.request_log.append((method, paths[0]))
-        if method == "DELETE":
-            raise FitatuApiError("missing", status_code=404)
-        raise AssertionError(f"Unexpected method: {method}")
+    @property
+    def last_sync_payload(self) -> dict[str, Any] | None:
+        return self.sync_payloads[-1] if self.sync_payloads else None
 
-    def search_food(self, phrase: str, **kwargs: object) -> list[dict[str, object]]:
-        return deepcopy(self.search_results.get(phrase.lower(), []))
+    @property
+    def last_request_kwargs(self) -> dict[str, Any] | None:
+        posts = [r for r in self.requests if r["method"] == "POST"]
+        return {k: v for k, v in posts[-1].items() if k not in {"method", "path", "json_data"}} if posts else None
 
-    def get_product_details(self, product_id: int | str) -> dict[str, object]:
-        details = self.product_details.get(str(product_id))
-        if details is None:
-            raise FitatuApiError(f"missing product {product_id}", status_code=404)
-        return deepcopy(details)
-
-    def get_recipe(self, recipe_id: int | str) -> dict[str, object]:
-        details = self.recipe_details.get(str(recipe_id))
-        if details is None:
-            raise FitatuApiError(f"missing recipe {recipe_id}", status_code=404)
-        return deepcopy(details)
+    @property
+    def request_log(self) -> list[tuple[str, str]]:
+        return [(r["method"], r["path"]) for r in self.requests]
 
 
 def _make_day_payload() -> dict[str, object]:
@@ -309,30 +285,6 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(saved_item["recipeId"], 123456)
         self.assertTrue(bool(saved_item.get("planDayDietItemId")))
 
-    def test_add_recipe_to_day_meal_hydrates_additional_fields_from_recipe_details(self) -> None:
-        client = FakeClient(
-            _make_day_payload(),
-            recipe_details={"123456": _make_recipe_details_payload()},
-        )
-
-        result = client.planner.add_recipe_to_day_meal(
-            TEST_USER_ID,
-            TEST_DAY,
-            meal_type="breakfast",
-            recipe_id=123456,
-            ingredients_serving=None,
-        )
-
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["recipeDetailsHydration"]["status"], "hydrated")
-        self.assertEqual(result["addedItem"]["name"], "Protein Pancakes")
-        self.assertEqual(result["addedItem"]["photo"], "https://cdn.fitatu.example/recipes/123456.jpg")
-        self.assertEqual(result["addedItem"]["energy"], 410)
-        self.assertEqual(result["addedItem"]["protein"], 30)
-        self.assertEqual(result["addedItem"]["fat"], 12)
-        self.assertEqual(result["addedItem"]["carbohydrate"], 45)
-        self.assertEqual(result["addedItem"]["ingredientsServing"], 2)
-
     def test_add_recipe_to_day_meal_keeps_explicit_serving_fields_over_recipe_defaults(self) -> None:
         details = _make_recipe_details_payload()
         details["measureId"] = 99
@@ -358,77 +310,17 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(result["addedItem"]["measureQuantity"], 1)
         self.assertEqual(result["addedItem"]["ingredientsServing"], 1)
 
-    def test_add_recipe_to_day_meal_continues_when_recipe_details_unavailable(self) -> None:
-        client = FakeClient(_make_day_payload())
-
-        result = client.planner.add_recipe_to_day_meal(
-            TEST_USER_ID,
-            TEST_DAY,
-            meal_type="breakfast",
-            recipe_id=999999,
-        )
-
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["recipeDetailsHydration"]["status"], "unavailable")
-        self.assertEqual(result["addedItem"]["recipeId"], 999999)
-
-    def test_add_recipe_to_day_meal_hydrated_fields_are_sent_in_sync_payload(self) -> None:
-        client = FakeClient(
-            _make_day_payload(),
-            recipe_details={"123456": _make_recipe_details_payload()},
-        )
-
-        client.planner.add_recipe_to_day_meal(
-            TEST_USER_ID,
-            TEST_DAY,
-            meal_type="breakfast",
-            recipe_id=123456,
-        )
-
-        self.assertIsNotNone(client.last_sync_payload)
-        assert client.last_sync_payload is not None
-        synced_day = client.last_sync_payload[TEST_DAY.isoformat()]
-        assert isinstance(synced_day, dict)
-        synced_items = synced_day["dietPlan"]["breakfast"]["items"]
-        synced_item = synced_items[-1]
-        self.assertEqual(synced_item["name"], "Protein Pancakes")
-        self.assertEqual(synced_item["energy"], 410)
-        self.assertEqual(synced_item["protein"], 30)
-
-    def test_compact_diet_item_for_sync_keeps_recipe_id(self) -> None:
-        item = {
-            "planDayDietItemId": "recipe-1",
-            "foodType": "RECIPE",
-            "recipeId": 777,
-            "measureId": 39,
-            "measureQuantity": 1,
-            "ingredientsServing": 1,
-            "source": "API",
-            "name": "Recipe name",
-            "energy": 100,
-            "protein": 5,
-            "fat": 3,
-            "carbohydrate": 9,
-        }
-
-        compact = PlannerModule._compact_diet_item_for_sync(item)
-
-        self.assertEqual(compact["foodType"], "RECIPE")
-        self.assertEqual(compact["recipeId"], 777)
-        self.assertEqual(compact["planDayDietItemId"], "recipe-1")
-
     def test_remove_day_item_marks_the_row_deleted(self) -> None:
         client = FakeClient(_make_day_payload())
 
         result = client.planner.remove_day_item(TEST_USER_ID, TEST_DAY, "breakfast", "item-1")
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["cleanupMode"], "deleted_at")
-        synced = client.day_payload["dietPlan"]["breakfast"]["items"]
-        self.assertEqual(synced[0]["planDayDietItemId"], "item-1")
-        self.assertTrue(synced[0]["deletedAt"])
+        self.assertEqual(result["cleanupMode"], "removed")
+        self.assertEqual(client.day_payload["dietPlan"]["breakfast"]["items"], [])
+        self.assertTrue(client.all_rows(TEST_DAY.isoformat())["item-1"]["deletedAt"])
 
-    def test_remove_day_item_delegates_to_auto_strategy(self) -> None:
+    def test_remove_day_item_delegates_to_the_strategy_helper(self) -> None:
         client = FakeClient(_make_day_payload())
 
         with patch.object(
@@ -436,35 +328,19 @@ class PlannerTests(unittest.TestCase):
             "remove_day_item_with_strategy",
             return_value={"ok": True, "cleanupMode": "removed", "resolvedKind": "normal_item"},
         ) as remove_with_strategy:
-            result = client.planner.remove_day_item(
-                TEST_USER_ID,
-                TEST_DAY,
-                "breakfast",
-                "item-1",
-                delete_all_related_meals=True,
-                use_aggressive_soft_delete=False,
-            )
+            result = client.planner.remove_day_item(TEST_USER_ID, TEST_DAY, "breakfast", "item-1")
 
         self.assertTrue(result["ok"])
-        remove_with_strategy.assert_called_once_with(
-            TEST_USER_ID,
-            TEST_DAY,
-            "breakfast",
-            "item-1",
-            item_kind="auto",
-            delete_all_related_meals=True,
-            use_aggressive_soft_delete=False,
-            max_soft_delete_retries=2,
-        )
+        remove_with_strategy.assert_called_once_with(TEST_USER_ID, TEST_DAY, "breakfast", "item-1")
 
-    def test_remove_day_item_via_snapshot_removes_item_from_payload(self) -> None:
+    def test_remove_day_item_via_snapshot_removes_item_from_the_day(self) -> None:
         client = FakeClient(_make_day_payload())
 
         result = client.planner.remove_day_item_via_snapshot(TEST_USER_ID, TEST_DAY, "breakfast", "item-1")
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["cleanupMode"], "removed")
-        self.assertNotIn("breakfast", client.day_payload["dietPlan"])
+        self.assertEqual(client.day_payload["dietPlan"]["breakfast"]["items"], [])
 
     def test_classify_day_item_for_removal_distinguishes_kinds(self) -> None:
         product_client = FakeClient(_make_day_payload())
@@ -494,91 +370,42 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(custom_add_kind["resolvedKind"], "custom_add_item")
         self.assertEqual(custom_recipe_kind["resolvedKind"], "custom_recipe_item")
 
-    def test_remove_day_item_with_strategy_for_custom_recipe_prefers_soft_delete(self) -> None:
+    def test_remove_day_item_with_strategy_for_custom_recipe_uses_deleted_at(self) -> None:
         client = FakeClient(_make_custom_recipe_like_payload())
 
-        with patch.object(
-            client.planner,
-            "soft_remove_day_item_via_snapshot",
-            return_value={"ok": True, "cleanupMode": "deleted_at"},
-        ) as soft_remove, patch.object(
-            client.planner,
-            "remove_day_item_via_snapshot",
-            return_value={"ok": True, "cleanupMode": "removed"},
-        ) as snapshot_remove:
-            result = client.planner.remove_day_item_with_strategy(
-                TEST_USER_ID,
-                TEST_DAY,
-                "breakfast",
-                "recipe-custom-1",
-                item_kind="custom_recipe_item",
-                max_soft_delete_retries=2,
-            )
+        result = client.planner.remove_day_item_with_strategy(
+            TEST_USER_ID, TEST_DAY, "breakfast", "recipe-custom-1", item_kind="custom_recipe_item"
+        )
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["resolvedKind"], "custom_recipe_item")
-        self.assertEqual(result["attempts"][0]["step"], "soft_deleted_at_retry_1")
-        self.assertEqual(soft_remove.call_count, 1)
-        snapshot_remove.assert_not_called()
+        self.assertEqual([a["step"] for a in result["attempts"]], ["deleted_at"])
 
-    def test_remove_day_items_by_kind_filters_targets_and_uses_resolved_strategy(self) -> None:
+    def test_remove_day_items_by_kind_deletes_matching_rows_in_one_sync(self) -> None:
         client = FakeClient(_make_mixed_removal_payload())
+        before = {row["planDayDietItemId"] for meal in client.day_payload["dietPlan"].values() for row in meal["items"]}
 
-        with patch.object(
-            client.planner,
-            "remove_day_item_with_strategy",
-            side_effect=[
-                {"ok": True, "cleanupMode": "removed"},
-            ],
-        ) as remove_with_strategy:
-            result = client.planner.remove_day_items_by_kind(
-                TEST_USER_ID,
-                TEST_DAY,
-                item_kind="normal_item",
-            )
+        result = client.planner.remove_day_items_by_kind(TEST_USER_ID, TEST_DAY, item_kind="normal_item")
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["targetedCount"], 1)
-        self.assertEqual(result["removedCount"], 1)
-        remove_with_strategy.assert_called_once_with(
-            TEST_USER_ID,
-            TEST_DAY,
-            "breakfast",
-            "prod-1",
-            item_kind="normal_item",
-            delete_all_related_meals=False,
-            use_aggressive_soft_delete=True,
-            max_soft_delete_retries=2,
-        )
+        self.assertEqual((result["targetedCount"], result["removedCount"]), (1, 1))
+        self.assertEqual(len(client.sync_payloads), 1)
+        after = {row["planDayDietItemId"] for meal in client.day_payload["dietPlan"].values() for row in meal["items"]}
+        self.assertEqual(before - after, {"prod-1"})
 
     def test_remove_day_items_by_kind_supports_meal_scope(self) -> None:
         client = FakeClient(_make_mixed_removal_payload())
 
-        with patch.object(
-            client.planner,
-            "remove_day_item_with_strategy",
-            return_value={"ok": True, "cleanupMode": "deleted_at"},
-        ) as remove_with_strategy:
-            result = client.planner.remove_day_items_by_kind(
-                TEST_USER_ID,
-                TEST_DAY,
-                item_kind="custom_add_item",
-                meal_key="lunch",
-            )
+        result = client.planner.remove_day_items_by_kind(
+            TEST_USER_ID, TEST_DAY, item_kind="custom_add_item", meal_key="lunch"
+        )
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["targetedCount"], 1)
         self.assertEqual(result["meal"], "lunch")
-        remove_with_strategy.assert_called_once_with(
-            TEST_USER_ID,
-            TEST_DAY,
-            "lunch",
-            "custom-add-1",
-            item_kind="custom_add_item",
-            delete_all_related_meals=False,
-            use_aggressive_soft_delete=True,
-            max_soft_delete_retries=2,
-        )
+        [sent] = client.last_sync_payload[TEST_DAY.isoformat()]["dietPlan"]["lunch"]["items"]
+        self.assertEqual(sent["planDayDietItemId"], "custom-add-1")
+        self.assertTrue(sent["deletedAt"])
 
     def test_quick_add_form_with_fallback_uses_search_add_when_endpoint_missing(self) -> None:
         client = FakeClient(_make_day_payload())
@@ -836,38 +663,7 @@ class FacadeTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["result"]["kwargs"]["recipe_id"], 999)
         self.assertEqual(result["result"]["kwargs"]["food_type"], "RECIPE")
-        self.assertEqual(result["result"]["kwargs"]["hydrate_from_recipe_details"], True)
-
-    def test_fitatu_api_add_recipe_to_day_meal_via_api_forwards_hydration_toggle(self) -> None:
-        class StubPlanner:
-            def add_recipe_to_day_meal(self, *args: object, **kwargs: object) -> dict[str, object]:
-                return {"ok": True, "args": args, "kwargs": kwargs}
-
-        class StubClient:
-            def __init__(self, auth: object) -> None:
-                self.auth = auth
-                self.planner = StubPlanner()
-
-        class StubAuth:
-            fitatu_user_id = "user-123"
-
-        with patch(
-            "fitatu_api.facade.FitatuAuthContext.from_session_data",
-            return_value=StubAuth(),
-        ), patch(
-            "fitatu_api.facade.FitatuApiClient",
-            StubClient,
-        ):
-            lib = FitatuLibrary(session_data={}, headless=True)
-            result = lib.add_recipe_to_day_meal_via_api(
-                target_date=TEST_DAY,
-                meal_key="breakfast",
-                recipe_id=999,
-                hydrate_from_recipe_details=False,
-            )
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["result"]["kwargs"]["hydrate_from_recipe_details"], False)
+        self.assertIsNone(result["result"]["kwargs"]["hydrate_from_recipe_details"])
 
     def test_fitatu_api_preserves_error_details(self) -> None:
         class StubPlanner:

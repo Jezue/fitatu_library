@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import Mock
 
 import pytest
+from fake_server import FakeFitatuServer
 
 from fitatu_api import FitatuPlannerSyncError
 from fitatu_api.api_client import FitatuApiError, PlannerModule
@@ -21,8 +22,8 @@ TEST_USER = "user-42"
 # ---------------------------------------------------------------------------
 
 
-class FakeClient:
-    """Minimal in-process stand-in for FitatuApiClient."""
+class FakeClient(FakeFitatuServer):
+    """The recorded-behaviour fake server, seeded with one test day."""
 
     def __init__(
         self,
@@ -31,73 +32,32 @@ class FakeClient:
         product_details: dict[str, dict[str, Any]] | None = None,
         recipe_details: dict[str, dict[str, Any]] | None = None,
         search_results: dict[str, list[dict[str, Any]]] | None = None,
-        delete_ok: bool = False,
     ) -> None:
-        self.day_payload = deepcopy(day_payload)
-        self.product_details: dict[str, dict[str, Any]] = product_details or {}
-        self.recipe_details: dict[str, dict[str, Any]] = recipe_details or {}
-        self.search_results: dict[str, list[dict[str, Any]]] = search_results or {}
-        self.delete_ok = delete_ok
-        self.request_log: list[tuple[str, str]] = []
-        self.last_request_kwargs: dict[str, Any] | None = None
-        self.last_sync_payload: dict[str, Any] | None = None
-        self.planner = PlannerModule(self)  # type: ignore[arg-type]
+        super().__init__(
+            day_payload,
+            products=product_details,
+            recipes=recipe_details,
+            search_results=search_results,
+            user_id=TEST_USER,
+        )
 
-    def request(self, method: str, path: str, **kwargs: Any) -> Any:
-        self.request_log.append((method, path))
-        expected = f"/diet-and-activity-plan/{TEST_USER}/day/{TEST_DAY.isoformat()}"
-        if method == "GET" and path == expected:
-            return deepcopy(self.day_payload)
-        if method == "POST" and path == f"/diet-plan/{TEST_USER}/days":
-            self.last_request_kwargs = deepcopy({k: v for k, v in kwargs.items() if k != "json_data"})
-            return self._store_sync_payload(kwargs.get("json_data"))
-        raise AssertionError(f"Unexpected request: {method} {path}")
+    @property
+    def day_payload(self) -> dict[str, Any]:
+        """The test day as the day GET would return it now."""
+        return self.day_view(TEST_DAY.isoformat())
 
-    def _store_sync_payload(self, json_data: Any) -> list[dict[str, Any]]:
-        if not isinstance(json_data, dict):
-            raise AssertionError("missing sync payload")
-        self.last_sync_payload = deepcopy(json_data)
-        day_iso = TEST_DAY.isoformat()
-        payload = json_data.get(day_iso)
-        if not isinstance(payload, dict):
-            raise AssertionError(f"day key {day_iso!r} missing from payload")
-        self.day_payload = deepcopy(payload)
-        return [{"date": day_iso, "revision": "rev-1", "errorMessage": None}]
+    @property
+    def last_sync_payload(self) -> dict[str, Any] | None:
+        return self.sync_payloads[-1] if self.sync_payloads else None
 
-    def request_first_success(
-        self,
-        method: str,
-        paths: list[str],
-        json_data: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> Any:
-        self.request_log.append((method, paths[0]))
-        self.last_request_kwargs = deepcopy(kwargs)
-        if method == "DELETE":
-            if self.delete_ok:
-                return {"status": "ok", "deleted": True}
-            raise FitatuApiError("not found", status_code=404)
-        raise AssertionError(f"Unexpected method: {method}")
+    @property
+    def last_request_kwargs(self) -> dict[str, Any] | None:
+        posts = [r for r in self.requests if r["method"] == "POST"]
+        return {k: v for k, v in posts[-1].items() if k not in {"method", "path", "json_data"}} if posts else None
 
-    def get_product_details(self, product_id: int | str) -> dict[str, Any]:
-        details = self.product_details.get(str(product_id))
-        if details is None:
-            raise FitatuApiError(f"product {product_id} not found", status_code=404)
-        return deepcopy(details)
-
-    def get_recipe(self, recipe_id: int | str) -> dict[str, Any]:
-        details = self.recipe_details.get(str(recipe_id))
-        if details is None:
-            raise FitatuApiError(f"recipe {recipe_id} not found", status_code=404)
-        return deepcopy(details)
-
-    def search_food(self, phrase: str, **kwargs: Any) -> list[dict[str, Any]]:
-        return deepcopy(self.search_results.get(phrase.lower(), []))
-
-
-# ---------------------------------------------------------------------------
-# Payload helpers
-# ---------------------------------------------------------------------------
+    @property
+    def request_log(self) -> list[tuple[str, str]]:
+        return [(r["method"], r["path"]) for r in self.requests]
 
 
 def _empty_day() -> dict[str, Any]:
@@ -113,49 +73,11 @@ def _empty_day() -> dict[str, Any]:
     }
 
 
-class UpsertFakeClient(FakeClient):
-    """Behaves like the real sync endpoint: rows left out of a payload are kept."""
-
-    def _store_sync_payload(self, json_data: Any) -> list[dict[str, Any]]:
-        stored = deepcopy(self.day_payload)
-        result = super()._store_sync_payload(json_data)
-        for meal_key, bucket in (stored.get("dietPlan") or {}).items():
-            target = self.day_payload["dietPlan"].setdefault(meal_key, {"items": []})
-            target_items = target.setdefault("items", [])
-            synced_ids = {row.get("planDayDietItemId") for row in target_items}
-            target_items.extend(
-                row for row in bucket.get("items", []) if row.get("planDayDietItemId") not in synced_ids
-            )
-        return result
-
-
 class IgnoringFakeClient(FakeClient):
     """Accepts every sync (202, no errorMessage) but never changes the stored day."""
 
-    def _store_sync_payload(self, json_data: Any) -> list[dict[str, Any]]:
-        self.last_sync_payload = deepcopy(json_data)
-        return [{"date": TEST_DAY.isoformat(), "revision": "rev-x", "errorMessage": None}]
-
-
-class DeletedAtHidingFakeClient(UpsertFakeClient):
-    """Upserts like the real endpoint and, like the day GET, hides rows with deletedAt."""
-
-    def _store_sync_payload(self, json_data: Any) -> list[dict[str, Any]]:
-        merged: dict[str, dict[str, Any]] = {}
-        for meal_key, bucket in (self.day_payload.get("dietPlan") or {}).items():
-            for row in bucket.get("items", []):
-                merged[row["planDayDietItemId"]] = (meal_key, row)
-        payload = json_data[TEST_DAY.isoformat()]
-        for meal_key, bucket in payload.get("dietPlan", {}).items():
-            for row in bucket.get("items", []):
-                merged[row["planDayDietItemId"]] = (meal_key, row)
-        self.last_sync_payload = deepcopy(json_data)
-        diet: dict[str, Any] = {key: {"items": []} for key in (self.day_payload.get("dietPlan") or {})}
-        for meal_key, row in merged.values():
-            if not row.get("deletedAt"):
-                diet.setdefault(meal_key, {"items": []})["items"].append(row)
-        self.day_payload["dietPlan"] = diet
-        return [{"date": TEST_DAY.isoformat(), "revision": "rev-2", "errorMessage": None}]
+    def _sync(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{"date": day, "revision": "rev-x", "errorMessage": None} for day in payload]
 
 
 def _day_with_product(
@@ -328,25 +250,6 @@ class TestStaticHelpers:
         assert PlannerModule._values_match("abc", "abc") is True
         assert PlannerModule._values_match("abc", "ABC") is False
 
-    def test_first_non_empty_skips_none_and_blank(self) -> None:
-        assert PlannerModule._first_non_empty(None, "", "  ", "hello") == "hello"
-
-    def test_first_non_empty_returns_first_value(self) -> None:
-        assert PlannerModule._first_non_empty(1, 2, 3) == 1
-
-    def test_first_non_empty_all_empty_returns_none(self) -> None:
-        assert PlannerModule._first_non_empty(None, "", "   ") is None
-
-    def test_parse_optional_float_valid(self) -> None:
-        assert PlannerModule._parse_optional_float("3.14") == pytest.approx(3.14)
-        assert PlannerModule._parse_optional_float(42) == pytest.approx(42.0)
-
-    def test_parse_optional_float_none(self) -> None:
-        assert PlannerModule._parse_optional_float(None) is None
-
-    def test_parse_optional_float_invalid(self) -> None:
-        assert PlannerModule._parse_optional_float("bad") is None
-
     def test_normalize_meal_key_aliases(self) -> None:
         assert PlannerModule.normalize_meal_key("second-breakfast") == "second_breakfast"
         assert PlannerModule.normalize_meal_key("second breakfast") == "second_breakfast"
@@ -355,20 +258,12 @@ class TestStaticHelpers:
         assert PlannerModule.normalize_meal_key("breakfast") == "breakfast"
         assert PlannerModule.normalize_meal_key("LUNCH") == "lunch"
 
-    def test_build_day_sync_payload(self) -> None:
-        day = {"dietPlan": {"b": {}}, "toilet": [1], "water": {"waterConsumption": 500}, "note": "hi", "tagsIds": [2]}
-        result = PlannerModule._build_day_sync_payload(day)
-        assert result == {"dietPlan": {"b": {}}, "note": "hi", "tagsIds": [2]}
-
-    def test_build_day_sync_payload_defaults(self) -> None:
-        result = PlannerModule._build_day_sync_payload({})
-        assert result["dietPlan"] == {}
-        assert result["tagsIds"] == []
-
     def test_sync_days_returns_per_day_results(self) -> None:
         client = FakeClient(_empty_day())
-        result = client.planner.sync_days(TEST_USER, {TEST_DAY.isoformat(): {"dietPlan": {}}})
-        assert result == [{"date": TEST_DAY.isoformat(), "revision": "rev-1", "errorMessage": None}]
+        [row] = client.planner.sync_days(TEST_USER, {TEST_DAY.isoformat(): {"dietPlan": {}}})
+        assert row["date"] == TEST_DAY.isoformat()
+        assert row["revision"]
+        assert row["errorMessage"] is None
 
     def test_sync_days_raises_when_a_later_day_is_rejected(self) -> None:
         client = Mock()
@@ -394,56 +289,6 @@ class TestStaticHelpers:
         client.planner.sync_days(TEST_USER, {TEST_DAY.isoformat(): {"dietPlan": {}}}, synchronous=True)
         assert client.last_request_kwargs is not None
         assert client.last_request_kwargs["params"] == {"synchronous": "true"}
-
-    def test_compact_diet_item_for_sync_product(self) -> None:
-        item = {
-            "planDayDietItemId": "x1",
-            "foodType": "PRODUCT",
-            "measureId": 5,
-            "measureQuantity": 2.0,
-            "productId": 777,
-            "source": "API",
-        }
-        result = PlannerModule._compact_diet_item_for_sync(item)
-        assert result["productId"] == 777
-        assert "name" not in result
-
-    def test_compact_diet_item_for_sync_custom_item(self) -> None:
-        item = {
-            "planDayDietItemId": "c1",
-            "foodType": "CUSTOM_ITEM",
-            "measureId": 1,
-            "measureQuantity": 100.0,
-            "name": "Salad",
-            "energy": 150,
-            "source": "WEB",
-        }
-        result = PlannerModule._compact_diet_item_for_sync(item)
-        assert result["name"] == "Salad"
-        assert result["energy"] == 150
-        assert "productId" not in result
-
-    def test_compact_diet_item_for_sync_keeps_eaten_flag(self) -> None:
-        eaten = {"planDayDietItemId": "e1", "foodType": "PRODUCT", "productId": 1, "eaten": True}
-        not_eaten = {**eaten, "eaten": False}
-        assert PlannerModule._compact_diet_item_for_sync(eaten)["eaten"] is True
-        assert PlannerModule._compact_diet_item_for_sync(not_eaten)["eaten"] is False
-
-    def test_compact_diet_item_for_sync_omits_eaten_when_unknown(self) -> None:
-        item = {"planDayDietItemId": "e2", "foodType": "PRODUCT", "productId": 1}
-        assert "eaten" not in PlannerModule._compact_diet_item_for_sync(item)
-
-    def test_compact_diet_item_for_sync_recipe_preserves_recipe_id(self) -> None:
-        item = {
-            "planDayDietItemId": "r1",
-            "foodType": "RECIPE",
-            "recipeId": 42,
-            "measureId": 39,
-            "measureQuantity": 1.0,
-            "source": "API",
-        }
-        result = PlannerModule._compact_diet_item_for_sync(item)
-        assert result["recipeId"] == 42
 
     def test_extract_measure_id_from_measure_dict(self) -> None:
         product = {"measure": {"defaultMeasureId": 99}}
@@ -525,20 +370,6 @@ class TestStaticHelpers:
     def test_meal_from_number_unknown_defaults_snack(self) -> None:
         assert PlannerModule._meal_from_number(99) == "snack"
 
-    def test_is_cleanup_ok_dict_with_ok(self) -> None:
-        assert PlannerModule._is_cleanup_ok({"ok": True}) is True
-        assert PlannerModule._is_cleanup_ok({"ok": False}) is False
-
-    def test_is_cleanup_ok_status_string(self) -> None:
-        assert PlannerModule._is_cleanup_ok({"status": "ok"}) is True
-        assert PlannerModule._is_cleanup_ok({"status": "success"}) is True
-        assert PlannerModule._is_cleanup_ok({"status": "error"}) is False
-
-    def test_is_cleanup_ok_non_dict(self) -> None:
-        assert PlannerModule._is_cleanup_ok(True) is True
-        assert PlannerModule._is_cleanup_ok(0) is False
-
-
 # ---------------------------------------------------------------------------
 # TestGetDayAndMeal
 # ---------------------------------------------------------------------------
@@ -561,10 +392,10 @@ class TestGetDayAndMeal:
             client.planner.get_meal(TEST_USER, TEST_DAY, "nonexistent")
 
     def test_get_meal_raises_when_diet_plan_missing(self) -> None:
-        payload = {"toiletItems": [], "note": None, "tagsIds": []}
-        client = FakeClient(payload)
+        client = Mock()
+        client.request.return_value = {"note": None, "tagsIds": []}
         with pytest.raises(FitatuApiError, match="dietPlan not available"):
-            client.planner.get_meal(TEST_USER, TEST_DAY, "breakfast")
+            PlannerModule(client).get_meal(TEST_USER, TEST_DAY, "breakfast")
 
     def test_list_meal_items_returns_items(self) -> None:
         client = FakeClient(_day_with_product())
@@ -721,14 +552,14 @@ class TestAddRecipeToDayMeal:
     def test_returns_ok_true(self) -> None:
         client = FakeClient(_empty_day())
         result = client.planner.add_recipe_to_day_meal(
-            TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=42, hydrate_from_recipe_details=False
+            TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=42
         )
         assert result["ok"] is True
 
     def test_recipe_appended(self) -> None:
         client = FakeClient(_empty_day())
         client.planner.add_recipe_to_day_meal(
-            TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=42, hydrate_from_recipe_details=False
+            TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=42
         )
         items = client.day_payload["dietPlan"]["breakfast"]["items"]
         assert len(items) == 1
@@ -737,14 +568,14 @@ class TestAddRecipeToDayMeal:
     def test_food_type_recipe(self) -> None:
         client = FakeClient(_empty_day())
         result = client.planner.add_recipe_to_day_meal(
-            TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1, food_type="RECIPE", hydrate_from_recipe_details=False
+            TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1, food_type="RECIPE"
         )
         assert result["addedItem"]["foodType"] == "RECIPE"
 
     def test_food_type_recipe_ai(self) -> None:
         client = FakeClient(_empty_day())
         result = client.planner.add_recipe_to_day_meal(
-            TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1, food_type="RECIPE_AI", hydrate_from_recipe_details=False
+            TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1, food_type="RECIPE_AI"
         )
         assert result["addedItem"]["foodType"] == "RECIPE_AI"
 
@@ -752,44 +583,25 @@ class TestAddRecipeToDayMeal:
         client = FakeClient(_empty_day())
         with pytest.raises(FitatuApiError, match="food_type must be"):
             client.planner.add_recipe_to_day_meal(
-                TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1, food_type="PRODUCT", hydrate_from_recipe_details=False
+                TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1, food_type="PRODUCT"
             )
 
     def test_item_id_generated(self) -> None:
         client = FakeClient(_empty_day())
         result = client.planner.add_recipe_to_day_meal(
-            TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1, hydrate_from_recipe_details=False
+            TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1
         )
         assert bool(result["addedItem"]["planDayDietItemId"])
 
-    def test_hydration_disabled(self) -> None:
+    def test_hydration_flag_is_ignored_with_a_warning(self) -> None:
         client = FakeClient(_empty_day())
-        result = client.planner.add_recipe_to_day_meal(
-            TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1, hydrate_from_recipe_details=False
-        )
-        assert result["recipeDetailsHydration"]["status"] == "disabled"
-
-    def test_hydration_from_recipe_details(self) -> None:
-        client = FakeClient(
-            _empty_day(),
-            recipe_details={"9999": _simple_recipe_details(9999)},
-        )
-        result = client.planner.add_recipe_to_day_meal(
-            TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=9999, ingredients_serving=None
-        )
-        assert result["recipeDetailsHydration"]["status"] == "hydrated"
-        assert "name" in result["recipeDetailsHydration"]["fields"]
-        assert "energy" in result["recipeDetailsHydration"]["fields"]
-
-    def test_hydration_fills_name_on_item(self) -> None:
-        client = FakeClient(
-            _empty_day(),
-            recipe_details={"9999": _simple_recipe_details(9999)},
-        )
-        result = client.planner.add_recipe_to_day_meal(
-            TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=9999, ingredients_serving=None
-        )
-        assert result["addedItem"].get("name") == "Veggie Bowl"
+        with pytest.warns(DeprecationWarning, match="hydrate_from_recipe_details"):
+            client.planner.add_recipe_to_day_meal(
+                TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1, hydrate_from_recipe_details=False
+            )
+        [row] = client.last_sync_payload[TEST_DAY.isoformat()]["dietPlan"]["breakfast"]["items"]
+        assert row["recipeId"] == 1
+        assert "energy" not in row
 
     def test_hydration_does_not_overwrite_explicit_serving(self) -> None:
         client = FakeClient(
@@ -801,31 +613,24 @@ class TestAddRecipeToDayMeal:
         )
         assert result["addedItem"]["ingredientsServing"] == 5
 
-    def test_hydration_missing_recipe_returns_unavailable(self) -> None:
-        client = FakeClient(_empty_day())
-        result = client.planner.add_recipe_to_day_meal(
-            TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=999
-        )
-        assert result["recipeDetailsHydration"]["status"] == "unavailable"
-
     def test_raises_for_missing_meal(self) -> None:
         client = FakeClient(_empty_day())
         with pytest.raises(FitatuApiError, match="meal not found"):
             client.planner.add_recipe_to_day_meal(
-                TEST_USER, TEST_DAY, meal_type="supper", recipe_id=1, hydrate_from_recipe_details=False
+                TEST_USER, TEST_DAY, meal_type="supper", recipe_id=1
             )
 
     def test_ingredients_serving_stored(self) -> None:
         client = FakeClient(_empty_day())
         result = client.planner.add_recipe_to_day_meal(
-            TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1, ingredients_serving=3, hydrate_from_recipe_details=False
+            TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1, ingredients_serving=3
         )
         assert result["addedItem"]["ingredientsServing"] == 3
 
     def test_measure_id_and_quantity_stored(self) -> None:
         client = FakeClient(_empty_day())
         result = client.planner.add_recipe_to_day_meal(
-            TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1, measure_id=39, measure_quantity=2, hydrate_from_recipe_details=False
+            TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1, measure_id=39, measure_quantity=2
         )
         assert result["addedItem"]["measureId"] == 39
         assert result["addedItem"]["measureQuantity"] == 2
@@ -974,8 +779,6 @@ class TestMoveAndReplaceDayItem:
         )
 
         assert result["ok"] is True
-        assert result["experimental"] is True
-        assert result["liveTested"] is True
         assert result["fromMeal"] == "breakfast"
         assert result["toMeal"] == "lunch"
         assert client.last_request_kwargs is not None
@@ -1018,7 +821,6 @@ class TestMoveAndReplaceDayItem:
         )
 
         assert result["ok"] is True
-        assert result["experimental"] is True
         payload_items = result["syncPayload"][TEST_DAY.isoformat()]["dietPlan"]["breakfast"]["items"]
         assert payload_items[0]["deletedAt"]
         assert payload_items[1]["foodType"] == "CUSTOM_ITEM"
@@ -1094,12 +896,10 @@ class TestRemoveDayItemViaSnapshot:
         result = client.planner.remove_day_item_via_snapshot(TEST_USER, TEST_DAY, "breakfast", 1001)
         assert result["ok"] is True
 
-    def test_count_decreased_in_result(self) -> None:
+    def test_row_is_kept_server_side_with_deleted_at(self) -> None:
         client = FakeClient(_day_with_product())
-        result = client.planner.remove_day_item_via_snapshot(TEST_USER, TEST_DAY, "breakfast", "item-1")
-        assert result["beforeCount"] == 1
-        assert result["afterCount"] == 0
-        assert result["countDecreased"] is True
+        client.planner.remove_day_item_via_snapshot(TEST_USER, TEST_DAY, "breakfast", "item-1")
+        assert client.all_rows(TEST_DAY.isoformat())["item-1"]["deletedAt"]
 
 
 # ---------------------------------------------------------------------------
@@ -1119,25 +919,19 @@ class TestSoftRemoveDayItemViaSnapshot:
         result = client.planner.soft_remove_day_item_via_snapshot(TEST_USER, TEST_DAY, "breakfast", "ghost")
         assert result["ok"] is False
 
-    def test_quantity_shrunk_in_sync_payload(self) -> None:
-        client = FakeClient(_day_with_product())
-        client.planner.soft_remove_day_item_via_snapshot(TEST_USER, TEST_DAY, "breakfast", "item-1", soft_delete_quantity=0.01)
-        items = client.day_payload["dietPlan"]["breakfast"]["items"]
-        assert float(items[0]["measureQuantity"]) == pytest.approx(0.01)
-
-    def test_deleted_at_set_when_use_deleted_at(self) -> None:
-        client = FakeClient(_day_with_product())
-        client.planner.soft_remove_day_item_via_snapshot(TEST_USER, TEST_DAY, "breakfast", "item-1", use_deleted_at=True)
-        items = client.day_payload["dietPlan"]["breakfast"]["items"]
-        assert "deletedAt" in items[0]
-
-    def test_mark_invisible_sets_flag(self) -> None:
-        client = FakeClient(_day_with_product())
-        client.planner.soft_remove_day_item_via_snapshot(
-            TEST_USER, TEST_DAY, "breakfast", "item-1", mark_invisible=True, use_deleted_at=False
+    def test_old_options_are_ignored_and_deleted_at_is_used(self) -> None:
+        client = FakeClient(_day_with_product(quantity=2.0))
+        result = client.planner.soft_remove_day_item_via_snapshot(
+            TEST_USER, TEST_DAY, "breakfast", "item-1", soft_delete_quantity=0.01, mark_invisible=True, use_deleted_at=False
         )
-        items = client.day_payload["dietPlan"]["breakfast"]["items"]
-        assert items[0].get("visible") is False
+        assert result["ok"] is True
+        [sent] = client.last_sync_payload[TEST_DAY.isoformat()]["dietPlan"]["breakfast"]["items"]
+        assert sent["deletedAt"]
+        assert sent["measureQuantity"] == 2.0
+        assert sent.get("visible") is not False
+        assert client.day_payload["dietPlan"]["breakfast"]["items"] == []
+
+
 
     def test_raises_for_missing_meal(self) -> None:
         client = FakeClient(_day_with_product())
@@ -1151,26 +945,16 @@ class TestSoftRemoveDayItemViaSnapshot:
 
 
 class TestRemoveDayItemWithStrategy:
-    def test_normal_item_attempts_soft_delete_first(self) -> None:
-        client = FakeClient(_day_with_product())
-        result = client.planner.remove_day_item_with_strategy(
-            TEST_USER, TEST_DAY, "breakfast", "item-1", item_kind="normal_item"
-        )
-        steps = [a["step"] for a in result["attempts"] if not a.get("skipped")]
-        assert steps[0] == "soft_deleted_at"
-
-    def test_snapshot_remove_is_not_ok_when_the_server_keeps_the_row(self) -> None:
-        day = _day_with_product()
-        day["dietPlan"]["lunch"]["items"] = [
-            {"planDayDietItemId": "other", "foodType": "PRODUCT", "productId": 2, "measureId": 1, "measureQuantity": 1}
-        ]
-        client = UpsertFakeClient(day)
-
-        result = client.planner.remove_day_item_via_snapshot(TEST_USER, TEST_DAY, "breakfast", "item-1")
-
-        assert result["ok"] is False
-        assert result["removedIdAbsentAfterSync"] is False
-        assert result["countDecreased"] is False
+    def test_every_kind_is_deleted_in_one_deleted_at_step(self) -> None:
+        for day, item_id, kind in (
+            (_day_with_product(), "item-1", "normal_item"),
+            (_day_with_custom_item(source="WEB", quantity=100.0), "custom-1", "custom_add_item"),
+        ):
+            client = FakeClient(day)
+            result = client.planner.remove_day_item_with_strategy(TEST_USER, TEST_DAY, "breakfast", item_id, item_kind=kind)
+            assert result["ok"] is True
+            assert [attempt["step"] for attempt in result["attempts"]] == ["deleted_at"]
+            assert result["resolvedKind"] == kind
 
     def test_soft_remove_checks_the_whole_day_when_the_row_is_in_another_meal(self) -> None:
         day = _day_with_product(meal="dinner")
@@ -1187,7 +971,7 @@ class TestRemoveDayItemWithStrategy:
         day["dietPlan"]["lunch"]["items"] = [
             {"planDayDietItemId": "keep", "foodType": "PRODUCT", "productId": 2, "measureId": 1, "measureQuantity": 1}
         ]
-        client = DeletedAtHidingFakeClient(day)
+        client = FakeClient(day)
 
         result = client.planner.rollback_added_item(
             TEST_USER, TEST_DAY, meal_type="breakfast", plan_day_diet_item_id="item-1"
@@ -1201,20 +985,63 @@ class TestRemoveDayItemWithStrategy:
         assert sent["dietPlan"]["breakfast"]["items"][0]["deletedAt"]
         assert [row["planDayDietItemId"] for row in client.day_payload["dietPlan"]["lunch"]["items"]] == ["keep"]
 
-    def test_custom_add_item_attempts_soft_delete_first(self) -> None:
-        client = FakeClient(_day_with_custom_item(source="WEB", quantity=100.0))
-        result = client.planner.remove_day_item_with_strategy(
-            TEST_USER, TEST_DAY, "breakfast", "custom-1", item_kind="custom_add_item"
-        )
-        steps = [a["step"] for a in result["attempts"] if not a.get("skipped")]
-        assert steps[0] == "soft_deleted_at"
 
-    def test_result_includes_classification(self) -> None:
+
+    def test_rollback_by_product_takes_the_newest_row_in_that_meal_only(self) -> None:
+        day = _day_with_product()  # user's own oats: item-1, product 1001, in breakfast
+        day["dietPlan"]["lunch"]["items"] = [
+            {"planDayDietItemId": "lunch-oats", "foodType": "PRODUCT", "productId": 1001, "measureId": 11, "measureQuantity": 1}
+        ]
+        client = FakeClient(day)
+        added = client.planner.add_product_to_day_meal(TEST_USER, TEST_DAY, meal_type="breakfast", product_id=1001, measure_id=11)
+
+        result = client.planner.rollback_added_item(TEST_USER, TEST_DAY, meal_type="breakfast", product_id=1001)
+
+        assert result["removedId"] == added["addedItem"]["planDayDietItemId"]
+        remaining = {row["planDayDietItemId"] for meal in client.day_payload["dietPlan"].values() for row in meal["items"]}
+        assert remaining == {"item-1", "lunch-oats"}
+
+    def test_rollback_does_not_reach_into_other_meals(self) -> None:
+        day = _day_with_product(item_id="lunch-oats")
+        day["dietPlan"]["lunch"]["items"] = day["dietPlan"]["breakfast"]["items"]
+        day["dietPlan"]["breakfast"] = {"items": []}
+        client = FakeClient(day)
+
+        result = client.planner.rollback_added_item(TEST_USER, TEST_DAY, meal_type="breakfast", product_id=1001)
+
+        assert result["ok"] is False
+        assert [row["planDayDietItemId"] for row in client.day_payload["dietPlan"]["lunch"]["items"]] == ["lunch-oats"]
+
+    def test_rollback_falls_back_from_a_stale_row_id_to_the_product(self) -> None:
         client = FakeClient(_day_with_product())
-        result = client.planner.remove_day_item_with_strategy(
-            TEST_USER, TEST_DAY, "breakfast", "item-1", item_kind="auto"
+        result = client.planner.rollback_added_item(
+            TEST_USER, TEST_DAY, meal_type="breakfast", plan_day_diet_item_id="stale", product_id=1001
         )
-        assert "classification" in result
+        assert result["ok"] is True
+        assert result["removedId"] == "item-1"
+
+    def test_rollback_needs_an_id(self) -> None:
+        with pytest.raises(FitatuApiError, match="requires"):
+            FakeClient(_day_with_product()).planner.rollback_added_item(TEST_USER, TEST_DAY, meal_type="breakfast")
+
+    def test_lookup_prefers_the_requested_meal(self) -> None:
+        day = _day_with_product(item_id="breakfast-oats")
+        day["dietPlan"]["lunch"]["items"] = [
+            {"planDayDietItemId": "lunch-oats", "foodType": "PRODUCT", "productId": 1001, "measureId": 11, "measureQuantity": 1}
+        ]
+        client = FakeClient(day)
+        result = client.planner.remove_day_item(TEST_USER, TEST_DAY, "lunch", 1001)
+        assert result["removedId"] == "lunch-oats"
+
+    def test_every_write_is_synchronous(self) -> None:
+        client = FakeClient(_day_with_product())
+        planner = client.planner
+        planner.add_product_to_day_meal(TEST_USER, TEST_DAY, meal_type="breakfast", product_id=5, measure_id=1)
+        planner.update_day_item(TEST_USER, TEST_DAY, meal_type="breakfast", item_id="item-1", eaten=True)
+        planner.remove_day_item(TEST_USER, TEST_DAY, "breakfast", "item-1")
+        posts = [r for r in client.requests if r["method"] == "POST"]
+        assert len(posts) == 3
+        assert all(r["params"] == {"synchronous": "true"} for r in posts)
 
     def test_resolved_kind_in_result(self) -> None:
         client = FakeClient(_day_with_product())
@@ -1477,64 +1304,3 @@ class TestResolveProductMeasure:
 # ---------------------------------------------------------------------------
 # TestHydrateRecipeItemFromDetails
 # ---------------------------------------------------------------------------
-
-
-class TestHydrateRecipeItemFromDetails:
-    def test_hydrates_name_and_energy(self) -> None:
-        client = FakeClient(_empty_day(), recipe_details={"42": _simple_recipe_details(42)})
-        result = client.planner._hydrate_recipe_item_from_details(42, {})
-        assert result["status"] == "hydrated"
-        assert result["fields"]["name"] == "Veggie Bowl"
-        assert result["fields"]["energy"] == pytest.approx(320.0)
-
-    def test_hydrates_photo_string(self) -> None:
-        recipe = {**_simple_recipe_details(42), "photoUrl": "https://cdn.example.com/img.jpg"}
-        client = FakeClient(_empty_day(), recipe_details={"42": recipe})
-        result = client.planner._hydrate_recipe_item_from_details(42, {})
-        assert "photo" in result["fields"]
-
-    def test_missing_recipe_returns_unavailable(self) -> None:
-        client = FakeClient(_empty_day())
-        result = client.planner._hydrate_recipe_item_from_details(99, {})
-        assert result["status"] == "unavailable"
-        assert result["statusCode"] == 404
-
-    def test_non_dict_response_returns_unavailable(self) -> None:
-        class _ListClient(FakeClient):
-            def get_recipe(self, recipe_id: int | str) -> Any:  # type: ignore[override]
-                return [1, 2, 3]
-
-        lc = _ListClient(_empty_day())
-        result = lc.planner._hydrate_recipe_item_from_details(42, {})
-        assert result["status"] == "unavailable"
-
-    def test_does_not_overwrite_base_item_measure_id(self) -> None:
-        base = {"measureId": 77}
-        client = FakeClient(_empty_day(), recipe_details={"42": _simple_recipe_details(42)})
-        result = client.planner._hydrate_recipe_item_from_details(42, base)
-        assert result["fields"].get("measureId") is None or result["fields"].get("measureId") == 39
-
-    def test_recipe_id_in_result(self) -> None:
-        client = FakeClient(_empty_day(), recipe_details={"42": _simple_recipe_details(42)})
-        result = client.planner._hydrate_recipe_item_from_details(42, {})
-        assert result["recipeId"] == 42
-
-    def test_macros_hydrated(self) -> None:
-        client = FakeClient(_empty_day(), recipe_details={"42": _simple_recipe_details(42)})
-        result = client.planner._hydrate_recipe_item_from_details(42, {})
-        fields = result["fields"]
-        assert "protein" in fields
-        assert "fat" in fields
-        assert "carbohydrate" in fields
-
-    def test_nested_recipe_key_explored(self) -> None:
-        recipe = {
-            "recipe": {
-                "id": 42,
-                "name": "Nested Name",
-                "nutritionalValues": {"energy": 200, "protein": 10, "fat": 5, "carbohydrate": 20},
-            }
-        }
-        client = FakeClient(_empty_day(), recipe_details={"42": recipe})
-        result = client.planner._hydrate_recipe_item_from_details(42, {})
-        assert result["fields"].get("name") == "Nested Name"

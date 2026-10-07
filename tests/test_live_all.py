@@ -257,7 +257,6 @@ def added_recipe_item(
         test_date,
         meal_type=meal_key,
         recipe_id=known_recipe_id,
-        hydrate_from_recipe_details=True,
     )
     assert result.get("ok"), f"Setup: add_recipe_to_day_meal failed: {result}"
     yield result
@@ -1267,7 +1266,7 @@ class TestFullCycleAddRemove:
         # --- Add recipe ---
         r_recipe = client.planner.add_recipe_to_day_meal(
             user_id, test_date, meal_type=meal_key,
-            recipe_id=known_recipe_id, hydrate_from_recipe_details=True,
+            recipe_id=known_recipe_id,
         )
         assert r_recipe.get("ok"), f"add recipe failed: {r_recipe}"
 

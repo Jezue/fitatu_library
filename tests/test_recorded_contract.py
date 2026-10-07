@@ -86,6 +86,52 @@ class TestFakeServerMatchesRecording:
         assert set(FakeFitatuServer().day_view(DAY)) == set(recorded("day_empty"))
 
 
+class TestPlannerWritesMatchWhatWorkedLive:
+    def test_add_product_sends_only_the_new_row_with_the_recorded_keys(self) -> None:
+        server = FakeFitatuServer()
+        server.planner.add_product_to_day_meal(
+            RECORDED_USER_ID, date.fromisoformat(DAY), meal_type="breakfast", product_id=15956231, measure_id=39
+        )
+        sent = server.sync_payloads[-1][DAY]["dietPlan"]
+        recorded_row = CALLS["sync_add_product"]["request"]["body"][DAY]["dietPlan"]["breakfast"]["items"][0]
+        assert list(sent) == ["breakfast"]
+        [row] = sent["breakfast"]["items"]
+        assert set(recorded_row) <= set(row)
+
+    def test_add_recipe_needs_only_the_recipe_id(self) -> None:
+        # Recorded: a recipe row with just recipeId came back with name and nutrition.
+        recorded_lunch = recorded("day_three_rows")["dietPlan"]["lunch"]["items"][0]
+        assert recorded_lunch["name"] and recorded_lunch["energy"]
+        server = FakeFitatuServer()
+        server.planner.add_recipe_to_day_meal(RECORDED_USER_ID, date.fromisoformat(DAY), meal_type="lunch", recipe_id=590200)
+        [row] = server.sync_payloads[-1][DAY]["dietPlan"]["lunch"]["items"]
+        assert row["recipeId"] == 590200
+        assert "energy" not in row
+
+    def test_update_keeps_eaten_and_the_rest_of_the_row(self) -> None:
+        server = FakeFitatuServer(recorded("day_after_update"))
+        row_id = recorded("day_after_update")["dietPlan"]["breakfast"]["items"][0]["planDayDietItemId"]
+
+        server.planner.update_day_item(
+            RECORDED_USER_ID, date.fromisoformat(DAY), meal_type="breakfast", item_id=row_id, measure_quantity=3
+        )
+
+        [row] = server.day_view(DAY)["dietPlan"]["breakfast"]["items"]
+        assert row["eaten"] is True
+        assert row["measureQuantity"] == 3
+
+    def test_remove_hides_the_row_and_leaves_other_meals_alone(self) -> None:
+        server = FakeFitatuServer(recorded("day_three_rows"))
+        row_id = recorded("day_three_rows")["dietPlan"]["breakfast"]["items"][0]["planDayDietItemId"]
+
+        result = server.planner.remove_day_item(RECORDED_USER_ID, date.fromisoformat(DAY), "breakfast", row_id)
+
+        assert result["ok"] is True
+        day = server.day_view(DAY)
+        assert day["dietPlan"]["breakfast"]["items"] == []
+        assert len(day["dietPlan"]["lunch"]["items"]) == 1
+        assert len(day["dietPlan"]["snack"]["items"]) == 1
+        assert server.all_rows(DAY)[row_id]["deletedAt"]
 
 
 class TestLibraryReadsRecordedResponses:

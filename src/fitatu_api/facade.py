@@ -574,11 +574,14 @@ class FitatuLibrary:
         ingredients_serving: float | int | None = 1,
         eaten: bool = False,
         source: str = "API",
-        hydrate_from_recipe_details: bool = True,
+        hydrate_from_recipe_details: bool | None = None,
         user_id: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Add a recipe entry to a planner meal via the high-level facade."""
+        """Add a recipe entry to a planner meal via the high-level facade.
+
+        ``hydrate_from_recipe_details`` is ignored (the server fills recipe rows itself).
+        """
         client, fitatu_user_id, error = self._planner_result(
             "add_recipe_to_day_meal_via_api",
             user_id=user_id,
@@ -711,21 +714,15 @@ class FitatuLibrary:
     ) -> dict[str, Any]:
         """Remove a planner item via the high-level facade.
 
-        There is no DELETE route for planner rows; the row is re-synced with a marker:
-        1. ``deletedAt`` via the day sync (what the app does; the day GET then hides the row)
-        2. Day sync without the row (fallback only: the endpoint upserts, so omission alone
-           does not delete)
-        3. Aggressive soft-delete if enabled (quantity 0.0, ``visible: false``)
-
-        Recipe-like rows retry step 1 before falling back.
+        There is no DELETE route for planner rows: the row is re-sent in the day sync with
+        ``deletedAt`` (what the app does) and the day is reloaded to confirm it is gone.
 
         Returns:
             ``{"status": "ok", "result": ...}`` when the nested ``result["ok"]``
             is truthy — the item was confirmed removed.
             ``{"status": "partial", "result": ...}`` when ``result["ok"]`` is
-            falsy — all strategies were attempted but the backend did not confirm
-            removal (e.g. the item was already handled by a prior move/replace,
-            or soft-delete reached its retry limit).  Always inspect *both* the
+            falsy — the row was not found (e.g. already removed by a prior
+            move/replace) or is still there after the sync.  Always inspect *both* the
             top-level ``status`` and ``result["ok"]`` to distinguish these cases:
 
                 r = lib.remove_day_item_via_api(...)
@@ -737,8 +734,7 @@ class FitatuLibrary:
             meal_key: Meal identifier (breakfast, lunch, etc.)
             item_id: Item ID
             delete_all_related_meals: Ignored (there is no DELETE route); kept for compatibility
-            use_aggressive_soft_delete: If True, try quantity=0 as final fallback.
-                Useful when normal soft-delete (qty=0.01) fails.
+            use_aggressive_soft_delete: Ignored; kept for compatibility
             user_id: Explicit user ID (defaults to session user)
         """
         client, fitatu_user_id, error = self._planner_result(
@@ -861,7 +857,7 @@ class FitatuLibrary:
         user_id: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Remove planner item with explicit strategy by item kind.
+        """Remove a planner item and report its kind (every kind is deleted the same way).
 
         item_kind values:
         - auto
