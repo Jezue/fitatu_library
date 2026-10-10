@@ -39,10 +39,9 @@ are still outside the current scope.
 
 ## Can I move or replace a planner item?
 
-There are helpers for this: `planner.move_day_item()` and
-`planner.replace_day_item_with_custom_item()`. Both are live-tested (2026-04-22)
-and include cross-meal fallback search. Their return payloads carry
-`experimental=True` for traceability.
+Yes: `planner.move_day_item()` and `planner.replace_day_item_with_custom_item()`. Each sends
+one sync that deletes the old row and adds the new one, and both find the row even if it sits
+in a different meal than the one you pass.
 
 ## What file should I read first?
 
@@ -75,29 +74,14 @@ exactly what the mobile app does; the day GET stops returning it and `remove_day
 reports `cleanupMode="removed"`.
 
 Leaving a row out of the sync payload does not delete it (the endpoint upserts by
-`planDayDietItemId`). You may still see `cleanupMode="soft_deleted"` when only the
-quantity/visibility fallback took effect.
+`planDayDietItemId`). See [DELETE_GUIDE.md](DELETE_GUIDE.md).
 
 ## Can I delete multiple items at once?
 
-You must delete items individually. There is no batch delete endpoint. See the COOKBOOK
-for an example of iterating through all items in a day and deleting them one by one.
+Yes: `planner.remove_day_items_by_kind(user_id, day, item_kind="auto", meal_key=...)` deletes
+every matching row in one sync.
 
-## Why does `remove_day_item` return `item_not_found` right after I added an item?
+## Do I need to wait after adding an item before changing it?
 
-The Fitatu backend sync is **eventually consistent** — after a successful `add_*` call,
-the item may not appear in the next `get_day` snapshot immediately. Wait at least **2 seconds**
-between adding and removing the same item:
-
-```python
-import time
-
-result = lib.add_product_to_day_meal_via_api(...)
-item_id = result["result"]["addedItem"]["planDayDietItemId"]
-
-time.sleep(2)  # wait for backend sync to propagate
-
-remove = lib.remove_day_item_via_api(..., item_id=item_id)
-```
-
-This also applies to `update_day_item_via_api` called immediately after an add.
+No. Planner writes are sent with `synchronous=true`, so the next read already sees them.
+Older versions recommended `time.sleep(2)` between an add and an update/remove.

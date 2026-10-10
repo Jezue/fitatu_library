@@ -29,12 +29,11 @@ Planner-specific read and write helpers. This is where the day sync and meal mut
 **Key methods:**
 
 - `get_day()` - fetch planner day snapshot
-- `sync_single_day()` - send modified day snapshot back
+- `sync_single_day()` - send a day payload (writes send only the rows they change)
 - `add_search_result_to_day_meal()` - add product from search
 - `update_day_item()` - modify item quantity/details
-- `remove_day_item()` - delete item (with fallback)
-- `soft_remove_day_item_via_snapshot()` - delete by syncing the row with `deletedAt` (plus quantity 0.01)
-- `remove_day_item_via_snapshot()` - fallback that syncs the day without the row (omission alone does not delete)
+- `remove_day_item()` - delete a row (re-sent with `deletedAt`, then checked)
+- `remove_day_items_by_kind()` - delete many rows in one sync
 - `get_day_revisions()` - revision ids for cheap change detection
 - `sync_days(..., synchronous=True)` - opt into backend synchronous day sync
 - `move_day_item()` - move helper, live-tested (2026-04-22), cross-meal fallback included
@@ -69,21 +68,7 @@ Live observations from `2026-04-19`:
   `custom_recipe_item`
 - a row with `foodType="RECIPE"` resolved to `normal_item`
 
-**Return structure:**
-```python
-{
-    "ok": True,
-    "cleanupMode": "soft_deleted",  # or "removed" when absent after reload
-    "beforeCount": 5,  # Items in meal before deletion
-    "afterCount": 5,  # Items in meal after reload
-    "removedId": "uuid...",  # planDayDietItemId that was deleted
-    "removedIdAbsentAfterSync": False,  # Item not found in reloaded snapshot
-    "countDecreased": False,
-    "softDeleteQuantity": 0.01,  # Quantity set during soft-delete
-    "markInvisible": True,
-    "removed": {...}  # Original item object
-}
-```
+Return values are described in [DELETE_GUIDE.md](DELETE_GUIDE.md).
 
 ### `src/fitatu_api/service_modules.py`
 
@@ -107,7 +92,7 @@ Facade-specific convenience helpers also provide:
 - normalized day summaries
 - product proposal and raw-ingredients wrappers
 - user-food search and duplicate cleanup wrappers
-- experimental planner move/replace wrappers
+- planner move/replace wrappers
 
 ### `src/fitatu_api/operational_store.py`
 

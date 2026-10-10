@@ -28,7 +28,7 @@ Attached modules:
 | Module | Responsibility |
 |---|---|
 | `client.auth_api` | Refresh-token convenience wrapper. |
-| `client.planner` | Planner day reads, sync, add/update/remove, and experimental move/replace helpers. |
+| `client.planner` | Planner day reads, sync, add/update/remove, and move/replace helpers. |
 | `client.user_settings` | User profile and settings endpoints. |
 | `client.diet_plan` | Diet-plan settings and meal-schema reads. |
 | `client.water` | Water reads and writes. |
@@ -126,28 +126,22 @@ between Fitatu clusters.
 Use `FitatuLibrary.remove_day_item_via_api()` when you want a structured,
 high-level delete flow.
 
-- there is no planner `DELETE` route; rows are removed by day sync with `deletedAt`
-- the preferred live strategy is marker-based day sync: `deletedAt` plus reduced `measureQuantity`
-- delete targets should be planner row ids (`planDayDietItemId`), not `productId`
-- the lower-level `client.planner.remove_day_item()` exposes the same behavior
+- there is no planner `DELETE` route; the row is re-sent in the day sync with `deletedAt`
+- leaving a row out of a sync never deletes it (the endpoint upserts by id)
+- delete targets should be planner row ids (`planDayDietItemId`); a `productId` also works
+- the lower-level `client.planner.remove_day_item()` exposes the same behavior, and
+  `remove_day_items_by_kind()` deletes many rows in one sync
 
-This matches live observations from `2026-04-19`: hard delete did not succeed on
-the validated planner row, omission-only sync did not persist, and marker-based
-day sync did.
+For details, see `docs/DELETE_GUIDE.md`.
 
-For the exact search-item removal flow, see `docs/DELETE_SEARCH_ITEMS.md`.
-
-## Experimental Planner Sync Helpers
-
-Two helpers exist for workflows observed in external integrations:
+## Move and Replace Helpers
 
 | Helper | Behavior | Caveat |
 |---|---|---|
 | `move_day_item()` | Marks the old row as deleted and adds a copied row to another meal/day. | Live-tested (2026-04-22). Searches all meal buckets if item not in specified meal. |
 | `replace_day_item_with_custom_item()` | Marks the old row as deleted and adds a custom nutrition row in one sync payload. | Live-tested (2026-04-22). Searches all meal buckets if item not in specified meal. |
 
-Both default to synchronous sync because these flows are easier to verify when the
-backend applies the day payload immediately.
+Both send a single synchronous sync.
 
 ## Error Model
 

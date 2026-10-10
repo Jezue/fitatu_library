@@ -2,21 +2,60 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is inspired by Keep a Changelog, with practical notes for a small Python library.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
+uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Added:
+The planner is rebuilt on what the day sync endpoint actually does, now pinned by recorded real
+responses in the test suite.
 
+### Changed
+
+- planner writes send only the rows they change. Adds send the new row, updates send the changed
+  row in full. Nothing else on the day is re-sent, so rows edited on the phone in the meantime
+  are no longer overwritten with stale values
+- every removal helper (`remove_day_item`, `remove_day_item_with_strategy`,
+  `soft_remove_day_item_via_snapshot`, `remove_day_item_via_snapshot`, `rollback_added_item`)
+  sends the row with `deletedAt` and checks that it is gone. The old per-kind chain (omission,
+  quantity 0.01, `visible: false`, retries) is gone, and its options are accepted and ignored
+- `remove_day_items_by_kind()` deletes all matching rows in one sync instead of one by one
+- planner writes use `synchronous=true`, so there is no need to wait between an add and an
+  update/remove, and the internal read-after-write retries with `time.sleep()` are gone
+- removal results are simpler: `beforeCount`, `afterCount`, `countDecreased`,
+  `softDeleteQuantity`, `markInvisible`, `useDeletedAt`, `deletedAt`, `classification` and
+  `attempts[].result` are no longer returned (`attempts` has a single `deleted_at` step)
+- `add_recipe_to_day_meal()` no longer returns `recipeDetailsHydration`, and `addedItem` is the
+  row as sent (`recipeId`, no name or nutrition); read the day to see what the server filled in.
+  Add results no longer put `updatedAt` on `addedItem`
+- `move_day_item()` / `replace_day_item_with_custom_item()` results no longer carry the
+  `experimental` / `liveTested` flags
+- `planner.py` shrank from 2266 to about 1460 lines
+
+### Deprecated
+
+- `add_recipe_to_day_meal(hydrate_from_recipe_details=...)`: a row with just `recipeId` comes
+  back with name and nutrition, so the ~120 lines of recipe "hydration" were removed
+
+### Added
+
+- `tests/fixtures/api_recording.json`: real API responses (scrubbed), plus
+  `scripts/record_fixtures.py` to refresh them. `tests/fake_server.py` is built from them, and
+  `tests/test_recorded_contract.py` replays the recording to keep the fake honest
 - `python -m fitatu_api login` / `fitatu-api login`: log in with e-mail and password and save
   `session_data.json` (0600) for `FitatuLibrary`, `example.py` and `demo.py`
 - docs on getting a session, including copying it from the web app for Apple/Facebook accounts
 
-Fixed:
+### Fixed
 
 - `FitatuApiClient.login(..., token_store_path=...)` returned a client with the old tokens from
   the token store instead of the fresh ones, and did not save the fresh pair
 - `demo.py` pointed at a `fitatu_login.py` script that does not exist
+
+### Removed
+
+- `docs/FRONTEND_VS_API_DELETION.md` (its premise, that the API cannot delete rows the app can,
+  was wrong) and `docs/DELETE_SEARCH_ITEMS.md` (folded into a much shorter `DELETE_GUIDE.md`)
 
 ## [0.4.0] - 2026-09-21
 
@@ -24,7 +63,7 @@ Based on a decompile of the Fitatu Android app 4.17.1 (Flutter, Dart AOT) and li
 every changed request. The full list of routes the app uses is in
 `docs/APP_4_17_1_API_CATALOG.md`.
 
-Fixed:
+### Fixed
 
 - planner writes no longer untick "eaten" on every item of the day; a row synced without the
   flag gets `eaten=false` and the compacted payload dropped it (the `eaten=` arguments of the add
@@ -49,7 +88,7 @@ Fixed:
 - `demo.py` called `get_recipes_catalog(params=...)`, which does not accept params
 - README/COOKBOOK used `cleanup["deleted"]`; the keys are `deletedCount` / `deletedProductIds`
 
-Added:
+### Added
 
 - `client.measurements`: weight and body sizes per day, weight history and chart, body-part
   history, size summary. `set_day()` merges with the stored record and refuses to relabel stored
@@ -68,7 +107,7 @@ Added:
 - README section on which headers are required and how the API host is chosen
 - `docs/APP_4_17_1_API_CATALOG.md` with every route of the 4.17.1 app
 
-Changed:
+### Changed
 
 - `search_food()` sends `accessType[]` like the app
 - `activities.get_catalog()` uses `/activities` and accepts `page`, `limit`, `locale`, `bmr`, `sex`
@@ -77,13 +116,13 @@ Changed:
 - day sync payloads no longer send `toiletItems` (the field is `toilet`, and omitted keys keep
   their stored value)
 
-Deprecated:
+### Deprecated
 
 - `planner.get_product_for_meal()`, `quick_add_form()`, `send_changes()`, `add_day_items()` and
   `remove_activity_day_item()`: their routes do not exist (mostly app screen routes picked up
   from the binary). `quick_add_form_with_fallback()` now goes straight to search + add.
 
-Removed:
+### Removed
 
 - unused hard-delete helpers in `PlannerModule`
 
@@ -91,7 +130,7 @@ Removed:
 
 Third alpha release focused on broader Fitatu workflow coverage, test coverage, water write support, and production readiness.
 
-Added:
+### Added
 
 - `WaterModule.set_day()` and `WaterModule.add_intake()` — write water consumption for a day
 - refresh-token rotation support and refresh payload fallbacks for `refresh_token`, `refreshToken`, and `token`
@@ -109,14 +148,14 @@ Added:
 - Lifecycle constants (`FITATU_LIFECYCLE_HEALTHY` etc.) now exported from the top-level package
 - Logging added to `PlannerModule` (add, sync, remove operations)
 
-Changed:
+### Changed
 
 - `FitatuApiError.__repr__` now shows `status_code` and `message` for easier debugging
 - README expanded with endpoint/helper tables, derived summary docs, and experimental planner sync notes
 - `docs/API_OVERVIEW.md`, `docs/COOKBOOK.md`, `docs/STABILITY_MATRIX.md`, `docs/ARCHITECTURE.md`, `docs/GETTING_STARTED.md`, and `docs/FAQ.md` updated for the current public API surface
 - `.gitignore` updated to exclude operational scripts, APK decompilation artifacts, and generated reports
 
-Removed:
+### Removed
 
 - Old operational scripts (`add_all_measures_day19.py`, `clear_days_via_library.py`, `live_additions_no_delete.py`)
 - Duplicate section in `docs/DELETE_GUIDE.md`
@@ -126,7 +165,7 @@ Removed:
 
 Second alpha release focused on making the package feel more like a mature public client library.
 
-Added:
+### Added
 
 - stronger public API contract coverage for low-level and high-level convenience methods
 - richer README examples for recipes, catalog reads, planner writes, and operational state
@@ -135,7 +174,7 @@ Added:
 - maintainer tooling via `.editorconfig` and `.pre-commit-config.yaml`
 - CI artifact uploads for coverage and built distributions
 
-Changed:
+### Changed
 
 - documentation now presents the package more explicitly as a publishable library
 - release process is documented as a repeatable maintainer workflow
@@ -145,7 +184,7 @@ Changed:
 
 Initial packaged repository extracted from the workspace integration code.
 
-Added:
+### Added
 
 - installable `src`-layout Python package
 - public exports for low-level and high-level APIs

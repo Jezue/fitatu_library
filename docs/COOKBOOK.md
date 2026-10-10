@@ -58,9 +58,8 @@ result = lib.add_product_to_day_meal_via_api(
 print(result["status"])
 ```
 
-> **Timing note:** The Fitatu backend sync is eventually consistent. If you need to
-> update or remove the item you just added, wait at least **2 seconds** first —
-> otherwise `get_day` may return a stale snapshot that does not yet contain the new item.
+Planner writes are sent with `synchronous=true`, so you can update or remove the row you just
+added right away.
 
 ## Create a richer user product
 
@@ -147,147 +146,22 @@ result = client.cleanup_duplicate_user_products(
 )
 ```
 
-## Remove a single planner item
-
-### Via FitatuLibrary (recommended)
+## Remove planner items
 
 ```python
 from datetime import date
-from fitatu_api import FitatuLibrary
 
 lib = FitatuLibrary(session_data=session_data)
-result = lib.remove_day_item_via_api(
-    target_date=date.today(),
-    meal_key="breakfast",
-    item_id="plan-day-diet-item-id",
-)
-print(result["status"])  # "ok" if removed, "error" if failed
+result = lib.remove_day_item_via_api(target_date=date.today(), meal_key="breakfast", item_id="plan-day-diet-item-id")
+print(result["status"])  # "ok", "partial" (not confirmed) or "error"
+
+# lower level, plus clearing a whole meal in one sync
+client.planner.remove_day_item(user_id, date.today(), "breakfast", "plan-day-diet-item-id")
+client.planner.remove_day_items_by_kind(user_id, date.today(), item_kind="auto", meal_key="snack")
 ```
 
-### Via FitatuApiClient (lower-level)
-
-```python
-from datetime import date
-from fitatu_api import FitatuApiClient, FitatuAuthContext
-
-auth = FitatuAuthContext.from_session_data(session_data)
-client = FitatuApiClient(auth=auth)
-
-result = client.planner.remove_day_item(
-    user_id="your-user-id",
-    day=date(2026, 4, 19),
-    meal_key="breakfast",
-    item_id="6c164eda-3b76-11f1-b495-e36dcdcf7b7b",
-)
-
-print(result.get("ok"))  # True if removed
-print(result.get("cleanupMode"))  # "soft_deleted" or "removed"
-```
-
-### How it works - The Current Delete Chain
-
-There is no DELETE route for planner rows. The library re-syncs the day with a marker, the
-same way the mobile app does:
-
-1. Sync the row with `deletedAt` set. The day GET stops returning it.
-2. Fallback: sync the day without the row. The endpoint upserts by `planDayDietItemId`, so
-   this alone does not delete anything; it is kept for odd payload shapes.
-3. Optional aggressive fallback: quantity `0.0` and `visible: false`.
-
-Recipe-like rows retry step 1 before falling back.
-
-### Example output
-
-```python
-{
-    "ok": True,
-    "cleanupMode": "removed",        # the row is gone from the reloaded day
-    "beforeCount": 5,
-    "afterCount": 4,
-    "removedId": "6c164eda-3b76-11f1-b495-e36dcdcf7b7b",
-    "removedIdAbsentAfterSync": True,
-    "countDecreased": True,
-    "useDeletedAt": True,
-    "deletedAt": "2026-10-13 11:20:31",
-    "removed": {...}  # the row as it was before deletion
-}
-```
-
-### Deleting all items from a day
-
-```python
-from datetime import date
-from fitatu_api import FitatuApiClient, FitatuAuthContext
-
-auth = FitatuAuthContext.from_session_data(session_data)
-client = FitatuApiClient(auth=auth)
-user_id = "your-user-id"
-target_date = date(2026, 4, 19)
-
-# Get all items
-day = client.planner.get_day(user_id, target_date)
-diet_plan = day.get("dietPlan", {})
-
-# Delete from each meal
-for meal_key in ["breakfast", "second_breakfast", "lunch", "dinner", "snack", "supper"]:
-    items = diet_plan.get(meal_key, {}).get("items", [])
-    for item in items:
-        item_id = item.get("planDayDietItemId")
-        result = client.planner.remove_day_item(user_id, target_date, meal_key, item_id)
-        print(f"Deleted {item.get('name')}: {result.get('ok')}")
-```
-
-## Deleting CUSTOM_ITEM vs PRODUCT items
-
-Both kinds are deleted the same way (`deletedAt`). Earlier versions of this guide said that
-`CUSTOM_ITEM` rows with `source="API"` could not be deleted; that was observed with
-quantity-only soft deletes (the server normalises custom rows to quantity 1, which looked like a
-"reconstruction"). With `deletedAt` they are removed like any other row (checked live on
-2026-10-13).
-
-```python
-for meal_key in ["breakfast", "second_breakfast", "lunch", "dinner", "snack", "supper"]:
-    for item in client.planner.list_meal_items(user_id, target_date, meal_key):
-        result = client.planner.remove_day_item(user_id, target_date, meal_key, item["planDayDietItemId"])
-        status = "deleted" if result.get("ok") else f"not confirmed ({result.get('cleanupMode')})"
-        print(f"{item.get('foodType')} {item.get('name')}: {status}")
-```
-
-## Delete an item added from search (quick recipe)
-
-```python
-from datetime import date
-from fitatu_api import FitatuLibrary
-
-lib = FitatuLibrary(session_data=session_data)
-target_day = date(2026, 4, 19)
-
-# Add from search
-add_result = lib.add_search_result_to_day_meal_via_api(
-    target_date=target_day,
-    meal_key="dinner",
-    phrase="baton",
-    index=2,
-    measure_unit="sztuka",
-    measure_amount=1,
-    strict_measure=True,
-)
-
-item_id = ((add_result.get("result") or {}).get("addedItem") or {}).get("planDayDietItemId")
-
-# Remove by planDayDietItemId
-remove_result = lib.remove_day_item_via_api(
-    target_date=target_day,
-    meal_key="dinner",
-    item_id=item_id,
-    use_aggressive_soft_delete=True,
-)
-
-print(remove_result["status"])
-print((remove_result.get("result") or {}).get("cleanupMode"))
-```
-
-See also: `docs/DELETE_SEARCH_ITEMS.md` for the full flow and verification checklist.
+Rows are deleted the way the app does it: re-sent with `deletedAt`. See
+[DELETE_GUIDE.md](DELETE_GUIDE.md) for what that means and what the results look like.
 
 ## Move a planner item to another meal or day
 
@@ -307,8 +181,7 @@ result = client.planner.move_day_item(
     to_meal_type="dinner",
 )
 
-print(result["experimental"])  # True
-print(result["ok"])             # True on success
+print(result["ok"])  # True on success
 ```
 
 ## Replace a planner item with a custom row
@@ -332,8 +205,7 @@ result = client.planner.replace_day_item_with_custom_item(
     carbs_g=60,
 )
 
-print(result["experimental"])  # True
-print(result["ok"])             # True on success
+print(result["ok"])  # True on success
 ```
 
 ## Export session context for reuse

@@ -40,19 +40,8 @@ These areas are already useful and tested, but still depend on reverse-engineere
 There is no DELETE route for planner rows (the decompiled 4.17.1 app has none either).
 The app deletes a row by syncing it with `deletedAt`, and the library does the same first.
 
-**Implemented behavior:** The library uses snapshot removal and soft-delete style
-cleanup:
-
-1. Fetches the complete day snapshot
-2. Applies snapshot removal and/or soft-delete markers
-3. Syncs the modified snapshot back
-4. Verifies removal by re-fetching the day
-
-**Result:** Practical planner deletion often works through `removed`, `deleted_at`, or
-`soft_deleted` outcomes after a day reload, not through true DELETE-route success.
-
-**When to use:** Use `remove_day_item()` and treat snapshot/soft-delete as the real
-planner deletion path on the current cluster.
+Every removal helper sends the row with `deletedAt` in a synchronous sync and then checks the
+row is gone from the reloaded day. See [DELETE_GUIDE.md](DELETE_GUIDE.md).
 
 ## New in 0.4.0 (request shapes checked live, less mileage)
 
@@ -63,11 +52,12 @@ planner deletion path on the current cluster.
 - planner day revisions
 - goals/targets via `settings-new/{day}`
 
-## Experimental
+## How this is tested
 
-- planner write variants discovered from traffic captures
-- `planner.move_day_item()` / `replace_day_item_with_custom_item()` payloads still carry
-  `experimental=True` for traceability, although both are live-tested (2026-04-22)
+The planner write contract (upsert by id, omitted rows kept, rows replaced as a whole,
+`deletedAt` hides a row, non-v1 ids reject the day) is pinned by real recorded responses in
+`tests/fixtures/api_recording.json`. Unit tests run against a fake server built from that
+recording, and a replay test fails if the fake drifts from it.
 
 ## Deprecated
 

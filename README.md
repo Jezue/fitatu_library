@@ -96,7 +96,7 @@ Current helper areas:
 | Products | Product creation, extended nutrition fields, measures, deletion, proposals, `rawIngredients`. |
 | Planner | Day reads, full-day sync, add/update/remove helpers, optional synchronous sync. |
 | Derived summaries | Full macro totals and normalized meal/item day summaries from planner snapshots. |
-| Experimental planner sync | Move item between day/meal and replace item with a custom row. |
+| Move/replace | Move a row to another meal/day, or replace it with a custom row, in one sync. |
 | Tracking/settings | Water, activity catalog and search, goals/targets (`settings-new`), legacy settings reads, CMS GraphQL. |
 | Measurements | Weight and body sizes per day, weight history and chart, body-part history, size summary. |
 | Summaries/export | Range nutrition and activity totals, per-nutrient day series, top products, diary export. |
@@ -161,9 +161,9 @@ How planner writes behave (all confirmed live):
   out of the payload are kept, so omission never deletes anything.
 - A row is deleted by sending it with `deletedAt`; the day GET then hides it.
 - Keys missing from the day payload (`water`, `toilet`, `activities`) keep their stored values.
-- A row sent without `eaten` gets `eaten=false`, so the library always carries the flag over.
-  Custom rows only keep `name`, `energy`, `protein`, `fat` and `carbohydrate` server-side, and
-  product rows take the rest from the product.
+- A row is replaced as a whole (a row sent without `eaten` gets `eaten=false`), so the library
+  sends only the rows it changes, and a changed row in full.
+- Product and recipe rows need only `productId`/`recipeId`; the server fills name and nutrition.
 - The response is `[{date, revision, errorMessage}]` with HTTP 202. A non-null `errorMessage`
   means the day was not saved; `sync_days()` raises `FitatuPlannerSyncError` for it.
 
@@ -329,12 +329,6 @@ print(result["status"])
 Remove a planner item:
 
 ```python
-import time
-
-# The backend sync is eventually consistent — wait ~2s after an add
-# before removing or updating the same item, or the snapshot may be stale.
-time.sleep(2)
-
 delete_result = lib.remove_day_item_via_api(
     target_date=date.today(),
     meal_key="breakfast",
@@ -343,18 +337,14 @@ delete_result = lib.remove_day_item_via_api(
 print(delete_result["status"])
 ```
 
-Typed removal (different strategy per item kind):
+Clear a whole meal (or only one kind of row) in one sync:
 
 ```python
-smart_delete = lib.remove_day_item_with_strategy_via_api(
+lib.remove_day_items_by_kind_via_api(
     target_date=date.today(),
-    meal_key="breakfast",
-    item_id="item-or-product-id",
     item_kind="auto",  # auto | normal_item | custom_add_item | custom_recipe_item
-    max_soft_delete_retries=2,
+    meal_key="snack",
 )
-print(smart_delete["result"]["resolvedKind"])
-print(smart_delete["result"]["attempts"])
 ```
 
 There is no DELETE route for planner rows. The helpers re-sync the day with `deletedAt` set on the
@@ -394,8 +384,7 @@ replace_result = lib.replace_day_item_with_custom_item_via_api(
     carbs_g=60,
 )
 
-print(move_result["result"]["liveTested"])  # True
-print(replace_result["result"]["experimental"])  # True
+print(move_result["result"]["ok"], replace_result["result"]["ok"])
 ```
 
 Goals, weight and range summaries:
@@ -554,7 +543,7 @@ Modules:
 - [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md): installation and first request
 - [docs/API_OVERVIEW.md](docs/API_OVERVIEW.md): package entry points and error model
 - [docs/COOKBOOK.md](docs/COOKBOOK.md): practical usage patterns
-- [docs/DELETE_GUIDE.md](docs/DELETE_GUIDE.md): detailed guide to item deletion and soft-delete behaviour
+- [docs/DELETE_GUIDE.md](docs/DELETE_GUIDE.md): how planner rows are deleted (and what does not delete them)
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): code layout and design choices
 - [docs/STABILITY_MATRIX.md](docs/STABILITY_MATRIX.md): stable vs experimental areas
 - [docs/APP_4_17_1_API_CATALOG.md](docs/APP_4_17_1_API_CATALOG.md): every route used by the 4.17.1 app, with payload keys
@@ -644,8 +633,6 @@ hatch run typecheck
 - add GitHub release automation once the public repository layout is finalised
 - expand docs with cookbook-style automation and AI agent scenarios
 - increase endpoint coverage: activities in the planner, text/photo AI estimation, fasting, habits
-- planner writes: send only the rows that changed instead of re-syncing the whole day (the
-  endpoint upserts by id, so it is safe and avoids overwriting edits made on the phone meanwhile)
 - `FitatuApiClient.from_token_store(path)`: resume a session from saved tokens without a password,
   like `Garmin.login(tokenstore)` in python-garminconnect
 - optional mobile header profile (`APP-OS: ANDROID`) and base URL derived from the user's storage locale

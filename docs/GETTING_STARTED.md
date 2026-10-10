@@ -88,9 +88,8 @@ for item in foods:
 - `FitatuLibrary`: convenience facade for common flows
 - `docs/COOKBOOK.md`: practical usage snippets
 - `docs/ARCHITECTURE.md`: package layout and design notes
-- `docs/API_OVERVIEW.md`: endpoint/helper map, including product proposals, user-food search, day summaries, and experimental move/replace
-- `docs/DELETE_GUIDE.md`: detailed guide to item deletion and soft-delete behavior
-- `docs/DELETE_SEARCH_ITEMS.md`: step-by-step guide for deleting items added from search
+- `docs/API_OVERVIEW.md`: endpoint/helper map, including product proposals, user-food search, day summaries, and move/replace
+- `docs/DELETE_GUIDE.md`: how planner rows are deleted
 
 Useful first helpers after `search_food()`:
 
