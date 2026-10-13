@@ -37,9 +37,8 @@ These areas are already useful and tested, but still depend on reverse-engineere
 
 **Status:** Stable with caution (snapshot/soft-delete flow is reliable)
 
-The historical hard-delete route (`DELETE /diet-plan/{uid}/day/{date}/{meal}/{itemId}`)
-returns **404 Not Found** on the current API cluster and should be treated as
-non-functional for planner deletion work.
+There is no DELETE route for planner rows (the decompiled 4.17.1 app has none either).
+The app deletes a row by syncing it with `deletedAt`, and the library does the same first.
 
 **Implemented behavior:** The library uses snapshot removal and soft-delete style
 cleanup:
@@ -55,20 +54,33 @@ cleanup:
 **When to use:** Use `remove_day_item()` and treat snapshot/soft-delete as the real
 planner deletion path on the current cluster.
 
+## New in 0.4.0 (request shapes checked live, less mileage)
+
+- body measurements (`client.measurements`)
+- range summaries and diary export (`client.summary`)
+- favourite and recently used foods (`client.foods`)
+- activity search and recent activities
+- planner day revisions
+- goals/targets via `settings-new/{day}`
+
 ## Experimental
 
-- fallback route selection patterns
 - planner write variants discovered from traffic captures
-- endpoints that require trying multiple route candidates
-- data export endpoint (`/settings/data-export`) availability across clusters
-- fallback route selection patterns
-- endpoints that require trying multiple route candidates
-- data export endpoint (`/settings/data-export`) availability across clusters
+- `planner.move_day_item()` / `replace_day_item_with_custom_item()` payloads still carry
+  `experimental=True` for traceability, although both are live-tested (2026-04-22)
 
-`planner.move_day_item()` and `planner.replace_day_item_with_custom_item()` were
-previously experimental and not live-tested. Both are now live-tested (2026-04-22)
-and include cross-meal fallback search. Their return payloads still carry
-`experimental=True` for traceability.
+## Deprecated
+
+These helpers call routes that do not exist and emit `DeprecationWarning`:
+`get_product_for_meal`, `quick_add_form`, `send_changes`, `add_day_items`,
+`remove_activity_day_item`. Most came from strings in `libapp.so` that are the app's own
+screen routes (e.g. `/food/quick-add/form`, `/product/:productId/:mealType/:date`).
+
+## Legacy / web routes
+
+Working, but not used by the 4.17.1 mobile app: `/water/{id}/{day}`,
+`/users/{id}/settings[/{day}]`, `/diet-plan/{id}/settings[...]`, `/users/{id}/firebaseToken`,
+the website CMS GraphQL endpoint.
 
 ## Practical recommendation
 
