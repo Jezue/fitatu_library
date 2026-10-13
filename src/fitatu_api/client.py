@@ -190,7 +190,12 @@ class FitatuApiClient:
             fitatu_user_id=str(user_id) if user_id is not None else None,
         )
         logger.info("login email=%s user_id=%s", email, auth.fitatu_user_id)
-        return cls(auth=auth, base_url=base_url, **kwargs)
+        client = cls(auth=auth, base_url=base_url, **kwargs)
+        # __init__ seeds tokens from an existing token store; the fresh pair must win.
+        client.auth.bearer_token = str(token)
+        client.auth.refresh_token = str(refresh) if refresh is not None else None
+        client._persist_tokens_to_store()
+        return client
 
     def _load_tokens_from_store(self) -> None:
         """Seed bearer and refresh tokens from the on-disk token store into the auth context."""
