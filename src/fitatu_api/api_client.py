@@ -8,8 +8,11 @@ from .modules import (
     AuthModule,
     CmsModule,
     DietPlanModule,
+    FoodsModule,
+    MeasurementsModule,
     PlannerModule,
     ResourcesModule,
+    SummaryModule,
     UserSettingsModule,
     WaterModule,
 )
@@ -25,6 +28,9 @@ __all__ = [
     "UserSettingsModule",
     "DietPlanModule",
     "WaterModule",
+    "MeasurementsModule",
+    "SummaryModule",
+    "FoodsModule",
     "ResourcesModule",
     "CmsModule",
 ]

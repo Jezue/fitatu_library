@@ -33,7 +33,10 @@ from .service_modules import (
     AuthModule,
     CmsModule,
     DietPlanModule,
+    FoodsModule,
+    MeasurementsModule,
     ResourcesModule,
+    SummaryModule,
     UserSettingsModule,
     WaterModule,
 )
@@ -113,6 +116,9 @@ class FitatuApiClient:
         self.activities = ActivitiesModule(self)
         self.resources = ResourcesModule(self)
         self.cms = CmsModule(self)
+        self.measurements = MeasurementsModule(self)
+        self.summary = SummaryModule(self)
+        self.foods = FoodsModule(self)
 
     @classmethod
     def login(
@@ -506,8 +512,13 @@ class FitatuApiClient:
         json_data: Any | None = None,
         include_auth: bool = True,
         allow_refresh_on_401: bool = True,
+        raw: bool = False,
     ) -> Any:
-        """Perform a Fitatu HTTP request with retries and optional auto-refresh."""
+        """Perform a Fitatu HTTP request with retries and optional auto-refresh.
+
+        With ``raw=True`` the response body is returned as ``bytes`` (``None`` when
+        empty) instead of being decoded as JSON, e.g. for file downloads.
+        """
         correlation_id = _new_correlation_id()
         method_upper = method.upper()
         retryable_method = self._is_retryable_method(method_upper)
@@ -604,6 +615,17 @@ class FitatuApiClient:
                     },
                 )
                 raise error
+
+            if raw:
+                _log_event(
+                    "fitatu.request.ok",
+                    correlation_id=correlation_id,
+                    method=method_upper,
+                    path=path,
+                    status_code=response.status_code,
+                    result_type="bytes",
+                )
+                return response.content or None
 
             if not response.text:
                 _log_event(
