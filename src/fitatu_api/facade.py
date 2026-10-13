@@ -460,7 +460,7 @@ class FitatuLibrary:
                 "status_code": None,
                 "body": None,
             }
-        return FitatuApiClient(auth=auth), fitatu_user_id, None
+        return self._build_client(**kwargs), fitatu_user_id, None
 
     def add_custom_item_to_day_meal_via_api(
         self,
@@ -711,14 +711,13 @@ class FitatuLibrary:
     ) -> dict[str, Any]:
         """Remove a planner item via the high-level facade.
 
-        Uses smart failover:
-        1. Hard DELETE endpoint (likely 404)
-        2. Soft-delete via snapshot (item quantity = 0.01, marked invisible)
-        3. Aggressive soft-delete via snapshot if enabled (item quantity = 0.0)
+        There is no DELETE route for planner rows; the row is re-synced with a marker:
+        1. ``deletedAt`` via the day sync (what the app does; the day GET then hides the row)
+        2. Day sync without the row (fallback only: the endpoint upserts, so omission alone
+           does not delete)
+        3. Aggressive soft-delete if enabled (quantity 0.0, ``visible: false``)
 
-        Note: API-created CUSTOM_ITEMs (source="API") cannot be fully deleted.
-        Backend protects them to maintain sync state with external integrations.
-        Only soft-delete is possible for these items.
+        Recipe-like rows retry step 1 before falling back.
 
         Returns:
             ``{"status": "ok", "result": ...}`` when the nested ``result["ok"]``
@@ -737,7 +736,7 @@ class FitatuLibrary:
             target_date: Date to remove item from
             meal_key: Meal identifier (breakfast, lunch, etc.)
             item_id: Item ID
-            delete_all_related_meals: Whether to include related meals (for hard DELETE)
+            delete_all_related_meals: Ignored (there is no DELETE route); kept for compatibility
             use_aggressive_soft_delete: If True, try quantity=0 as final fallback.
                 Useful when normal soft-delete (qty=0.01) fails.
             user_id: Explicit user ID (defaults to session user)
@@ -1080,13 +1079,21 @@ class FitatuLibrary:
         user_id: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Return weight entries (``[{date, value, difference, direction}]``) for a range."""
+        """Return every weight entry (``[{date, value, difference, direction}]``) in a range."""
         client, fitatu_user_id, error = self._planner_result("get_weight_history_via_api", user_id=user_id, **kwargs)
         if error is not None:
             return error
         assert client is not None and fitatu_user_id is not None
+        page_size, max_pages = 41, 50
+        history: list[dict[str, Any]] = []
         try:
-            history = client.measurements.get_weight_history(fitatu_user_id, from_date=from_date, to_date=to_date)
+            for page in range(1, max_pages + 1):
+                rows = client.measurements.get_weight_history(
+                    fitatu_user_id, from_date=from_date, to_date=to_date, page=page, limit=page_size
+                )
+                history.extend(rows)
+                if len(rows) < page_size:
+                    break
             return {"status": "ok", "result": history}
         except FitatuApiError as exc:
             return self._error_result("get_weight_history_via_api", exc)

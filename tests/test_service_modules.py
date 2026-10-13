@@ -14,6 +14,7 @@ from fitatu_api import (
     FitatuApiError,
     FitatuAuthContext,
     FitatuLibrary,
+    FitatuPlannerSyncError,
     FoodsModule,
     MeasurementsModule,
     PlannerModule,
@@ -72,6 +73,17 @@ class TestMeasurementsModule:
         assert payload["sizeUnit"] == "IN"
         assert "chest" not in payload
 
+    def test_set_day_refuses_to_relabel_stored_values_with_another_unit(self) -> None:
+        stored = {"neck": 40.0, "waist": 85.0, "weight": 72.4, "weightUnit": "KG", "sizeUnit": "CM"}
+        client = Mock()
+        client.request.side_effect = lambda method, path, **kw: stored if method == "GET" else {"ok": True}
+        module = MeasurementsModule(client)
+
+        with pytest.raises(ValueError, match="neck"):
+            module.set_day(USER, DAY, waist=32, size_unit="IN")
+        module.set_day(USER, DAY, waist=32, neck=15.7, size_unit="IN")  # all kept sizes given in IN
+        assert client.request.call_args.kwargs["json_data"]["sizeUnit"] == "IN"
+
     def test_set_day_without_merge_skips_the_read(self) -> None:
         client = Mock()
         MeasurementsModule(client).set_day(USER, DAY, weight=70, merge=False)
@@ -99,6 +111,29 @@ class TestMeasurementsModule:
             f"/users/{USER}/measurements/summary/weight",
             params={"fromDate": "2026-09-01", "toDate": DAY.isoformat(), "limit": 41, "page": 1},
         )
+
+    def test_other_read_routes(self) -> None:
+        client = Mock()
+        client.request.return_value = {"weight": 72.0}
+        module = MeasurementsModule(client)
+
+        assert module.get_day(USER, DAY) == {"weight": 72.0}
+        client.request.return_value = [{"date": "2026-09-01", "value": 80.0}]
+        assert module.get_body_part_history(USER, "waist", from_date=date(2026, 9, 1)) == [
+            {"date": "2026-09-01", "value": 80.0}
+        ]
+        client.request.return_value = {"waist": {"difference": -2}}
+        module.get_size_summary(USER, from_date=date(2026, 9, 1), to_date=DAY)
+        module.delete_day(USER, DAY)
+
+        calls = [(c.args[0], c.args[1]) for c in client.request.call_args_list]
+        assert calls == [
+            ("GET", f"/users/{USER}/measurements/{DAY.isoformat()}"),
+            ("GET", f"/users/{USER}/measurements/size/waist"),
+            ("GET", f"/users/{USER}/measurements/summary/size"),
+            ("DELETE", f"/users/{USER}/measurements/{DAY.isoformat()}"),
+        ]
+        assert client.request.call_args_list[1].kwargs["params"] == {"fromDate": "2026-09-01", "limit": 41, "page": 1}
 
     def test_body_part_history_validates_body_part(self) -> None:
         with pytest.raises(ValueError):
@@ -201,6 +236,18 @@ class TestActivitiesAndRevisions:
         client.request.assert_called_once_with("GET", f"/diet-plan/{USER}/days/{DAY.isoformat()}/revisions")
 
 
+class TestErrors:
+    def test_planner_sync_error_survives_pickle_and_copy(self) -> None:
+        import copy
+        import pickle
+
+        error = FitatuPlannerSyncError("rejected", [{"date": "2026-10-01", "errorMessage": "bad uuid"}])
+        for clone in (pickle.loads(pickle.dumps(error)), copy.deepcopy(error)):
+            assert clone.results == error.results
+            assert clone.status_code == 202
+            assert str(clone) == "rejected"
+
+
 class TestRawRequests:
     def _client(self) -> FitatuApiClient:
         return FitatuApiClient(auth=FitatuAuthContext(bearer_token="t"), retry_base_delay_seconds=0.0)
@@ -252,6 +299,25 @@ class TestFacadeHelpers:
         client = Mock()
         client.summary.export_diary.return_value = None
         assert self._library(client).export_diary_via_api(from_date=DAY, to_date=DAY)["status"] == "empty"
+
+    def test_weight_history_walks_every_page(self) -> None:
+        client = Mock()
+        first = [{"date": f"d{i}", "value": 70.0} for i in range(41)]
+        client.measurements.get_weight_history.side_effect = [first, [{"date": "last", "value": 71.0}]]
+
+        result = self._library(client).get_weight_history_via_api(from_date=date(2026, 1, 1), to_date=DAY)
+
+        assert len(result["result"]) == 42
+        pages = [c.kwargs["page"] for c in client.measurements.get_weight_history.call_args_list]
+        assert pages == [1, 2]
+
+    def test_planner_facade_helpers_honour_base_url(self) -> None:
+        library = FitatuLibrary(session_data={"fitatu_user_id": USER, "bearer_token": "t"})
+        response = Mock(status_code=200, text='{"userDietSettings": {}}', headers={})
+        response.json.return_value = {"userDietSettings": {}}
+        with patch("fitatu_api.client.requests.request", return_value=response) as req:
+            library.get_daily_targets_via_api(target_date=DAY, base_url="https://de-de.fitatu.com/api")
+        assert req.call_args.kwargs["url"].startswith("https://de-de.fitatu.com/api/users/")
 
     def test_log_weight_wraps_api_errors(self) -> None:
         client = Mock()

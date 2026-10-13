@@ -44,7 +44,11 @@ class FitatuConnectionError(FitatuApiError):
 
 
 class FitatuAuthError(FitatuApiError):
-    """Raised on 401/403: the token could not be refreshed or the API key/secret was refused."""
+    """Raised on 401: the session is gone and refreshing the token did not help.
+
+    403 is not mapped here because the API also uses it for premium-only features and
+    exhausted AI quotas (check ``codename``), and a wrong API key/secret.
+    """
 
 
 class FitatuRateLimitError(FitatuApiError):
@@ -61,6 +65,7 @@ class FitatuPlannerSyncError(FitatuApiError):
         results: The parsed ``[{"date", "revision", "errorMessage"}, ...]`` response.
     """
 
-    def __init__(self, message: str, results: list[dict[str, object]]):
+    def __init__(self, message: str, results: list[dict[str, object]] | None = None):
+        # results must stay optional: unpickling rebuilds the error from args, i.e. (message,)
         super().__init__(message, status_code=202)
-        self.results = results
+        self.results = results if results is not None else []
