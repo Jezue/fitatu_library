@@ -1381,6 +1381,16 @@ class ApiClientTests(unittest.TestCase):
 
         self.assertEqual(result["id"], 321)
         self.assertEqual(req.call_count, 2)
+        self.assertEqual(req.call_args_list[1].args, ("GET", "/recipes/321"))
+
+    def test_search_food_sends_access_type_as_list_param(self) -> None:
+        client = self._make_client()
+        with patch.object(client, "request", return_value=[]) as req:
+            client.search_food("ban")
+
+        params = req.call_args.kwargs["params"]
+        self.assertEqual(params["accessType[]"], ["FREE", "PREMIUM"])
+        self.assertNotIn("accessType", params)
 
     def test_refresh_persists_tokens_to_store(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1804,7 +1814,23 @@ class ServiceModuleTests(unittest.TestCase):
         result = module.get_catalog()
 
         self.assertEqual(result[0]["id"], 1)
-        client.request.assert_called_once_with("GET", "/activities/")
+        client.request.assert_called_once_with("GET", "/activities", params=None)
+
+    def test_activities_module_get_catalog_sends_only_given_params(self) -> None:
+        client = Mock()
+        ActivitiesModule(client).get_catalog(locale="pl_PL", bmr=1800.0, sex=1)
+
+        client.request.assert_called_once_with(
+            "GET", "/activities", params={"locale": "pl_PL", "bmr": 1800.0, "sex": 1}
+        )
+
+    def test_user_settings_get_new_requests_the_dated_route(self) -> None:
+        client = Mock()
+        client.request.return_value = {"userId": 1}
+
+        UserSettingsModule(client).get_new("user-123", TEST_DAY)
+
+        client.request.assert_called_once_with("GET", f"/users/user-123/settings-new/{TEST_DAY.isoformat()}")
 
 
 class FacadeConvenienceTests(unittest.TestCase):

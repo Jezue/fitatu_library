@@ -863,7 +863,8 @@ class FitatuApiClient:
                 "page": page,
                 "locale": locale or self.auth.app_search_locale,
                 "limit": limit,
-                "accessType": ["FREE", "PREMIUM"],
+                # PHP-style list key, as the app sends it; a bare repeated key is not the same param.
+                "accessType[]": ["FREE", "PREMIUM"],
             },
         )
         if isinstance(data, list):
@@ -1257,9 +1258,9 @@ class FitatuApiClient:
         """Fetch current user settings, optionally scoped by day."""
         return self.user_settings.get(user_id, day=day)
 
-    def get_user_settings_new(self, user_id: str) -> dict[str, Any]:
-        """Fetch the `settings-new` payload via the convenience surface."""
-        return self.user_settings.get_new(user_id)
+    def get_user_settings_new(self, user_id: str, day: date | None = None) -> dict[str, Any]:
+        """Fetch the `settings-new` payload (goals, targets, meal schema) for a day."""
+        return self.user_settings.get_new(user_id, day)
 
     def get_diet_plan_settings(self, user_id: str) -> dict[str, Any]:
         """Fetch diet plan settings for a user."""
@@ -1286,11 +1287,11 @@ class FitatuApiClient:
         checks: list[tuple[str, str]] = [
             ("GET", f"/users/{user_id}"),
             ("GET", f"/users/{user_id}/settings/{day.isoformat()}"),
-            ("GET", f"/users/{user_id}/settings-new"),
+            ("GET", f"/users/{user_id}/settings-new/{day.isoformat()}"),
             ("GET", f"/diet-plan/{user_id}/settings"),
             ("GET", f"/diet-and-activity-plan/{user_id}/day/{day.isoformat()}"),
             ("GET", "/resources/food-tags/recipe"),
-            ("GET", "/activities/"),
+            ("GET", "/activities"),
             ("GET", f"/water/{user_id}/{day.isoformat()}"),
         ]
         out: list[dict[str, Any]] = []

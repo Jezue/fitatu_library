@@ -364,7 +364,6 @@ class TestClientUserAndSettings:
         assert isinstance(settings, dict)
         assert settings
 
-    @pytest.mark.xfail(reason="settings-new endpoint returns 405 for some accounts", strict=False)
     def test_get_user_settings_new(self, client: FitatuApiClient, user_id: str) -> None:
         settings_new = client.get_user_settings_new(user_id)
         assert isinstance(settings_new, dict)
@@ -900,7 +899,6 @@ class TestServiceModulesReadOnly:
         settings = client.user_settings.get_for_day(user_id, test_date)
         assert isinstance(settings, dict)
 
-    @pytest.mark.xfail(reason="settings-new endpoint returns 405 for some accounts", strict=False)
     def test_user_settings_get_new(self, client: FitatuApiClient, user_id: str) -> None:
         settings_new = client.user_settings.get_new(user_id)
         assert isinstance(settings_new, dict)
