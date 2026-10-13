@@ -3,14 +3,25 @@
 from __future__ import annotations
 
 import logging
-import re
-import time
+import secrets
 import uuid
-import warnings
 from datetime import date, datetime
 from typing import Any, cast
 
-from .exceptions import FitatuApiError, FitatuPlannerSyncError
+from ._shapes import as_dict, as_dict_list, read_reply
+from ._validation import (
+    as_date,
+    validate_bool,
+    validate_non_negative_int,
+    validate_numeric_id,
+    validate_positive_int,
+)
+from .exceptions import (
+    FitatuApiError,
+    FitatuNotFoundError,
+    FitatuPlannerSyncError,
+    FitatuValidationError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -18,15 +29,30 @@ if False:  # pragma: no cover
     from .client import FitatuApiClient
 
 
-def _warn_unsupported_route(name: str, replacement: str) -> None:
-    """Emit a DeprecationWarning for helpers built on routes the API does not serve."""
-    warnings.warn(
-        f"{name}() calls a route that does not exist in the Fitatu API (it was a mobile app "
-        f"screen path or a guessed variant) and always fails with 404. Use {replacement} instead. "
-        "It will be removed in a future release.",
-        DeprecationWarning,
-        stacklevel=3,
-    )
+def _new_row_id() -> str:
+    """A UUID v1 for ``planDayDietItemId`` (the only version the day sync accepts).
+
+    ``uuid.uuid1()`` would put this machine's MAC address into every row sent to Fitatu;
+    a random node with the multicast bit set (RFC 4122, section 4.5) avoids that.
+    """
+    return str(uuid.uuid1(node=secrets.randbits(48) | 1 << 40))
+
+
+def _row_id(row_id: str | None) -> str:
+    """Return the caller's ``row_id`` (it must be a UUID v1) or a new one.
+
+    The day sync upserts by row id, so a caller that picks the id can resend an add
+    after a timeout without logging the food twice.
+    """
+    if row_id is None:
+        return _new_row_id()
+    try:
+        parsed: uuid.UUID | None = uuid.UUID(str(row_id))
+    except ValueError:
+        parsed = None
+    if parsed is None or parsed.version != 1:
+        raise FitatuValidationError(f"row_id must be a UUID v1 (the only version the day sync accepts), got {row_id!r}")
+    return str(parsed)
 
 
 class PlannerModule:
@@ -35,26 +61,23 @@ class PlannerModule:
     This module contains the day snapshot sync flow used for planner reads and writes.
     It is the most domain-heavy part of the public API and is intentionally exposed as a
     first-class module on :class:`fitatu_api.FitatuApiClient`.
+
+    Days are ``date`` objects or ``'YYYY-MM-DD'`` strings. Argument mistakes raise
+    :class:`FitatuValidationError`; a meal or row that is not on the day raises
+    :class:`FitatuNotFoundError`, whose message lists what the day has. Removals are
+    the exception for rows: deleting one that is not there (any more) is not an error,
+    so a repeated delete is safe; the result has ``ok`` False, ``reason``
+    ``item_not_found`` and a ``message`` with the same listing.
+
+    Row ids: ``item_id`` names a row that is already on the day (its
+    ``planDayDietItemId``, or an activity's ``uuid``); ``row_id`` is the id to give a
+    row being added, so a retried add cannot duplicate it. Adds, moves, replacements and
+    activity writes return the id of the row they wrote as ``rowId``; updates report
+    ``itemId`` and removals ``removedId``.
     """
 
     def __init__(self, client: FitatuApiClient) -> None:
         self._client = client
-
-    @staticmethod
-    def _as_dict(value: Any) -> dict[str, Any] | None:
-        """Return *value* as a typed dict, or None when it is not a dict."""
-        return cast(dict[str, Any], value) if isinstance(value, dict) else None
-
-    @staticmethod
-    def _as_dict_list(value: Any) -> list[dict[str, Any]]:
-        """Filter *value* down to a list containing only the dict elements."""
-        if not isinstance(value, list):
-            return []
-        out: list[dict[str, Any]] = []
-        for item in value:
-            if isinstance(item, dict):
-                out.append(cast(dict[str, Any], item))
-        return out
 
     @staticmethod
     def _values_match(expected: Any, actual: Any) -> bool:
@@ -68,156 +91,14 @@ class PlannerModule:
         return str(expected) == str(actual)
 
     @staticmethod
-    def _first_non_empty(*values: Any) -> Any:
-        """Return the first value that is not None and not a blank string."""
-        for value in values:
-            if value is None:
-                continue
-            if isinstance(value, str) and not value.strip():
-                continue
-            return value
-        return None
-
-    @staticmethod
     def _now_timestamp() -> str:
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     @staticmethod
-    def _parse_optional_float(value: Any) -> float | None:
-        """Parse *value* to float, returning None on failure or when value is None."""
-        if value is None:
-            return None
-        try:
-            parsed = float(value)
-        except (TypeError, ValueError):
-            return None
-        return parsed
-
-    def _hydrate_recipe_item_from_details(
-        self,
-        recipe_id: int | str,
-        base_item: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Fetch recipe nutritional fields and merge them into base_item for sync."""
-        try:
-            recipe_payload = self._client.get_recipe(recipe_id)
-        except FitatuApiError as exc:
-            return {
-                "status": "unavailable",
-                "fields": {},
-                "message": str(exc),
-                "statusCode": exc.status_code,
-            }
-
-        if not isinstance(recipe_payload, dict):
-            return {
-                "status": "unavailable",
-                "fields": {},
-                "message": "recipe details response is not an object",
-                "statusCode": None,
-            }
-
-        containers: list[dict[str, Any]] = [recipe_payload]
-        for key in ("recipe", "data", "result"):
-            nested = self._as_dict(recipe_payload.get(key))
-            if nested is not None:
-                containers.append(nested)
-                nested_recipe = self._as_dict(nested.get("recipe"))
-                if nested_recipe is not None:
-                    containers.append(nested_recipe)
-
-        nutrition_containers: list[dict[str, Any]] = []
-        for container in containers:
-            for key in (
-                "nutritionalValues",
-                "nutritionalValue",
-                "nutrition",
-                "macros",
-                "nutrients",
-            ):
-                nested = self._as_dict(container.get(key))
-                if nested is not None:
-                    nutrition_containers.append(nested)
-
-        def pick(*keys: str) -> Any:
-            """Return the first non-empty value found under any of *keys* across recipe containers."""
-            for container in containers:
-                value = self._first_non_empty(*(container.get(key) for key in keys))
-                if value is not None:
-                    return value
-            return None
-
-        def pick_numeric(*keys: str) -> float | None:
-            """Like pick(), but coerces the result to float and searches nutrition containers too."""
-            direct = self._parse_optional_float(pick(*keys))
-            if direct is not None:
-                return direct
-            for nutrition in nutrition_containers:
-                value = self._parse_optional_float(
-                    self._first_non_empty(*(nutrition.get(key) for key in keys))
-                )
-                if value is not None:
-                    return value
-            return None
-
-        recipe_name = pick("name", "title")
-        photo_candidate = pick("photo", "photoUrl", "image", "imageUrl", "thumbnailUrl")
-        photo_value: str | None = None
-        if isinstance(photo_candidate, dict):
-            photo_dict = cast(dict[str, Any], photo_candidate)
-            raw_photo = self._first_non_empty(
-                photo_dict.get("url"),
-                photo_dict.get("src"),
-                photo_dict.get("original"),
-            )
-            if isinstance(raw_photo, str) and raw_photo.strip():
-                photo_value = raw_photo.strip()
-        elif isinstance(photo_candidate, str) and photo_candidate.strip():
-            photo_value = photo_candidate.strip()
-
-        hydrated: dict[str, Any] = {}
-        if isinstance(recipe_name, str) and recipe_name.strip():
-            hydrated["name"] = recipe_name.strip()
-        if photo_value is not None:
-            hydrated["photo"] = photo_value
-
-        energy = pick_numeric("energy", "kcal", "calories", "energyKcal")
-        protein = pick_numeric("protein", "proteinG")
-        fat = pick_numeric("fat", "fatG")
-        carbohydrate = pick_numeric("carbohydrate", "carbohydrates", "carb", "carbs", "carbohydrateG")
-        if energy is not None:
-            hydrated["energy"] = energy
-        if protein is not None:
-            hydrated["protein"] = protein
-        if fat is not None:
-            hydrated["fat"] = fat
-        if carbohydrate is not None:
-            hydrated["carbohydrate"] = carbohydrate
-
-        details_measure_id = pick("measureId", "defaultMeasureId")
-        details_measure_quantity = self._parse_optional_float(
-            pick("measureQuantity", "quantity", "servingQuantity")
-        )
-        details_ingredients_serving = self._parse_optional_float(
-            pick("ingredientsServing", "serving", "servings")
-        )
-
-        if base_item.get("measureId") is None and details_measure_id is not None:
-            hydrated["measureId"] = details_measure_id
-        if base_item.get("measureQuantity") is None and details_measure_quantity is not None:
-            hydrated["measureQuantity"] = details_measure_quantity
-        if base_item.get("ingredientsServing") is None and details_ingredients_serving is not None:
-            hydrated["ingredientsServing"] = details_ingredients_serving
-
-        return {
-            "status": "hydrated" if hydrated else "no_fields",
-            "fields": hydrated,
-            "recipeId": recipe_id,
-        }
-
-    @staticmethod
     def normalize_meal_key(meal_type: str) -> str:
         """Normalize external meal names to the planner payload shape."""
+        if not isinstance(meal_type, str):
+            raise FitatuValidationError(f"meal_type must be a meal name such as 'breakfast', got {meal_type!r}")
         meal_key = meal_type.strip().lower()
         aliases = {
             "second-breakfast": "second_breakfast",
@@ -225,118 +106,230 @@ class PlannerModule:
         }
         return aliases.get(meal_key, meal_key)
 
-    def get_day(self, user_id: str, day: date) -> dict[str, Any]:
-        """Fetch a single planner day snapshot."""
-        data = self._client.request(
-            "GET",
-            f"/diet-and-activity-plan/{user_id}/day/{day.isoformat()}",
-        )
-        return cast(dict[str, Any], data) if isinstance(data, dict) else {"raw": data}
+    # ------------------------------------------------------------------
+    # Write model (checked against the live API, see tests/fixtures):
+    # POST /diet-plan/{id}/days upserts rows by planDayDietItemId and keeps every
+    # row that is not in the payload, so a write only needs the rows it changes.
+    # A row is deleted by sending it with deletedAt; the day GET then hides it.
+    # A row is replaced as a whole, so a changed row is re-sent in full.
+    # ------------------------------------------------------------------
 
-    def get_meal(self, user_id: str, day: date, meal_type: str) -> dict[str, Any]:
-        """Return a single meal bucket from a planner day."""
-        planner_day = self.get_day(user_id, day)
-        diet_plan = self._as_dict(planner_day.get("dietPlan"))
+    @staticmethod
+    def _diet_plan(day_data: dict[str, Any]) -> dict[str, Any]:
+        diet_plan = as_dict(day_data.get("dietPlan"))
         if diet_plan is None:
             raise FitatuApiError("dietPlan not available in planner day response")
+        return diet_plan
 
-        meal = self._as_dict(diet_plan.get(self.normalize_meal_key(meal_type)))
-        if meal is None:
-            raise FitatuApiError(f"meal not found: {meal_type}")
-        return meal
+    @classmethod
+    def _meal(cls, day_data: dict[str, Any], meal_type: str) -> tuple[str, dict[str, Any]]:
+        """Return ``(meal_key, meal bucket)``; a meal the day does not have is not found."""
+        diet_plan = cls._diet_plan(day_data)
+        meal_key = cls.normalize_meal_key(meal_type)
+        bucket = as_dict(diet_plan.get(meal_key))
+        if bucket is None:
+            raise FitatuNotFoundError(f"meal not found: {meal_type!r}; this day has: {', '.join(sorted(diet_plan))}")
+        return meal_key, bucket
+
+    @staticmethod
+    def _iter_rows(day_data: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+        """Return ``(meal_key, row)`` for every row of a day GET response."""
+        diet_plan = as_dict(day_data.get("dietPlan")) or {}
+        return [
+            (meal_key, row)
+            for meal_key, bucket in diet_plan.items()
+            for row in as_dict_list((as_dict(bucket) or {}).get("items"))
+        ]
+
+    @classmethod
+    def _has_row(cls, day_data: dict[str, Any], row_id: str) -> bool:
+        return any(str(row.get("planDayDietItemId")) == row_id for _, row in cls._iter_rows(day_data))
+
+    @staticmethod
+    def _describe_rows(rows: list[tuple[str, dict[str, Any]]]) -> str:
+        """One line per row, enough for a caller to pick the right ``planDayDietItemId``."""
+        return "; ".join(
+            f"{row.get('planDayDietItemId')} ({meal_key}, {row.get('name')!r}, "
+            f"measureQuantity={row.get('measureQuantity')})"
+            for meal_key, row in rows
+        ) or "none"
+
+    @classmethod
+    def _locate_row(
+        cls,
+        day_data: dict[str, Any],
+        item_id: str | int,
+        *,
+        meal_type: str,
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Find a row by ``planDayDietItemId`` in any meal, else by ``productId`` in ``meal_type``.
+
+        A ``productId`` only counts when exactly one row of ``meal_type`` has it: with the
+        same product logged twice, guessing would edit or delete the wrong one, so that
+        raises FitatuValidationError listing the candidates. Raises when ``meal_type`` is
+        not a meal of that day, so typos fail loudly.
+        """
+        meal_key = cls._meal(day_data, meal_type)[0]
+        rows = cls._iter_rows(day_data)
+        wanted = str(item_id)
+        by_row_id = [entry for entry in rows if str(entry[1].get("planDayDietItemId")) == wanted]
+        if by_row_id:
+            return by_row_id[0]
+        by_product = [(m, row) for m, row in rows if m == meal_key and str(row.get("productId")) == wanted]
+        if len(by_product) > 1:
+            raise FitatuValidationError(
+                f"productId {wanted} matches {len(by_product)} rows in {meal_key}; pass the "
+                f"planDayDietItemId of one: {cls._describe_rows(by_product)}"
+            )
+        return by_product[0] if by_product else None
+
+    @classmethod
+    def _row_not_found(cls, day_data: dict[str, Any], item_id: str | int) -> str:
+        return f"item not found: {item_id!r}; rows on this day: {cls._describe_rows(cls._iter_rows(day_data))}"
+
+    @classmethod
+    def _find_row(cls, day_data: dict[str, Any], item_id: str | int, *, meal_type: str) -> tuple[str, dict[str, Any]]:
+        """:meth:`_locate_row`, but a missing row is not found (the message lists the day's rows)."""
+        found = cls._locate_row(day_data, item_id, meal_type=meal_type)
+        if found is None:
+            raise FitatuNotFoundError(cls._row_not_found(day_data, item_id))
+        return found
+
+    @staticmethod
+    def _food_of(meal_key: str, row: dict[str, Any]) -> tuple[Any, ...]:
+        """What a row logs: its meal, ``foodType``, food, measure, quantity and ``eaten``.
+
+        A custom row is its name, nutrition and ``eaten`` instead: the server swaps its
+        ``measureId`` (see the recording), so that cannot match.
+        """
+        food_type = str(row.get("foodType"))
+        if food_type == "CUSTOM_ITEM":
+            keys: tuple[str, ...] = ("name", "energy", "protein", "fat", "carbohydrate", "eaten")
+        else:
+            keys = ("productId", "recipeId", "measureId", "measureQuantity", "eaten")
+        return (meal_key, food_type, *(row.get(key) for key in keys))
+
+    def _meal_for_new_row(self, user_id: str, day: date, meal_type: str, new_row: dict[str, Any]) -> str:
+        """Return the normalised meal key for an add, failing when the day has no such meal.
+
+        The sync would replace a row that already has ``new_row``'s id, so that id is
+        only taken as a retry when the row logs exactly what ``new_row`` does (see
+        :meth:`_food_of`); a row that differs in any of that is refused, not overwritten.
+        """
+        day_data = self.get_day(user_id, day)
+        meal_key = self._meal(day_data, meal_type)[0]
+        row_id = new_row["planDayDietItemId"]
+        sent = self._food_of(meal_key, new_row)
+        for existing_meal, row in self._iter_rows(day_data):
+            if str(row.get("planDayDietItemId")) == row_id and not all(map(self._values_match, sent, self._food_of(existing_meal, row))):
+                # Most often a retried add whose row was changed since (e.g. marked eaten on the phone).
+                raise FitatuValidationError(
+                    f"row_id {row_id} already belongs to another row on this day: "
+                    f"{self._describe_rows([(existing_meal, row)])}. If this add repeats an earlier one, that "
+                    "attempt was saved and the row has changed since: do not add it again. Update that row "
+                    "instead, or remove it and add it again"
+                )
+        return meal_key
+
+    def _upsert_rows(self, user_id: str, day: date, rows_by_meal: dict[str, list[dict[str, Any]]]) -> Any:
+        """Send only these rows; synchronous so the next GET already sees them."""
+        diet_plan = {meal_key: {"items": rows} for meal_key, rows in rows_by_meal.items() if rows}
+        return self.sync_single_day(user_id, day, day_payload={"dietPlan": diet_plan})
+
+    @classmethod
+    def _mark_deleted(cls, row: dict[str, Any]) -> dict[str, Any]:
+        """Return the row as the app deletes it: unchanged, plus ``deletedAt``."""
+        return {**row, "deletedAt": cls._now_timestamp()}
+
+    def _delete_rows(
+        self,
+        user_id: str,
+        day: date,
+        targets: list[tuple[str, dict[str, Any]]],
+    ) -> tuple[Any, set[str]]:
+        """Delete rows in one sync and return ``(sync_response, ids still visible)``."""
+        rows_by_meal: dict[str, list[dict[str, Any]]] = {}
+        for meal_key, row in targets:
+            rows_by_meal.setdefault(meal_key, []).append(self._mark_deleted(row))
+        sync_response = self._upsert_rows(user_id, day, rows_by_meal)
+        visible = {str(row.get("planDayDietItemId")) for _, row in self._iter_rows(self.get_day(user_id, day))}
+        wanted = {str(row.get("planDayDietItemId")) for _, row in targets}
+        return sync_response, wanted & visible
+
+    def _remove_row(
+        self,
+        user_id: str,
+        day: date,
+        day_data: dict[str, Any],
+        found: tuple[str, dict[str, Any]] | None,
+        *,
+        meal_key: str,
+        item_id: str | int,
+    ) -> dict[str, Any]:
+        """Delete the ``(meal_key, row)`` found in ``day_data`` and confirm it is gone."""
+        if found is None:
+            return {
+                "ok": False,
+                "meal": meal_key,
+                "removedId": None,
+                "removedIdAbsentAfterSync": False,
+                "cleanupMode": "none",
+                "reason": "item_not_found",
+                "message": self._row_not_found(day_data, item_id),
+                "removed": None,
+                "syncResponse": None,
+            }
+        actual_meal, row = found
+        sync_response, still_visible = self._delete_rows(user_id, day, [(actual_meal, row)])
+        removed = not still_visible
+        return {
+            "ok": removed,
+            "meal": actual_meal,
+            "removedId": str(row.get("planDayDietItemId")),
+            "removedIdAbsentAfterSync": removed,
+            "cleanupMode": "removed" if removed else "none",
+            "removed": row,
+            "syncResponse": sync_response,
+        }
+
+    def get_day(self, user_id: str, day: date | str) -> dict[str, Any]:
+        """Fetch a single planner day snapshot."""
+        path = f"/diet-and-activity-plan/{validate_numeric_id(user_id, 'user_id')}/day/{as_date(day).isoformat()}"
+        return read_reply(self._client.request("GET", path), f"GET {path}")
+
+    def get_meal(self, user_id: str, day: date | str, *, meal_type: str) -> dict[str, Any]:
+        """Return a single meal bucket from a planner day."""
+        return self._meal(self.get_day(user_id, as_date(day)), meal_type)[1]
 
     def list_meal_items(
         self,
         user_id: str,
-        day: date,
+        day: date | str,
+        *,
         meal_type: str,
     ) -> list[dict[str, Any]]:
         """List items inside a meal bucket."""
-        return self._as_dict_list(self.get_meal(user_id, day, meal_type).get("items"))
+        return as_dict_list(self.get_meal(user_id, as_date(day), meal_type=meal_type).get("items"))
 
     def find_meal_item(
         self,
         user_id: str,
-        day: date,
+        day: date | str,
+        *,
         meal_type: str,
         query: str,
     ) -> dict[str, Any] | None:
         """Find the first meal item by case-insensitive name match."""
+        day = as_date(day)
+        if not isinstance(query, str):
+            raise FitatuValidationError(f"query must be a string, got {query!r}")
         needle = query.strip().lower()
         if not needle:
             return None
-        for item in self.list_meal_items(user_id, day, meal_type):
+        for item in self.list_meal_items(user_id, day, meal_type=meal_type):
             if needle in str(item.get("name") or "").lower():
                 return item
         return None
-
-    @staticmethod
-    def _build_day_sync_payload(day_data: dict[str, Any]) -> dict[str, Any]:
-        """Extract the fields required by the day-sync POST endpoint from a full day snapshot.
-
-        Water, toilet entries and activities are left out on purpose: the server keeps
-        whatever is stored for keys missing from the payload, so a diet-only write cannot
-        clobber them.
-        """
-        return {
-            "dietPlan": day_data.get("dietPlan") or {},
-            "note": day_data.get("note"),
-            "tagsIds": day_data.get("tagsIds") or [],
-        }
-
-    @staticmethod
-    def _compact_diet_item_for_sync(item: dict[str, Any]) -> dict[str, Any]:
-        """Strip a day-item dict to the minimal set of fields accepted by the sync endpoint."""
-        compact: dict[str, Any] = {
-            "planDayDietItemId": item.get("planDayDietItemId"),
-            "foodType": item.get("foodType"),
-            "measureId": item.get("measureId"),
-            "measureQuantity": item.get("measureQuantity"),
-            "ingredientsServing": item.get("ingredientsServing"),
-            "source": item.get("source") or "API",
-        }
-
-        # Recipe items are keyed by recipeId (not productId); keep it in sync payloads.
-        if item.get("recipeId") is not None:
-            compact["recipeId"] = item.get("recipeId")
-        recipe_ai = item.get("recipeAI")
-        if isinstance(recipe_ai, dict):
-            compact["recipeAI"] = recipe_ai
-
-        # A row synced without "eaten" gets eaten=false on the server (checked live), so
-        # carry it over or every write unticks the day.
-        if isinstance(item.get("eaten"), bool):
-            compact["eaten"] = item["eaten"]
-
-        has_product_id = item.get("productId") is not None
-        if has_product_id:
-            compact["productId"] = item.get("productId")
-        else:
-            for key in ("name", "energy", "protein", "fat", "carbohydrate"):
-                if key in item and item.get(key) is not None:
-                    compact[key] = item.get(key)
-
-        existing_updated_at = item.get("updatedAt")
-        if isinstance(existing_updated_at, str) and existing_updated_at.strip():
-            compact["updatedAt"] = existing_updated_at
-        else:
-            compact["updatedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        return compact
-
-    def _compact_diet_plan_for_sync(self, diet_plan: dict[str, Any]) -> dict[str, Any]:
-        """Compact every meal bucket in a full dietPlan dict for use in a sync payload."""
-        compact_plan: dict[str, Any] = {}
-        for meal_key, meal_raw in diet_plan.items():
-            meal_bucket = self._as_dict(meal_raw)
-            if meal_bucket is None:
-                continue
-            items = self._as_dict_list(meal_bucket.get("items"))
-            if not items:
-                continue
-            compact_plan[meal_key] = {
-                "items": [self._compact_diet_item_for_sync(item) for item in items]
-            }
-        return compact_plan
 
     @staticmethod
     def _extract_measure_id(product: dict[str, Any]) -> int | str:
@@ -402,14 +395,14 @@ class PlannerModule:
         return aliases.get(text, text)
 
     @staticmethod
-    def _coerce_positive_float(value: float | int, *, field_name: str) -> float:
-        """Parse *value* to a positive float, raising FitatuApiError on failure."""
+    def _coerce_positive_float(value: float | int, *, field_name: str, allow_zero: bool = False) -> float:
+        """Parse *value* to a positive (``allow_zero``: non-negative) float, or raise FitatuValidationError."""
         try:
             parsed = float(value)
         except (TypeError, ValueError) as exc:
-            raise FitatuApiError(f"{field_name} must be numeric") from exc
-        if parsed <= 0:
-            raise FitatuApiError(f"{field_name} must be > 0")
+            raise FitatuValidationError(f"{field_name} must be numeric, got {value!r}") from exc
+        if not ((parsed >= 0 if allow_zero else parsed > 0) and parsed < float("inf")):
+            raise FitatuValidationError(f"{field_name} must be {'>=' if allow_zero else '>'} 0, got {value!r}")
         return parsed
 
     @staticmethod
@@ -494,7 +487,7 @@ class PlannerModule:
 
         if isinstance(measures_raw, list):
             for measure_raw in measures_raw:
-                measure = self._as_dict(measure_raw)
+                measure = as_dict(measure_raw)
                 if measure is None:
                     continue
                 add_candidate(
@@ -507,7 +500,7 @@ class PlannerModule:
 
         if isinstance(simple_raw, list):
             for row_raw in simple_raw:
-                row = self._as_dict(row_raw)
+                row = as_dict(row_raw)
                 if row is None:
                     continue
                 portion = self._optional_positive_float(row.get("portion")) or 1.0
@@ -522,7 +515,7 @@ class PlannerModule:
                 )
 
         if search_product is not None:
-            search_measure = self._as_dict(search_product.get("measure")) or {}
+            search_measure = as_dict(search_product.get("measure")) or {}
             quantity = self._optional_positive_float(search_measure.get("measureQuantity")) or 1.0
             add_candidate(
                 measure_id=search_measure.get("defaultMeasureId") or search_measure.get("measureId"),
@@ -535,6 +528,10 @@ class PlannerModule:
             )
 
         return candidates
+
+    @staticmethod
+    def _measure_names(candidates: list[dict[str, Any]]) -> str:
+        return ", ".join(sorted({str(c["measureName"]) for c in candidates if c["measureName"]})) or "none"
 
     def resolve_product_measure(
         self,
@@ -551,16 +548,16 @@ class PlannerModule:
         ``measureQuantity``, ``requestedAmount``, ``requestedUnit``,
         ``strategy``, ``strictMeasure``, ``warnings``, ``productId``.
 
-        Fallback behaviour (``strict_measure=False`` only):
+        ``g`` and ``ml`` are converted through any measure with a known weight or
+        capacity per unit (``converted_from_weight``/``converted_from_capacity``).
 
-        - ``fallback_convertible_measure``: requested unit not available; a
-          measure with a known weight/capacity per unit was selected and
-          ``measureQuantity`` was recalculated via conversion.
-        - ``fallback_search_measure``: no convertible measure found; the default
-          measure from the original search result was used and
-          ``measureQuantity`` equals ``requested_amount`` unchanged.
-        - ``fallback_first_measure``: no search result provided; the first
-          available product measure was used, quantity unchanged.
+        Fallback behaviour (``strict_measure=False``, ``g``/``ml`` only, when no measure
+        of the product has a weight or capacity to convert with):
+
+        - ``fallback_search_measure``: the default measure of the search result is
+          used and ``measureQuantity`` is ``requested_amount`` as it is, not converted.
+        - ``fallback_first_measure``: no search result provided; the first product
+          measure is used, quantity likewise unchanged.
 
         When a fallback fires, ``warnings`` is non-empty.  Always check it::
 
@@ -568,13 +565,15 @@ class PlannerModule:
             if result["warnings"]:
                 # measure was substituted — verify quantities are sensible
 
-        With ``strict_measure=True`` (default) any unresolvable unit raises
-        ``FitatuApiError`` instead of falling back.
+        Any other unit (``sztuka``, ``łyżka``...) that the product has no measure for
+        raises FitatuValidationError even with ``strict_measure=False``: its size is
+        unknown, so no other measure can be converted to it. With ``strict_measure=True``
+        (default) every unresolvable unit raises.
         """
         amount = self._coerce_positive_float(requested_amount, field_name="requested_amount")
         canonical_unit = self._normalize_measure_unit(requested_unit)
         if canonical_unit is None:
-            raise FitatuApiError("requested_unit is required")
+            raise FitatuValidationError("requested_unit is required")
 
         product_details = self._client.get_product_details(product_id)
         candidates = self._extract_measure_candidates(
@@ -623,37 +622,14 @@ class PlannerModule:
                     strategy = "converted_from_capacity"
 
         if selected_measure_id is None:
-            if strict_measure:
-                raise FitatuApiError(
-                    f"Cannot resolve unit '{requested_unit}' for product {product_id}"
+            if strict_measure or canonical_unit not in {"g", "ml"}:
+                raise FitatuValidationError(
+                    f"Cannot resolve unit '{requested_unit}' for product {product_id}; "
+                    f"its measures: {self._measure_names(candidates)}"
                 )
-            convertible_candidates = (
-                [
-                    c
-                    for c in candidates
-                    if float(c.get("weightPerUnit") or 0) > 0
-                    or float(c.get("capacityPerUnit") or 0) > 0
-                ]
-                if canonical_unit not in {"g", "ml"}
-                else []
-            )
-            if convertible_candidates:
-                selected = min(
-                    convertible_candidates,
-                    key=lambda c: (
-                        0 if c.get("source") == "simpleMeasures" else 1,
-                        abs(float(c.get("weightPerUnit") or c.get("capacityPerUnit") or 0) - 1.0),
-                    ),
-                )
-                selected_measure_id = selected.get("measureId")
-                selected_measure_name = str(selected.get("measureName") or "")
-                strategy = "fallback_convertible_measure"
-                warnings.append(
-                    "Requested unit not available; falling back to a convertible measure"
-                )
-            elif search_product is not None:
+            if search_product is not None:
                 selected_measure_id = self._extract_measure_id(search_product)
-                search_measure = self._as_dict(search_product.get("measure")) or {}
+                search_measure = as_dict(search_product.get("measure")) or {}
                 selected_measure_name = str(search_measure.get("measureName") or "")
                 strategy = "fallback_search_measure"
                 warnings.append(
@@ -667,9 +643,7 @@ class PlannerModule:
                     "Requested unit not available; falling back to first product measure"
                 )
             else:
-                raise FitatuApiError(
-                    f"No measures available for product {product_id}"
-                )
+                raise FitatuValidationError(f"No measures available for product {product_id}")
 
         return {
             "measureId": selected_measure_id,
@@ -686,7 +660,7 @@ class PlannerModule:
     def add_product_to_day_meal_with_unit(
         self,
         user_id: str,
-        day: date,
+        day: date | str,
         *,
         meal_type: str,
         product_id: int | str,
@@ -695,8 +669,14 @@ class PlannerModule:
         eaten: bool = False,
         source: str = "API",
         strict_measure: bool = True,
+        row_id: str | None = None,
     ) -> dict[str, Any]:
-        """Add a product to a planner meal using user-facing unit semantics."""
+        """Add a product to a planner meal using user-facing unit semantics.
+
+        ``row_id`` works as in :meth:`add_product_to_day_meal`.
+        """
+        day = as_date(day)
+        row_id = _row_id(row_id)
         resolution = self.resolve_product_measure(
             product_id=product_id,
             requested_amount=amount,
@@ -712,6 +692,7 @@ class PlannerModule:
             measure_quantity=cast(float | int, resolution["measureQuantity"]),
             eaten=eaten,
             source=source,
+            row_id=row_id,
         )
         result["measureResolution"] = resolution
         return result
@@ -719,7 +700,7 @@ class PlannerModule:
     def add_product_to_day_meal(
         self,
         user_id: str,
-        day: date,
+        day: date | str,
         *,
         meal_type: str,
         product_id: int | str,
@@ -727,25 +708,24 @@ class PlannerModule:
         measure_quantity: float | int = 1,
         eaten: bool = False,
         source: str = "API",
+        row_id: str | None = None,
     ) -> dict[str, Any]:
-        """Add a product to a planner day using the day sync flow."""
-        meal_key = self.normalize_meal_key(meal_type)
-        logger.debug("add_product user=%s day=%s meal=%s product=%s qty=%s", user_id, day, meal_key, product_id, measure_quantity)
-        planner_day = self.get_day(user_id, day)
-        day_payload = self._build_day_sync_payload(planner_day)
-        diet_plan = self._as_dict(day_payload.get("dietPlan"))
-        if diet_plan is None:
-            raise FitatuApiError("dietPlan not available in planner day response")
+        """Add a product to a planner meal. Only the new row is sent.
 
-        meal_bucket = self._as_dict(diet_plan.get(meal_key))
-        if meal_bucket is None:
-            raise FitatuApiError(f"meal not found in day payload: {meal_type}")
-
-        items = self._as_dict_list(meal_bucket.get("items"))
-        meal_bucket["items"] = items
-        new_item_id = str(uuid.uuid1())
+        ``row_id`` (a UUID v1) becomes the row's ``planDayDietItemId``; pass your own to
+        make a retry safe, since resending the same id updates the row instead of adding
+        a second one. An id that is already on the day with another food, meal, measure,
+        quantity or ``eaten`` raises FitatuValidationError instead of overwriting that row
+        (change a row with :meth:`update_day_item`). Without it a new id is generated.
+        Either way it comes back as ``rowId``.
+        """
+        day = as_date(day)
+        validate_numeric_id(product_id, "product_id")
+        validate_numeric_id(measure_id, "measure_id")
+        validate_bool(eaten, "eaten")
+        measure_quantity = self._coerce_positive_float(measure_quantity, field_name="measure_quantity")
         new_item: dict[str, Any] = {
-            "planDayDietItemId": new_item_id,
+            "planDayDietItemId": _row_id(row_id),
             "foodType": "PRODUCT",
             "measureId": measure_id,
             "measureQuantity": measure_quantity,
@@ -753,14 +733,13 @@ class PlannerModule:
             "productId": product_id,
             "source": source,
             "eaten": eaten,
-            "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
-        items.append(new_item)
-        day_payload["dietPlan"] = self._compact_diet_plan_for_sync(diet_plan)
-        sync_response = self.sync_single_day(user_id, day, day_payload)
-        logger.debug("add_product ok item_id=%s", new_item_id)
+        meal_key = self._meal_for_new_row(user_id, day, meal_type, new_item)
+        logger.debug("add_product user=%s day=%s meal=%s product=%s qty=%s", user_id, day, meal_key, product_id, measure_quantity)
+        sync_response = self._upsert_rows(user_id, day, {meal_key: [new_item]})
         return {
             "ok": True,
+            "rowId": new_item["planDayDietItemId"],
             "meal": meal_key,
             "productId": product_id,
             "syncResponse": sync_response,
@@ -770,7 +749,7 @@ class PlannerModule:
     def add_recipe_to_day_meal(
         self,
         user_id: str,
-        day: date,
+        day: date | str,
         *,
         meal_type: str,
         recipe_id: int | str,
@@ -780,33 +759,23 @@ class PlannerModule:
         ingredients_serving: float | int | None = 1,
         eaten: bool = False,
         source: str = "API",
-        hydrate_from_recipe_details: bool = True,
+        row_id: str | None = None,
     ) -> dict[str, Any]:
-        """Add a recipe entry to a planner day using the day snapshot sync flow.
+        """Add a recipe to a planner meal. Only the new row is sent.
 
-        Fitatu requires both recipeId and planDayDietItemId for recipe-like items.
+        The server fills name and nutrition from ``recipeId`` on its own (checked live).
+        ``row_id`` works as in :meth:`add_product_to_day_meal`.
         """
-        meal_key = self.normalize_meal_key(meal_type)
-        logger.debug("add_recipe user=%s day=%s meal=%s recipe=%s", user_id, day, meal_key, recipe_id)
+        day = as_date(day)
+        validate_numeric_id(recipe_id, "recipe_id")
+        validate_numeric_id(measure_id, "measure_id")
+        validate_bool(eaten, "eaten")
+        measure_quantity = self._coerce_positive_float(measure_quantity, field_name="measure_quantity")
         normalized_food_type = str(food_type or "RECIPE").strip().upper()
         if normalized_food_type not in {"RECIPE", "RECIPE_AI"}:
-            raise FitatuApiError("food_type must be RECIPE or RECIPE_AI")
-
-        planner_day = self.get_day(user_id, day)
-        day_payload = self._build_day_sync_payload(planner_day)
-        diet_plan = self._as_dict(day_payload.get("dietPlan"))
-        if diet_plan is None:
-            raise FitatuApiError("dietPlan not available in planner day response")
-
-        meal_bucket = self._as_dict(diet_plan.get(meal_key))
-        if meal_bucket is None:
-            raise FitatuApiError(f"meal not found in day payload: {meal_type}")
-
-        items = self._as_dict_list(meal_bucket.get("items"))
-        meal_bucket["items"] = items
-        new_item_id = str(uuid.uuid1())
+            raise FitatuValidationError(f"food_type must be RECIPE or RECIPE_AI, got {food_type!r}")
         new_item: dict[str, Any] = {
-            "planDayDietItemId": new_item_id,
+            "planDayDietItemId": _row_id(row_id),
             "foodType": normalized_food_type,
             "recipeId": recipe_id,
             "measureId": measure_id,
@@ -814,44 +783,24 @@ class PlannerModule:
             "ingredientsServing": ingredients_serving,
             "source": source,
             "eaten": eaten,
-            "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
-
-        recipe_hydration: dict[str, Any] = {
-            "status": "disabled",
-            "fields": {},
-            "recipeId": recipe_id,
-        }
-        if hydrate_from_recipe_details:
-            recipe_hydration = self._hydrate_recipe_item_from_details(recipe_id, new_item)
-            hydrated_fields = recipe_hydration.get("fields")
-            if isinstance(hydrated_fields, dict):
-                for key, value in hydrated_fields.items():
-                    # Preserve explicitly provided serving/measure fields.
-                    if key in {"measureId", "measureQuantity", "ingredientsServing"} and new_item.get(key) is not None:
-                        continue
-                    new_item[key] = value
-
-        items.append(new_item)
-
-        # Recipe adds are currently materialized only when syncing the full day snapshot.
-        # Compact payloads are accepted but may not persist recipe entries server-side.
-        sync_response = self.sync_single_day(user_id, day, day_payload)
-        logger.debug("add_recipe ok item_id=%s", new_item_id)
+        meal_key = self._meal_for_new_row(user_id, day, meal_type, new_item)
+        logger.debug("add_recipe user=%s day=%s meal=%s recipe=%s", user_id, day, meal_key, recipe_id)
+        sync_response = self._upsert_rows(user_id, day, {meal_key: [new_item]})
         return {
             "ok": True,
+            "rowId": new_item["planDayDietItemId"],
             "meal": meal_key,
             "recipeId": recipe_id,
             "foodType": normalized_food_type,
             "syncResponse": sync_response,
             "addedItem": new_item,
-            "recipeDetailsHydration": recipe_hydration,
         }
 
     def update_day_item(
         self,
         user_id: str,
-        day: date,
+        day: date | str,
         *,
         meal_type: str,
         item_id: str | int,
@@ -862,88 +811,58 @@ class PlannerModule:
         source: str | None = None,
         patch: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Update a single planner item and validate the result after reload.
+        """Update one planner row and check the result after a reload.
 
-        Returns a dict with ``ok: bool``.  Retries ``get_day`` up to 3 times with a
-        short delay when the item is not yet visible in the snapshot — the backend sync
-        is eventually consistent and a freshly added item may take a moment to appear.
-        Cross-meal fallback is also applied so items that landed in a different bucket
-        are found automatically.
+        ``item_id`` is the row's ``planDayDietItemId`` (found in any meal); a ``productId``
+        works only when exactly one row of ``meal_type`` has it. The row is re-sent in full
+        (the server replaces rows as a whole), so fields you do not touch, ``eaten``
+        included, keep their values. ``patch`` (a dict) sets other fields of the row, but
+        not its identity or food: ``planDayDietItemId``, ``deletedAt``, ``foodType``,
+        ``productId`` and ``recipeId`` are refused (a different food is a remove plus an
+        add), and its ``measureQuantity`` must be > 0 like ``measure_quantity``.
         """
-        meal_key = self.normalize_meal_key(meal_type)
-        _, day_payload, target_item = self._get_day_retrying_for_item(
-            user_id, day, meal_key, item_id, any_meal=True,
-        )
-
-        if target_item is None:
-            raise FitatuApiError(f"item not found in meal: {meal_type}")
-
-        diet_plan = self._as_dict(day_payload.get("dietPlan"))
-        if diet_plan is None:
-            raise FitatuApiError("dietPlan not available in planner day response")
-
-        # Determine which bucket the item actually lives in (cross-meal fallback).
-        actual_meal_key = meal_key
-        meal_bucket: dict[str, Any] = {}
-        for bucket_key, bucket_raw in diet_plan.items():
-            bucket = self._as_dict(bucket_raw)
-            if bucket is None:
-                continue
-            for _item in self._as_dict_list(bucket.get("items")):
-                if str(_item.get("planDayDietItemId")) == str(target_item.get("planDayDietItemId")):
-                    actual_meal_key = bucket_key
-                    meal_bucket = bucket
-                    break
-            if meal_bucket:
-                break
-
-        items = self._as_dict_list(meal_bucket.get("items"))
-        meal_bucket["items"] = items
-
-        before_item = dict(target_item)
-        updates_applied: dict[str, Any] = {}
+        day = as_date(day)
+        if not isinstance(patch or {}, dict):
+            raise FitatuValidationError(f"patch must be a dict of row fields, got {patch!r}")
+        patch = dict(patch or {})
+        protected = sorted({"planDayDietItemId", "deletedAt", "foodType", "productId", "recipeId"} & set(patch))
+        if protected:
+            raise FitatuValidationError(f"patch must not set {', '.join(protected)}")
+        if "measureQuantity" in patch:
+            self._coerce_positive_float(patch["measureQuantity"], field_name="patch['measureQuantity']")
         if measure_quantity is not None:
-            target_item["measureQuantity"] = measure_quantity
-            updates_applied["measureQuantity"] = measure_quantity
+            measure_quantity = self._coerce_positive_float(measure_quantity, field_name="measure_quantity")
         if measure_id is not None:
-            target_item["measureId"] = measure_id
-            updates_applied["measureId"] = measure_id
+            validate_numeric_id(measure_id, "measure_id")
         if eaten is not None:
-            target_item["eaten"] = eaten
-            updates_applied["eaten"] = eaten
-        if name is not None:
-            target_item["name"] = name
-            updates_applied["name"] = name
-        if source is not None:
-            target_item["source"] = source
-            updates_applied["source"] = source
-        if patch:
-            for key, value in patch.items():
-                target_item[key] = value
-                updates_applied[key] = value
+            validate_bool(eaten, "eaten")
+        meal_key = self.normalize_meal_key(meal_type)
+        actual_meal_key, row = self._find_row(self.get_day(user_id, day), item_id, meal_type=meal_type)
+        before_item = dict(row)
 
-        sync_response = self.sync_single_day(user_id, day, day_payload)
-        reloaded_day = self.get_day(user_id, day)
-        reloaded_diet = self._as_dict(reloaded_day.get("dietPlan"))
-        reloaded_meal = self._as_dict(reloaded_diet.get(actual_meal_key) if reloaded_diet else None)
-        reloaded_items = self._as_dict_list(reloaded_meal.get("items") if reloaded_meal else None)
+        updates_applied: dict[str, Any] = {
+            key: value
+            for key, value in (
+                ("measureQuantity", measure_quantity),
+                ("measureId", measure_id),
+                ("eaten", eaten),
+                ("name", name),
+                ("source", source),
+            )
+            if value is not None
+        }
+        updates_applied.update(patch)
+        sync_response = self._upsert_rows(user_id, day, {actual_meal_key: [{**row, **updates_applied}]})
 
-        matched_after: dict[str, Any] | None = None
-        for item in reloaded_items:
-            if str(item.get("planDayDietItemId")) == str(before_item.get("planDayDietItemId")):
-                matched_after = item
-                break
-        if matched_after is None:
-            for item in reloaded_items:
-                if str(item.get("productId")) == str(before_item.get("productId")):
-                    matched_after = item
-                    break
-
+        reloaded = self._locate_row(
+            self.get_day(user_id, day), str(before_item.get("planDayDietItemId") or item_id), meal_type=meal_key
+        )
+        matched_after = reloaded[1] if reloaded else None
         validation = {
             key: self._values_match(expected, matched_after.get(key) if matched_after else None)
             for key, expected in updates_applied.items()
         }
-        ok = bool(matched_after) and all(validation.values()) if validation else bool(matched_after)
+        ok = bool(matched_after) and all(validation.values())
         return {
             "ok": ok,
             "meal": actual_meal_key,
@@ -960,7 +879,7 @@ class PlannerModule:
     def add_custom_item_to_day_meal(
         self,
         user_id: str,
-        day: date,
+        day: date | str,
         *,
         meal_type: str,
         name: str,
@@ -968,45 +887,28 @@ class PlannerModule:
         protein_g: float | int,
         fat_g: float | int,
         carbs_g: float | int,
+        eaten: bool = False,
         source: str = "API",
+        row_id: str | None = None,
     ) -> dict[str, Any]:
-        """Add a custom manual planner item."""
-        meal_key = self.normalize_meal_key(meal_type)
+        """Add a custom row (name + kcal/macros) to a planner meal. Only the new row is sent.
+
+        ``row_id`` works as in :meth:`add_product_to_day_meal`.
+        """
+        day = as_date(day)
+        validate_bool(eaten, "eaten")
+        new_item = self._custom_item_from_values(
+            name=name, calories=calories, protein_g=protein_g, fat_g=fat_g, carbs_g=carbs_g, source=source, row_id=row_id
+        )
+        new_item["eaten"] = eaten
+        meal_key = self._meal_for_new_row(user_id, day, meal_type, new_item)
         logger.debug("add_custom_item user=%s day=%s meal=%s name=%r kcal=%s", user_id, day, meal_key, name, calories)
-        item_name = name.strip()
-        if not item_name:
-            raise FitatuApiError("Custom item name is required")
-        planner_day = self.get_day(user_id, day)
-        day_payload = self._build_day_sync_payload(planner_day)
-        diet_plan = self._as_dict(day_payload.get("dietPlan"))
-        if diet_plan is None:
-            raise FitatuApiError("dietPlan not available in planner day response")
-        meal_bucket = self._as_dict(diet_plan.get(meal_key))
-        if meal_bucket is None:
-            raise FitatuApiError(f"meal not found in day payload: {meal_type}")
-        items = self._as_dict_list(meal_bucket.get("items"))
-        meal_bucket["items"] = items
-        new_item = {
-            "planDayDietItemId": str(uuid.uuid1()),
-            "foodType": "CUSTOM_ITEM",
-            "name": item_name,
-            "energy": max(float(calories), 0.0),
-            "protein": max(float(protein_g), 0.0),
-            "fat": max(float(fat_g), 0.0),
-            "carbohydrate": max(float(carbs_g), 0.0),
-            "measureId": 1,
-            "measureQuantity": 100,
-            "measureWeight": 100,
-            "measureCapacity": 0,
-            "source": source,
-        }
-        items.append(new_item)
-        day_payload["dietPlan"] = self._compact_diet_plan_for_sync(diet_plan)
-        sync_response = self.sync_single_day(user_id, day, day_payload)
+        sync_response = self._upsert_rows(user_id, day, {meal_key: [new_item]})
         return {
             "ok": True,
+            "rowId": new_item["planDayDietItemId"],
             "meal": meal_key,
-            "name": item_name,
+            "name": new_item["name"],
             "syncResponse": sync_response,
             "addedItem": new_item,
         }
@@ -1020,19 +922,29 @@ class PlannerModule:
         fat_g: float | int,
         carbs_g: float | int,
         source: str = "API",
+        row_id: str | None = None,
     ) -> dict[str, Any]:
-        """Build a CUSTOM_ITEM sync row. Shape confirmed in production (2026-04-22)."""
-        item_name = name.strip()
+        """Build a CUSTOM_ITEM sync row. Shape confirmed in production (2026-04-22).
+
+        kcal and grams must be >= 0; a negative value raises rather than being logged as 0.
+        """
+        item_name = name.strip() if isinstance(name, str) else ""
         if not item_name:
-            raise FitatuApiError("Custom item name is required")
+            raise FitatuValidationError(f"Custom item name is required, got {name!r}")
+        nutrition = {
+            key: PlannerModule._coerce_positive_float(value, field_name=arg, allow_zero=True)
+            for key, arg, value in (
+                ("energy", "calories", calories),
+                ("protein", "protein_g", protein_g),
+                ("fat", "fat_g", fat_g),
+                ("carbohydrate", "carbs_g", carbs_g),
+            )
+        }
         return {
-            "planDayDietItemId": str(uuid.uuid1()),
+            "planDayDietItemId": _row_id(row_id),
             "foodType": "CUSTOM_ITEM",
             "name": item_name,
-            "energy": max(float(calories), 0.0),
-            "protein": max(float(protein_g), 0.0),
-            "fat": max(float(fat_g), 0.0),
-            "carbohydrate": max(float(carbs_g), 0.0),
+            **nutrition,
             "measureId": 1,
             "measureQuantity": 100,
             "measureWeight": 100,
@@ -1041,254 +953,38 @@ class PlannerModule:
             "updatedAt": PlannerModule._now_timestamp(),
         }
 
-    @staticmethod
-    def _deleted_item_marker(item: dict[str, Any], *, deleted_at: str | None = None) -> dict[str, Any]:
-        """Build a frontend-style deletedAt marker. Shape confirmed in production (2026-04-22)."""
-        marker: dict[str, Any] = {
-            "planDayDietItemId": item.get("planDayDietItemId"),
-            "foodType": item.get("foodType", "CUSTOM_ITEM"),
-            "measureId": item.get("measureId", 1),
-            "measureQuantity": item.get("measureQuantity", 1),
-            "source": item.get("source", "API"),
-            "deletedAt": deleted_at or PlannerModule._now_timestamp(),
-            "updatedAt": PlannerModule._now_timestamp(),
-        }
-        food_type = str(marker.get("foodType") or "").upper()
-        if food_type == "CUSTOM_ITEM":
-            for key in ("name", "energy", "protein", "fat", "carbohydrate"):
-                marker[key] = item.get(key, 0 if key != "name" else "x")
-        else:
-            product_id = item.get("productId")
-            if product_id is not None:
-                marker["productId"] = product_id
-        return marker
-
-    def _find_item_in_day_payload(
-        self,
-        day_payload: dict[str, Any],
-        meal_key: str,
-        item_id: str | int,
-        *,
-        any_meal: bool = False,
-    ) -> dict[str, Any] | None:
-        """Find an item by id in a day payload.
-
-        With ``any_meal=True`` the search falls back to all meal buckets when the
-        item is not found in ``meal_key`` — mirrors the cross-meal fallback in
-        ``update_day_item``.
-        """
-        diet_plan = self._as_dict(day_payload.get("dietPlan"))
-        if diet_plan is None:
-            raise FitatuApiError("dietPlan not available in planner day response")
-        meal_bucket = self._as_dict(diet_plan.get(meal_key))
-        if meal_bucket is None:
-            raise FitatuApiError(f"meal not found in day payload: {meal_key}")
-
-        def _scan(bucket: dict[str, Any]) -> dict[str, Any] | None:
-            for item in self._as_dict_list(bucket.get("items")):
-                if str(item.get("planDayDietItemId")) == str(item_id) or str(item.get("productId")) == str(item_id):
-                    return item
-            return None
-
-        found = _scan(meal_bucket)
-        if found is not None or not any_meal:
-            return found
-
-        for alt_key, alt_raw in diet_plan.items():
-            if alt_key == meal_key:
-                continue
-            alt_bucket = self._as_dict(alt_raw)
-            if alt_bucket is None:
-                continue
-            found = _scan(alt_bucket)
-            if found is not None:
-                logger.debug("_find_item_in_day_payload: item %s not in %r, found in %r", item_id, meal_key, alt_key)
-                return found
-        return None
-
-    def _get_day_retrying_for_item(
-        self,
-        user_id: str,
-        day: date,
-        meal_key: str,
-        item_id: str | int,
-        *,
-        any_meal: bool = False,
-        retries: int = 3,
-        retry_delay: float = 1.5,
-    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
-        """Fetch the day snapshot, retrying until item_id is visible or retries are exhausted.
-
-        The Fitatu backend sync is eventually consistent — a freshly added item may not
-        appear in the next ``get_day`` call for up to a few seconds.  This helper
-        transparently retries with a fixed delay so callers do not need to add manual
-        ``time.sleep`` calls between add and update/remove operations.
-
-        Returns ``(planner_day, day_payload, item)`` where ``item`` is ``None`` if the
-        item was still not found after all retry attempts.
-        """
-        planner_day: dict[str, Any] = {}
-        day_payload: dict[str, Any] = {}
-        item: dict[str, Any] | None = None
-        for attempt in range(max(1, retries)):
-            planner_day = self.get_day(user_id, day)
-            day_payload = self._build_day_sync_payload(planner_day)
-            item = self._find_item_in_day_payload(day_payload, meal_key, item_id, any_meal=any_meal)
-            if item is not None:
-                return planner_day, day_payload, item
-            if attempt < retries - 1:
-                logger.debug(
-                    "_get_day_retrying_for_item: item %s not found on attempt %d/%d, retrying in %.1fs",
-                    item_id,
-                    attempt + 1,
-                    retries,
-                    retry_delay,
-                )
-                time.sleep(retry_delay)
-        return planner_day, day_payload, None
-
     def rollback_added_item(
         self,
         user_id: str,
-        day: date,
+        day: date | str,
         *,
         meal_type: str,
-        plan_day_diet_item_id: str | None = None,
-        product_id: int | str | None = None,
-        neutralize_on_failure: bool = True,
-        neutralized_quantity: float = 0.01,
-        mark_invisible: bool = True,
+        item_id: str,
     ) -> dict[str, Any]:
-        """Rollback helper for snapshot-sync add flows.
+        """Delete a row that was just added to ``meal_type``; ``item_id`` is the add's ``rowId``.
 
-        Hard delete for planner items is still experimental. If the backend keeps a
-        custom item around after the removal sync, this falls back to a soft cleanup by
-        shrinking quantity and optionally marking the item invisible.
+        Only the row with that ``planDayDietItemId`` in that meal is deleted, never another
+        row of the same food: a rollback of an add that never landed, or a repeated one,
+        leaves the day alone and returns the result of :meth:`remove_day_item` for a
+        missing row (``ok`` False, ``reason`` ``item_not_found``).
         """
-        if not plan_day_diet_item_id and product_id is None:
-            raise FitatuApiError("rollback requires plan_day_diet_item_id or product_id")
-
-        meal_key = self.normalize_meal_key(meal_type)
-        planner_day = self.get_day(user_id, day)
-        day_payload = self._build_day_sync_payload(planner_day)
-
-        diet_plan = self._as_dict(day_payload.get("dietPlan"))
-        if diet_plan is None:
-            raise FitatuApiError("dietPlan not available in planner day response")
-
-        meal_bucket = self._as_dict(diet_plan.get(meal_key))
-        if meal_bucket is None:
-            raise FitatuApiError(f"meal not found in day payload: {meal_type}")
-
-        items_raw = meal_bucket.get("items")
-        items = self._as_dict_list(items_raw)
-        if not isinstance(items_raw, list):
-            raise FitatuApiError("meal items are not available")
-        meal_bucket["items"] = items
-
-        before_count = len(items)
-        removed_item: dict[str, Any] | None = None
-
-        if plan_day_diet_item_id:
-            removed_item = next(
-                (i for i in reversed(items) if str(i.get("planDayDietItemId")) == str(plan_day_diet_item_id)),
-                None,
-            )
-        if removed_item is None and product_id is not None:
-            removed_item = next((i for i in reversed(items) if str(i.get("productId")) == str(product_id)), None)
-
-        if removed_item is None:
-            return {
-                "ok": False,
-                "meal": meal_key,
-                "beforeCount": before_count,
-                "afterCount": before_count,
-                "removed": None,
-                "message": "No matching item found to rollback",
-            }
-
-        # Leaving the row out of a sync never deletes it (the endpoint upserts), so send
-        # just a deletedAt marker for it, the same way move_day_item does.
-        sync_response = self.sync_single_day(
-            user_id,
-            day,
-            {"dietPlan": {meal_key: {"items": [self._deleted_item_marker(removed_item)]}}},
+        day = as_date(day)
+        day_data = self.get_day(user_id, day)
+        meal_key = self._meal(day_data, meal_type)[0]
+        found = next(
+            (
+                (meal, row)
+                for meal, row in self._iter_rows(day_data)
+                if meal == meal_key and str(row.get("planDayDietItemId")) == str(item_id)
+            ),
+            None,
         )
-
-        reloaded_day = self.get_day(user_id, day)
-        reloaded_diet = self._as_dict(reloaded_day.get("dietPlan")) or {}
-        reloaded_meal = self._as_dict(reloaded_diet.get(meal_key))
-        after_count = len(self._as_dict_list(reloaded_meal.get("items") if reloaded_meal else None))
-
-        removed_id = str(removed_item.get("planDayDietItemId"))
-        reloaded_ids = {
-            str(i.get("planDayDietItemId"))
-            for bucket in reloaded_diet.values()
-            for i in self._as_dict_list((self._as_dict(bucket) or {}).get("items"))
-            if i.get("planDayDietItemId") is not None
-        }
-        removed_id_absent = bool(removed_id and removed_id not in reloaded_ids)
-        count_decreased = after_count < before_count
-
-        ok = removed_id_absent
-        cleanup_mode = "removed" if ok else "none"
-        neutralize_sync_response: Any | None = None
-
-        if not ok and neutralize_on_failure:
-            reloaded_day_for_neutralize = self.get_day(user_id, day)
-            neutralize_diet = self._as_dict(reloaded_day_for_neutralize.get("dietPlan"))
-            if neutralize_diet is not None:
-                reloaded_meal_bucket = self._as_dict(neutralize_diet.get(meal_key))
-                reloaded_items2 = self._as_dict_list(
-                    reloaded_meal_bucket.get("items") if reloaded_meal_bucket else None
-                )
-                for item in reloaded_items2:
-                    if str(item.get("planDayDietItemId")) != str(removed_id):
-                        continue
-                    item["measureQuantity"] = neutralized_quantity
-                    if mark_invisible:
-                        item["visible"] = False
-                    neutralize_payload: dict[str, Any] = {
-                        "dietPlan": neutralize_diet,
-                        "note": reloaded_day_for_neutralize.get("note"),
-                        "tagsIds": reloaded_day_for_neutralize.get("tagsIds") or [],
-                    }
-                    neutralize_sync_response = self.sync_single_day(user_id, day, neutralize_payload)
-                    post_neutralize_day = self.get_day(user_id, day)
-                    post_diet = self._as_dict(post_neutralize_day.get("dietPlan"))
-                    post_meal = self._as_dict(post_diet.get(meal_key) if post_diet else None)
-                    post_neutralize_items = self._as_dict_list(
-                        post_meal.get("items") if post_meal else None
-                    )
-                    for reloaded_item in post_neutralize_items:
-                        if str(reloaded_item.get("planDayDietItemId")) != str(removed_id):
-                            continue
-                        qty = float(reloaded_item.get("measureQuantity") or 0)
-                        if qty <= float(neutralized_quantity):
-                            ok = True
-                            cleanup_mode = "neutralized"
-                        break
-                    break
-
-        return {
-            "ok": ok,
-            "meal": meal_key,
-            "beforeCount": before_count,
-            "afterCount": after_count,
-            "removedId": removed_id,
-            "removedIdAbsentAfterSync": removed_id_absent,
-            "countDecreased": count_decreased,
-            "cleanupMode": cleanup_mode,
-            "neutralizedQuantity": neutralized_quantity if cleanup_mode == "neutralized" else None,
-            "removed": removed_item,
-            "syncResponse": sync_response,
-            "neutralizeSyncResponse": neutralize_sync_response,
-        }
+        return self._remove_row(user_id, day, day_data, found, meal_key=meal_key, item_id=item_id)
 
     def add_search_result_to_day_meal(
         self,
         user_id: str,
-        day: date,
+        day: date | str,
         *,
         meal_type: str,
         phrase: str,
@@ -1298,198 +994,99 @@ class PlannerModule:
         measure_unit: str | None = None,
         strict_measure: bool = True,
         eaten: bool = False,
+        row_id: str | None = None,
     ) -> dict[str, Any]:
-        """Search food and add the selected search result to the planner."""
-        search_items = self._client.search_food(phrase, limit=max(index + 1, 1))
-        if not search_items or index >= len(search_items):
-            raise FitatuApiError(f"No search result at index={index} for phrase='{phrase}'")
-        product = search_items[index]
-        product_id = product.get("foodId") or product.get("id")
-        if product_id is None:
-            raise FitatuApiError("Selected search item has no foodId/id")
+        """Search food and add one hit to a meal: a PRODUCT hit by ``productId``, a RECIPE
+        hit by ``recipeId`` (search rows carry either id as ``foodId``). A hit of any other
+        type raises FitatuValidationError.
 
-        amount_for_resolution = (
+        Without ``measure_unit`` the hit's own search measure is used, ``measure_quantity``
+        (or ``measure_amount``) of it. ``measure_unit`` with ``measure_amount`` is resolved
+        through the product's measures (:meth:`resolve_product_measure`) and works for
+        PRODUCT hits only; a recipe is logged in its search measure, usually portions.
+        ``row_id`` works as in :meth:`add_product_to_day_meal`.
+        """
+        day = as_date(day)
+        validate_non_negative_int(index, "index")
+        row_id = _row_id(row_id)
+        search_items = self._client.search_food(phrase, limit=index + 1)
+        if index >= len(search_items):
+            raise FitatuNotFoundError(f"No search result at index={index} for phrase={phrase!r} ({len(search_items)} hits)")
+        hit = search_items[index]
+        food_id = hit.get("foodId") or hit.get("id")
+        if food_id is None:
+            raise FitatuApiError("Selected search item has no foodId/id")
+        hit_type = str(hit.get("type") or "").upper()
+        if hit_type not in {"PRODUCT", "RECIPE"}:
+            raise FitatuValidationError(
+                f"search hit {hit.get('name')!r} is of type {hit.get('type')!r}; only PRODUCT and RECIPE hits can be added"
+            )
+        is_recipe = hit_type == "RECIPE"
+        search_measure = as_dict(hit.get("measure")) or {}
+        if is_recipe and measure_unit is not None:
+            raise FitatuValidationError(
+                f"measure_unit works for products only; {hit.get('name')!r} is a recipe, pass "
+                f"measure_quantity in its measure ({search_measure.get('measureName')})"
+            )
+
+        amount = (
             measure_quantity
             if measure_amount is None
             else self._coerce_positive_float(measure_amount, field_name="measure_amount")
         )
-
-        resolution: dict[str, Any] | None = None
         if measure_unit is not None:
             resolution = self.resolve_product_measure(
-                product_id=product_id,
-                requested_amount=amount_for_resolution,
+                product_id=food_id,
+                requested_amount=amount,
                 requested_unit=measure_unit,
                 strict_measure=strict_measure,
-                search_product=product,
-            )
-            result = self.add_product_to_day_meal(
-                user_id,
-                day,
-                meal_type=meal_type,
-                product_id=product_id,
-                measure_id=cast(int | str, resolution["measureId"]),
-                measure_quantity=cast(float | int, resolution["measureQuantity"]),
-                eaten=eaten,
+                search_product=hit,
             )
         else:
-            measure_id = self._extract_measure_id(product)
-            result = self.add_product_to_day_meal(
-                user_id,
-                day,
-                meal_type=meal_type,
-                product_id=product_id,
-                measure_id=measure_id,
-                measure_quantity=amount_for_resolution,
-                eaten=eaten,
-            )
             resolution = {
-                "measureId": measure_id,
-                "measureName": (self._as_dict(product.get("measure")) or {}).get("measureName"),
-                "measureQuantity": amount_for_resolution,
-                "requestedAmount": amount_for_resolution,
+                "measureId": self._extract_measure_id(hit),
+                "measureName": search_measure.get("measureName"),
+                "measureQuantity": amount,
+                "requestedAmount": amount,
                 "requestedUnit": None,
                 "strategy": "search_default",
                 "strictMeasure": strict_measure,
                 "warnings": [],
-                "productId": product_id,
             }
 
+        row = {
+            "meal_type": meal_type,
+            "measure_id": resolution["measureId"],
+            "measure_quantity": resolution["measureQuantity"],
+            "eaten": eaten,
+            "row_id": row_id,
+        }
+        if is_recipe:
+            result = self.add_recipe_to_day_meal(user_id, day, recipe_id=food_id, **row)
+        else:
+            result = self.add_product_to_day_meal(user_id, day, product_id=food_id, **row)
         result["searchItem"] = {
-            "name": product.get("name"),
-            "foodId": product.get("foodId"),
-            "id": product.get("id"),
-            "measureId": resolution.get("measureId") if resolution else None,
+            "name": hit.get("name"),
+            "type": hit.get("type"),
+            "foodId": hit.get("foodId"),
+            "id": hit.get("id"),
+            "measureId": resolution["measureId"],
         }
         result["measureResolution"] = resolution
         return result
-
-    def get_product_for_meal(self, product_id: str, meal_type: str, day: date) -> Any:
-        """Deprecated: ``/product/{id}/{meal}/{day}`` is an app screen route, not an API path."""
-        _warn_unsupported_route("get_product_for_meal", "client.get_product_details()")
-        return self._client.request_first_success(
-            "GET",
-            [
-                f"/product/{product_id}/{meal_type}/{day.isoformat()}",
-                f"/v2/product/{product_id}/{meal_type}/{day.isoformat()}",
-            ],
-        )
-
-    def quick_add_form(self, payload: dict[str, Any]) -> Any:
-        """Deprecated: ``/food/quick-add/form`` is an app screen route, not an API path."""
-        _warn_unsupported_route("quick_add_form", "add_custom_item_to_day_meal()")
-        return self._client.request_first_success(
-            "POST",
-            ["/food/quick-add/form", "/v2/food/quick-add/form"],
-            json_data=payload,
-        )
-
-    def quick_add_form_with_fallback(self, payload: dict[str, Any]) -> Any:
-        """Add a quick-add style payload through search + planner sync.
-
-        There is no quick-add endpoint (the app's quick add is a ``CUSTOM_ITEM`` row
-        in the day sync), so this goes straight to the search-based add.
-        """
-        fallback = self._quick_add_form_fallback(payload)
-        if fallback is None:
-            raise FitatuApiError("quick add payload needs name, mealType, mealDate and userId")
-        return fallback
-
-    def _quick_add_form_fallback(self, payload: dict[str, Any]) -> dict[str, Any] | None:
-        """Fall back to a search-based add when the quick-add endpoint is unavailable."""
-        name = payload.get("name")
-        meal_raw = payload.get("mealType") or payload.get("meal")
-        day_raw = payload.get("mealDate") or payload.get("date")
-        user_id_raw = payload.get("userId") or self._client.auth.fitatu_user_id
-        if not isinstance(name, str) or not name.strip():
-            return None
-        if not isinstance(meal_raw, str) or not meal_raw.strip():
-            return None
-        if not isinstance(day_raw, str) or not day_raw.strip():
-            return None
-        if not isinstance(user_id_raw, str) or not user_id_raw.strip():
-            return None
-        try:
-            target_day = date.fromisoformat(day_raw.strip())
-        except ValueError:
-            return None
-        meal_key = self._coerce_meal_type_for_fallback(meal_raw)
-        try:
-            quantity_raw = payload.get("measureQuantity")
-            quantity = float(quantity_raw) if quantity_raw is not None else 1.0
-        except (TypeError, ValueError):
-            quantity = 1.0
-        return {
-            "mode": "fallback_search_add",
-            "quickAddEndpointAvailable": False,
-            "input": {
-                "name": name,
-                "mealType": meal_raw,
-                "mealDate": day_raw,
-                "measureQuantity": quantity,
-            },
-            "result": self.add_search_result_to_day_meal(
-                str(user_id_raw),
-                target_day,
-                meal_type=meal_key,
-                phrase=name,
-                index=0,
-                measure_quantity=quantity,
-                eaten=bool(payload.get("eaten", False)),
-            ),
-        }
-
-    def _coerce_meal_type_for_fallback(self, meal_raw: str) -> str:
-        """Normalise a raw meal type string or numeric index to a canonical meal key."""
-        text = meal_raw.strip().replace("-", "_").lower()
-        num_match = re.fullmatch(r"(?:meal_)?(\d+)", text)
-        if num_match:
-            return self._meal_from_number(int(num_match.group(1)))
-        return self.normalize_meal_key(text)
-
-    @staticmethod
-    def _meal_from_number(number: int) -> str:
-        """Map a Fitatu meal-slot integer (1–6) to its canonical string key."""
-        mapping = {
-            1: "breakfast",
-            2: "second_breakfast",
-            3: "lunch",
-            4: "dinner",
-            5: "snack",
-            6: "supper",
-        }
-        return mapping.get(number, "snack")
-
-    def send_changes(self, payload: dict[str, Any], method: str = "POST") -> Any:
-        """Deprecated: there is no planner changes endpoint; changes go through day sync."""
-        _warn_unsupported_route("send_changes", "sync_days()")
-        return self._client.request_first_success(
-            method.upper(),
-            ["/planner/changes", "/v2/planner/changes", "/v2/diet-plan/planner/changes"],
-            json_data=payload,
-        )
-
-    def add_day_items(self, user_id: str, day: date, items: list[dict[str, Any]]) -> Any:
-        """Deprecated: there is no day-items endpoint; rows are added through day sync."""
-        _warn_unsupported_route("add_day_items", "sync_single_day()")
-        return self._client.request_first_success(
-            "POST",
-            [
-                f"/diet-plan/{user_id}/day-items/{day.isoformat()}",
-                f"/v2/diet-plan/{user_id}/day-items/{day.isoformat()}",
-                f"/v3/diet-plan/{user_id}/day-items/{day.isoformat()}",
-            ],
-            json_data={"items": items},
-        )
 
     def sync_days(
         self,
         user_id: str,
         days_payload: dict[str, Any],
         *,
-        synchronous: bool = False,
+        synchronous: bool = True,
     ) -> Any:
         """Sync one or more planner days.
+
+        Synchronous by default, so a GET right after it already sees the change. The
+        sync upserts rows by id, so resending the same payload is safe and the request
+        is retried like a read on a network error, 429 or 5xx.
 
         ``days_payload`` keys must be ISO-format date strings (``date.isoformat()``),
         not ``date`` objects — the payload is serialised directly to JSON::
@@ -1504,11 +1101,16 @@ class PlannerModule:
                 The endpoint still answers 202 in that case and nothing is saved for
                 the rejected day (e.g. a ``planDayDietItemId`` that is not a UUID v1).
         """
+        if not isinstance(days_payload, dict) or not all(isinstance(key, str) for key in days_payload):
+            raise FitatuValidationError(
+                f"days_payload must map 'YYYY-MM-DD' strings to day payloads, got {days_payload!r:.100}"
+            )
         response = self._client.request(
             "POST",
-            f"/diet-plan/{user_id}/days",
+            f"/diet-plan/{validate_numeric_id(user_id, 'user_id')}/days",
             json_data=days_payload,
             params={"synchronous": "true"} if synchronous else None,
+            idempotent=True,
         )
         if isinstance(response, list):
             rejected = [row for row in response if isinstance(row, dict) and row.get("errorMessage")]
@@ -1517,87 +1119,77 @@ class PlannerModule:
                 raise FitatuPlannerSyncError(f"Planner sync rejected: {details}", results=response)
         return response
 
-    def get_day_revisions(self, user_id: str, day: date) -> list[str]:
+    def get_day_revisions(self, user_id: str, day: date | str) -> list[str]:
         """Return the day's revision ids, newest first.
 
         Every accepted sync adds one, so comparing this list with a previously seen
         one is a cheap way to notice changes made elsewhere (e.g. on the phone)
         without downloading the whole day.
         """
-        data = self._client.request("GET", f"/diet-plan/{user_id}/days/{day.isoformat()}/revisions")
+        uid = validate_numeric_id(user_id, "user_id")
+        data = self._client.request("GET", f"/diet-plan/{uid}/days/{as_date(day).isoformat()}/revisions")
         return [str(rev) for rev in data] if isinstance(data, list) else []
 
     def sync_single_day(
         self,
         user_id: str,
-        day: date,
-        day_payload: dict[str, Any],
+        day: date | str,
         *,
-        synchronous: bool = False,
+        day_payload: dict[str, Any],
+        synchronous: bool = True,
     ) -> Any:
         """Sync a single day snapshot."""
+        day = as_date(day)
         logger.debug("sync_single_day user=%s day=%s", user_id, day)
         return self.sync_days(user_id, {day.isoformat(): day_payload}, synchronous=synchronous)
 
     def move_day_item(
         self,
         user_id: str,
-        from_day: date,
+        from_day: date | str,
         *,
         from_meal_type: str,
         item_id: str | int,
-        to_day: date | None = None,
+        to_day: date | str | None = None,
         to_meal_type: str | None = None,
-        synchronous: bool = True,
     ) -> dict[str, Any]:
-        """Move an item by syncing deletedAt marker + copied item.
+        """Move a row to another meal and/or day: delete it and add a copy, in one sync.
 
-        Searches all meal buckets when the item is not found in ``from_meal_type``
-        (cross-meal fallback). Live-tested 2026-04-22.
+        ``item_id`` is the row's ``planDayDietItemId`` (found in any meal); a ``productId``
+        works only when exactly one row of ``from_meal_type`` has it. ``to_meal_type``
+        defaults to the row's meal and must exist on the target day; that is checked
+        before anything is sent. ``ok`` is True when a re-read shows the copy (``rowId``)
+        on the target day and the original gone.
         """
-        target_day = to_day or from_day
-        from_meal_key = self.normalize_meal_key(from_meal_type)
-        to_meal_key = self.normalize_meal_key(to_meal_type or from_meal_type)
+        from_day = as_date(from_day, "from_day")
+        target_day = from_day if to_day is None else as_date(to_day, "to_day")
 
-        source_snapshot = self.get_day(user_id, from_day)
-        source_payload = self._build_day_sync_payload(source_snapshot)
-        source_item = self._find_item_in_day_payload(source_payload, from_meal_key, item_id, any_meal=True)
-        if source_item is None:
-            raise FitatuApiError(f"item not found in meal: {from_meal_type}")
+        source_day = self.get_day(user_id, from_day)
+        source_meal_key, source_item = self._find_row(source_day, item_id, meal_type=from_meal_type)
+        target = source_day if target_day == from_day else self.get_day(user_id, target_day)
+        to_meal_key = self._meal(target, to_meal_type or source_meal_key)[0]
 
-        moved_item = dict(source_item)
-        moved_item["planDayDietItemId"] = str(uuid.uuid1())
-        moved_item["updatedAt"] = self._now_timestamp()
-        moved_item.pop("deletedAt", None)
-        delete_marker = self._deleted_item_marker(source_item)
+        moved_item = {key: value for key, value in source_item.items() if key != "deletedAt"}
+        moved_item["planDayDietItemId"] = _new_row_id()
+        delete_marker = self._mark_deleted(source_item)
 
-        days_payload: dict[str, Any] = {}
-        if target_day == from_day:
-            days_payload[from_day.isoformat()] = {
-                "dietPlan": {
-                    from_meal_key: {"items": [delete_marker]},
-                    to_meal_key: {"items": [moved_item]},
-                }
-            }
-        else:
-            days_payload[from_day.isoformat()] = {
-                "dietPlan": {from_meal_key: {"items": [delete_marker]}}
-            }
-            days_payload[target_day.isoformat()] = {
-                "dietPlan": {to_meal_key: {"items": [moved_item]}}
-            }
+        days_payload: dict[str, Any] = {from_day.isoformat(): {"dietPlan": {source_meal_key: {"items": [delete_marker]}}}}
+        target_plan = days_payload.setdefault(target_day.isoformat(), {"dietPlan": {}})["dietPlan"]
+        target_plan.setdefault(to_meal_key, {"items": []})["items"].append(moved_item)
 
-        sync_response = self.sync_days(user_id, days_payload, synchronous=synchronous)
+        sync_response = self.sync_days(user_id, days_payload)
+        source_after = self.get_day(user_id, from_day)
+        target_after = source_after if target_day == from_day else self.get_day(user_id, target_day)
+        removed_id = str(source_item.get("planDayDietItemId"))
         return {
-            "ok": True,
-            "experimental": True,
-            "liveTested": True,
+            "ok": not self._has_row(source_after, removed_id) and self._has_row(target_after, moved_item["planDayDietItemId"]),
+            "rowId": moved_item["planDayDietItemId"],
             "operation": "move_day_item",
             "fromDate": from_day.isoformat(),
             "toDate": target_day.isoformat(),
-            "fromMeal": from_meal_key,
+            "fromMeal": source_meal_key,
             "toMeal": to_meal_key,
-            "removedId": source_item.get("planDayDietItemId"),
+            "removedId": removed_id,
             "addedItem": moved_item,
             "deleteMarker": delete_marker,
             "syncPayload": days_payload,
@@ -1607,7 +1199,7 @@ class PlannerModule:
     def replace_day_item_with_custom_item(
         self,
         user_id: str,
-        day: date,
+        day: date | str,
         *,
         meal_type: str,
         item_id: str | int,
@@ -1617,295 +1209,62 @@ class PlannerModule:
         fat_g: float | int,
         carbs_g: float | int,
         source: str = "API",
-        synchronous: bool = True,
     ) -> dict[str, Any]:
-        """Replace item with a new CUSTOM_ITEM in one sync payload.
+        """Replace a row with a new custom row (delete + add) in one sync.
 
-        Searches all meal buckets when the item is not found in ``meal_type``
-        (cross-meal fallback). Live-tested 2026-04-22.
+        ``item_id`` is the row's ``planDayDietItemId`` (found in any meal); a ``productId``
+        works only when exactly one row of ``meal_type`` has it. The new row keeps the old
+        one's ``eaten``. ``ok`` is True when a re-read shows the new row (``rowId``) and the
+        old one gone.
         """
-        meal_key = self.normalize_meal_key(meal_type)
-        planner_day = self.get_day(user_id, day)
-        day_payload = self._build_day_sync_payload(planner_day)
-        source_item = self._find_item_in_day_payload(day_payload, meal_key, item_id, any_meal=True)
-        if source_item is None:
-            raise FitatuApiError(f"item not found in meal: {meal_type}")
-
-        delete_marker = self._deleted_item_marker(source_item)
+        day = as_date(day)
         replacement = self._custom_item_from_values(
-            name=name,
-            calories=calories,
-            protein_g=protein_g,
-            fat_g=fat_g,
-            carbs_g=carbs_g,
-            source=source,
+            name=name, calories=calories, protein_g=protein_g, fat_g=fat_g, carbs_g=carbs_g, source=source
         )
-        days_payload = {
-            day.isoformat(): {
-                "dietPlan": {
-                    meal_key: {"items": [delete_marker, replacement]}
-                }
-            }
-        }
-        sync_response = self.sync_days(user_id, days_payload, synchronous=synchronous)
+        source_meal_key, source_item = self._find_row(self.get_day(user_id, day), item_id, meal_type=meal_type)
+        replacement["eaten"] = bool(source_item.get("eaten", False))  # a row the user ate stays eaten
+
+        delete_marker = self._mark_deleted(source_item)
+        days_payload = {day.isoformat(): {"dietPlan": {source_meal_key: {"items": [delete_marker, replacement]}}}}
+        sync_response = self.sync_days(user_id, days_payload)
+        after = self.get_day(user_id, day)
+        removed_id = str(source_item.get("planDayDietItemId"))
         return {
-            "ok": True,
-            "experimental": True,
-            "liveTested": True,
+            "ok": not self._has_row(after, removed_id) and self._has_row(after, replacement["planDayDietItemId"]),
+            "rowId": replacement["planDayDietItemId"],
             "operation": "replace_day_item_with_custom_item",
             "date": day.isoformat(),
-            "meal": meal_key,
-            "removedId": source_item.get("planDayDietItemId"),
+            "meal": source_meal_key,
+            "removedId": removed_id,
             "replacementItem": replacement,
             "deleteMarker": delete_marker,
             "syncPayload": days_payload,
             "syncResponse": sync_response,
         }
 
-    def remove_day_item_via_snapshot(
-        self,
-        user_id: str,
-        day: date,
-        meal_key: str,
-        item_id: str | int,
-    ) -> dict[str, Any]:
-        """Remove a planner item by syncing a trimmed day snapshot."""
-        meal_key = self.normalize_meal_key(meal_key)
-        _, day_payload, removed_item = self._get_day_retrying_for_item(
-            user_id, day, meal_key, item_id, any_meal=True,
-        )
-
-        diet_plan = self._as_dict(day_payload.get("dietPlan"))
-        if diet_plan is None:
-            raise FitatuApiError("dietPlan not available in planner day response")
-
-        if removed_item is None:
-            meal_bucket = self._as_dict(diet_plan.get(meal_key))
-            before_count = len(self._as_dict_list((meal_bucket or {}).get("items")))
-            return {
-                "ok": False,
-                "meal": meal_key,
-                "beforeCount": before_count,
-                "afterCount": before_count,
-                "removedId": None,
-                "removedIdAbsentAfterSync": False,
-                "countDecreased": False,
-                "cleanupMode": "none",
-                "removed": None,
-                "syncResponse": None,
-            }
-
-        # Pop the item from whichever bucket it lives in.
-        before_count = 0
-        for bucket_raw in diet_plan.values():
-            bucket = self._as_dict(bucket_raw)
-            if bucket is None:
-                continue
-            items = self._as_dict_list(bucket.get("items"))
-            before_count += len(items)
-            for idx in range(len(items) - 1, -1, -1):
-                if str(items[idx].get("planDayDietItemId")) == str(item_id) or str(items[idx].get("productId")) == str(item_id):
-                    items.pop(idx)
-                    bucket["items"] = items
-                    break
-
-        day_payload["dietPlan"] = self._compact_diet_plan_for_sync(diet_plan)
-        sync_response = self.sync_single_day(user_id, day, day_payload)
-
-        # Compare the whole day on both sides: the item may sit in another meal
-        # (any_meal=True above) and before_count already spans every bucket.
-        reloaded_day = self.get_day(user_id, day)
-        reloaded_diet = self._as_dict(reloaded_day.get("dietPlan")) or {}
-        reloaded_items = [
-            item
-            for bucket in reloaded_diet.values()
-            for item in self._as_dict_list((self._as_dict(bucket) or {}).get("items"))
-        ]
-        after_count = len(reloaded_items)
-
-        removed_id = str(removed_item.get("planDayDietItemId"))
-        reloaded_ids = {
-            str(reloaded_item.get("planDayDietItemId"))
-            for reloaded_item in reloaded_items
-            if reloaded_item.get("planDayDietItemId") is not None
-        }
-        removed_id_absent = bool(removed_id and removed_id not in reloaded_ids)
-        count_decreased = after_count < before_count
-        ok = removed_id_absent or count_decreased
-
-        return {
-            "ok": ok,
-            "meal": meal_key,
-            "beforeCount": before_count,
-            "afterCount": after_count,
-            "removedId": removed_id,
-            "removedIdAbsentAfterSync": removed_id_absent,
-            "countDecreased": count_decreased,
-            "cleanupMode": "removed" if ok else "none",
-            "removed": removed_item,
-            "syncResponse": sync_response,
-        }
-
-    def soft_remove_day_item_via_snapshot(
-        self,
-        user_id: str,
-        day: date,
-        meal_key: str,
-        item_id: str | int,
-        *,
-        soft_delete_quantity: float = 0.01,
-        mark_invisible: bool = False,
-        use_deleted_at: bool = True,
-    ) -> dict[str, Any]:
-        """Soft-remove a planner item by syncing the full day snapshot back."""
-        meal_key = self.normalize_meal_key(meal_key)
-        _, day_payload, target_item = self._get_day_retrying_for_item(
-            user_id, day, meal_key, item_id, any_meal=True,
-        )
-
-        diet_plan = self._as_dict(day_payload.get("dietPlan"))
-        if diet_plan is None:
-            raise FitatuApiError("dietPlan not available in planner day response")
-
-        meal_bucket = self._as_dict(diet_plan.get(meal_key))
-        if meal_bucket is None:
-            raise FitatuApiError(f"meal not found in day payload: {meal_key}")
-
-        items_raw = meal_bucket.get("items")
-        items = self._as_dict_list(items_raw)
-        if not isinstance(items_raw, list):
-            raise FitatuApiError("meal items are not available")
-
-        before_count = len(items)
-
-        if target_item is None:
-            return {
-                "ok": False,
-                "meal": meal_key,
-                "beforeCount": before_count,
-                "afterCount": before_count,
-                "removedId": None,
-                "removedIdAbsentAfterSync": False,
-                "countDecreased": False,
-                "cleanupMode": "none",
-                "useDeletedAt": use_deleted_at,
-                "deletedAt": None,
-                "removed": None,
-                "syncResponse": None,
-            }
-
-        deleted_at = None
-        if use_deleted_at:
-            # Frontend-compatible deletion marker accepted by backend for API-sourced items.
-            deleted_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            target_item["deletedAt"] = deleted_at
-
-        target_item["measureQuantity"] = float(soft_delete_quantity)
-        if mark_invisible:
-            target_item["visible"] = False
-
-        sync_response = self.sync_single_day(user_id, day, day_payload)
-
-        # The target may live in another meal (any_meal=True), so look at the whole day.
-        before_count = sum(
-            len(self._as_dict_list((self._as_dict(bucket) or {}).get("items"))) for bucket in diet_plan.values()
-        )
-        reloaded_day = self.get_day(user_id, day)
-        reloaded_diet = self._as_dict(reloaded_day.get("dietPlan")) or {}
-        reloaded_items = [
-            item
-            for bucket in reloaded_diet.values()
-            for item in self._as_dict_list((self._as_dict(bucket) or {}).get("items"))
-        ]
-        after_count = len(reloaded_items)
-
-        removed_id = str(target_item.get("planDayDietItemId"))
-        reloaded_target = None
-        for reloaded_item in reloaded_items:
-            if str(reloaded_item.get("planDayDietItemId")) == removed_id:
-                reloaded_target = reloaded_item
-                break
-
-        removed_id_absent = reloaded_target is None
-        count_decreased = after_count < before_count
-        target_visible = reloaded_target.get("visible") if reloaded_target is not None else None
-        target_quantity = float(reloaded_target.get("measureQuantity") or 0) if reloaded_target is not None else 0.0
-        reloaded_deleted_at = reloaded_target.get("deletedAt") if reloaded_target is not None else None
-        soft_deleted_via_visibility_or_qty = bool(
-            reloaded_target is not None
-            and (target_visible is False or target_quantity <= float(soft_delete_quantity) + 1e-9)
-        )
-        ok = bool(removed_id_absent or reloaded_deleted_at is not None or soft_deleted_via_visibility_or_qty)
-
-        cleanup_mode = "none"
-        if removed_id_absent:
-            cleanup_mode = "removed"
-        elif reloaded_deleted_at is not None:
-            cleanup_mode = "deleted_at"
-        elif soft_deleted_via_visibility_or_qty:
-            cleanup_mode = "soft_deleted"
-
-        return {
-            "ok": ok,
-            "meal": meal_key,
-            "beforeCount": before_count,
-            "afterCount": after_count,
-            "removedId": removed_id,
-            "removedIdAbsentAfterSync": removed_id_absent,
-            "countDecreased": count_decreased,
-            "cleanupMode": cleanup_mode,
-            "softDeleteQuantity": soft_delete_quantity if ok else None,
-            "markInvisible": mark_invisible,
-            "useDeletedAt": use_deleted_at,
-            "deletedAt": reloaded_deleted_at or deleted_at,
-            "removed": target_item,
-            "syncResponse": sync_response,
-        }
-
     def classify_day_item_for_removal(
         self,
         user_id: str,
-        day: date,
-        meal_key: str,
+        day: date | str,
+        *,
+        meal_type: str,
         item_id: str | int,
     ) -> dict[str, Any]:
-        """Classify planner item into removal strategy buckets.
-
-        The classification is runtime-shape-based, not intent-based. In practice this
-        means the current live backend may classify rows differently than their
-        creation story would suggest. For example, a `RECIPE` row may still resolve to
-        `normal_item`, while a `CUSTOM_ITEM` created through an API quick-add flow may
-        resolve to `custom_recipe_item` if it looks like a serving-sized API row.
-
-        Buckets:
-        - ``normal_item``: products/search-based planner rows
-        - ``custom_add_item``: manual custom rows created in planner
-        - ``custom_recipe_item``: recipe-like custom rows (serving-like quantity)
+        """Report which kind of row ``item_id`` is (``normal_item``, ``custom_add_item``,
+        ``custom_recipe_item``). Every kind is deleted the same way; the kind is only a
+        filter for :meth:`remove_day_items_by_kind`. A row that is not on the day raises
+        FitatuNotFoundError listing the day's rows.
         """
-        meal_key = self.normalize_meal_key(meal_key)
-        _, _, target = self._get_day_retrying_for_item(
-            user_id, day, meal_key, item_id, any_meal=True,
-        )
-
-        if target is None:
-            return {
-                "found": False,
-                "requestedItemId": str(item_id),
-                "resolvedKind": "normal_item",
-                "reason": "item_not_found_defaulting_to_normal",
-                "meal": meal_key,
-                "item": None,
-            }
-
-        resolved_kind, reason = self._resolve_item_kind(target)
-
+        day = as_date(day)
+        actual_meal, row = self._find_row(self.get_day(user_id, day), item_id, meal_type=meal_type)
+        resolved_kind, reason = self._resolve_item_kind(row)
         return {
             "found": True,
             "requestedItemId": str(item_id),
             "resolvedKind": resolved_kind,
             "reason": reason,
-            "meal": meal_key,
-            "item": target,
+            "meal": actual_meal,
+            "item": row,
         }
 
     @staticmethod
@@ -1933,334 +1292,248 @@ class PlannerModule:
     def list_day_items_for_removal(
         self,
         user_id: str,
-        day: date,
+        day: date | str,
         *,
-        meal_key: str | None = None,
+        meal_type: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Return day items enriched with removal kind metadata.
-
-        This is designed for deterministic deletion workflows that first read the full
-        day snapshot and then apply per-item strategies based on item type.
-        """
-        planner_day = self.get_day(user_id, day)
-        day_payload = self._build_day_sync_payload(planner_day)
-        diet_plan = self._as_dict(day_payload.get("dietPlan"))
-        if diet_plan is None:
-            raise FitatuApiError("dietPlan not available in planner day response")
-
-        selected_meal: str | None = None
-        if meal_key is not None:
-            selected_meal = self.normalize_meal_key(meal_key)
-            if self._as_dict(diet_plan.get(selected_meal)) is None:
-                raise FitatuApiError(f"meal not found in day payload: {meal_key}")
+        """Return the day's rows (optionally one meal) with their removal kind."""
+        planner_day = self.get_day(user_id, as_date(day))
+        self._diet_plan(planner_day)
+        selected_meal = self._meal(planner_day, meal_type)[0] if meal_type is not None else None
 
         rows: list[dict[str, Any]] = []
-        for current_meal_key, meal_raw in diet_plan.items():
+        for current_meal_key, item in self._iter_rows(planner_day):
             if selected_meal is not None and current_meal_key != selected_meal:
                 continue
-            meal_bucket = self._as_dict(meal_raw)
-            if meal_bucket is None:
-                continue
-            items = self._as_dict_list(meal_bucket.get("items"))
-            for item in items:
-                resolved_kind, reason = self._resolve_item_kind(item)
-                rows.append(
-                    {
-                        "meal": current_meal_key,
-                        "itemId": str(item.get("planDayDietItemId") or ""),
-                        "productId": item.get("productId"),
-                        "foodType": item.get("foodType"),
-                        "source": item.get("source"),
-                        "resolvedKind": resolved_kind,
-                        "reason": reason,
-                        "item": item,
-                    }
-                )
+            resolved_kind, reason = self._resolve_item_kind(item)
+            rows.append(
+                {
+                    "meal": current_meal_key,
+                    "itemId": str(item.get("planDayDietItemId") or ""),
+                    "productId": item.get("productId"),
+                    "foodType": item.get("foodType"),
+                    "source": item.get("source"),
+                    "resolvedKind": resolved_kind,
+                    "reason": reason,
+                    "item": item,
+                }
+            )
         return rows
 
     def remove_day_items_by_kind(
         self,
         user_id: str,
-        day: date,
+        day: date | str,
         *,
         item_kind: str,
-        meal_key: str | None = None,
+        meal_type: str | None = None,
+        all_meals: bool = False,
+        row_ids: list[str] | None = None,
         max_items: int | None = None,
-        delete_all_related_meals: bool = False,
-        use_aggressive_soft_delete: bool = True,
-        max_soft_delete_retries: int = 2,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Remove items from a day using item-kind-aware strategy selection.
+        """Delete every row of one kind (or ``auto`` for all) in one meal or the whole day.
 
-        This method reads the day snapshot once, selects matching rows by kind and
-        optional meal filter, then removes them one-by-one with per-item strategy.
+        The scope is explicit: pass ``meal_type``, or ``all_meals=True`` for every meal.
+        ``row_ids`` narrows the targets to those ``planDayDietItemId`` values (e.g. the rows
+        a caller added itself), ``max_items`` caps them. A requested id that is not a
+        target (not on the day, of another kind or meal, or past ``max_items``) is listed
+        in ``missingRowIds`` and makes ``ok`` False. With ``dry_run=True`` nothing is
+        sent and the result lists the ``targets``. Otherwise all targets go out in one
+        sync and the day is re-read to confirm each is gone.
         """
+        day = as_date(day)
         requested_kind = (item_kind or "").strip().lower()
         valid_kinds = {"normal_item", "custom_add_item", "custom_recipe_item", "auto"}
         if requested_kind not in valid_kinds:
-            raise FitatuApiError(
-                "item_kind must be one of: auto, normal_item, custom_add_item, custom_recipe_item"
+            raise FitatuValidationError(
+                f"item_kind must be one of: auto, normal_item, custom_add_item, custom_recipe_item; got {item_kind!r}"
             )
-        logger.debug("remove_by_kind user=%s day=%s kind=%s meal=%s", user_id, day, requested_kind, meal_key)
-        candidates = self.list_day_items_for_removal(user_id, day, meal_key=meal_key)
-        targets: list[dict[str, Any]] = []
-        for row in candidates:
-            row_kind = str(row.get("resolvedKind") or "normal_item")
-            if requested_kind != "auto" and row_kind != requested_kind:
-                continue
-            if not str(row.get("itemId") or "").strip():
-                continue
-            targets.append(row)
-
+        if meal_type is None and not all_meals:
+            raise FitatuValidationError("pass meal_type for one meal, or all_meals=True for the whole day")
+        if meal_type is not None and all_meals:
+            raise FitatuValidationError("pass meal_type or all_meals=True, not both")
         if max_items is not None:
-            targets = targets[: max(0, int(max_items))]
+            validate_non_negative_int(max_items, "max_items")
+        logger.debug("remove_by_kind user=%s day=%s kind=%s meal=%s", user_id, day, requested_kind, meal_type)
+        wanted_ids = None if row_ids is None else {str(row_id) for row_id in row_ids}
+        targets = [
+            row
+            for row in self.list_day_items_for_removal(user_id, day, meal_type=meal_type)
+            if row["itemId"]
+            and requested_kind in {"auto", row["resolvedKind"]}
+            and (wanted_ids is None or row["itemId"] in wanted_ids)
+        ][:max_items]
+        targeted_ids = {row["itemId"] for row in targets}
+        missing = [str(row_id) for row_id in row_ids or [] if str(row_id) not in targeted_ids]
+        meal_key = self.normalize_meal_key(meal_type) if meal_type is not None else None
+        if dry_run:
+            return {
+                "ok": not missing,
+                "dryRun": True,
+                "requestedKind": requested_kind,
+                "targetedCount": len(targets),
+                "missingRowIds": missing,
+                "meal": meal_key,
+                "targets": targets,
+            }
 
-        attempts: list[dict[str, Any]] = []
-        removed_count = 0
-        for index, row in enumerate(targets, start=1):
-            row_kind = str(row.get("resolvedKind") or "normal_item")
-            item_id = str(row.get("itemId") or "")
-            meal = str(row.get("meal") or "")
-            result = self.remove_day_item_with_strategy(
-                user_id,
-                day,
-                meal,
-                item_id,
-                item_kind=row_kind,
-                delete_all_related_meals=delete_all_related_meals,
-                use_aggressive_soft_delete=use_aggressive_soft_delete,
-                max_soft_delete_retries=max_soft_delete_retries,
+        sync_response: Any = None
+        still_visible: set[str] = set()
+        if targets:
+            sync_response, still_visible = self._delete_rows(
+                user_id, day, [(row["meal"], row["item"]) for row in targets]
             )
-            ok = self._is_cleanup_ok(result)
-            if ok:
-                removed_count += 1
-            attempts.append(
-                {
-                    "seq": index,
-                    "meal": meal,
-                    "itemId": item_id,
-                    "requestedKind": requested_kind,
-                    "resolvedKind": row_kind,
-                    "ok": ok,
-                    "cleanupMode": result.get("cleanupMode") if isinstance(result, dict) else None,
-                    "result": result,
-                }
-            )
-
-        logger.debug("remove_by_kind done targeted=%d removed=%d failed=%d", len(targets), removed_count, len(targets) - removed_count)
+        attempts = [
+            {
+                "seq": index,
+                "meal": row["meal"],
+                "itemId": row["itemId"],
+                "requestedKind": requested_kind,
+                "resolvedKind": row["resolvedKind"],
+                "ok": row["itemId"] not in still_visible,
+                "cleanupMode": "none" if row["itemId"] in still_visible else "removed",
+            }
+            for index, row in enumerate(targets, start=1)
+        ]
+        removed_count = sum(1 for attempt in attempts if attempt["ok"])
         return {
-            "ok": removed_count == len(targets),
+            "ok": removed_count == len(targets) and not missing,
             "requestedKind": requested_kind,
             "targetedCount": len(targets),
             "removedCount": removed_count,
             "failedCount": len(targets) - removed_count,
-            "meal": self.normalize_meal_key(meal_key) if meal_key is not None else None,
+            "missingRowIds": missing,
+            "meal": meal_key,
             "attempts": attempts,
+            "syncResponse": sync_response,
         }
-
-    @staticmethod
-    def _is_cleanup_ok(result: dict[str, Any] | Any) -> bool:
-        """Return True when a cleanup attempt result dict indicates success."""
-        if not isinstance(result, dict):
-            return bool(result)
-        if "ok" in result:
-            return bool(result.get("ok"))
-        status = str(result.get("status") or "").strip().lower()
-        return status in {"ok", "success"}
-
-    def remove_day_item_with_strategy(
-        self,
-        user_id: str,
-        day: date,
-        meal_key: str,
-        item_id: str | int,
-        *,
-        item_kind: str = "auto",
-        delete_all_related_meals: bool = False,
-        use_aggressive_soft_delete: bool = True,
-        max_soft_delete_retries: int = 2,
-    ) -> dict[str, Any]:
-        """Remove planner item using strategy per item kind.
-
-        Supported ``item_kind``:
-        - ``auto``: infer from planner snapshot
-        - ``normal_item``
-        - ``custom_add_item``
-        - ``custom_recipe_item``
-        """
-        meal_key = self.normalize_meal_key(meal_key)
-        requested_kind = (item_kind or "auto").strip().lower()
-        valid_kinds = {"auto", "normal_item", "custom_add_item", "custom_recipe_item"}
-        if requested_kind not in valid_kinds:
-            raise FitatuApiError(
-                "item_kind must be one of: auto, normal_item, custom_add_item, custom_recipe_item"
-            )
-
-        classification = self.classify_day_item_for_removal(user_id, day, meal_key, item_id)
-        resolved_kind = (
-            classification.get("resolvedKind")
-            if requested_kind == "auto"
-            else requested_kind
-        )
-        if not isinstance(resolved_kind, str):
-            resolved_kind = "normal_item"
-
-        attempts: list[dict[str, Any]] = []
-
-        def run_attempt(step: str, fn: Any) -> tuple[bool, dict[str, Any]]:
-            """Execute one cleanup strategy step and record the result in attempts."""
-            result = fn()
-            ok = self._is_cleanup_ok(result)
-            attempts.append(
-                {
-                    "step": step,
-                    "ok": ok,
-                    "cleanupMode": result.get("cleanupMode") if isinstance(result, dict) else None,
-                    "result": result,
-                }
-            )
-            return ok, cast(dict[str, Any], result) if isinstance(result, dict) else {"raw": result}
-
-        last_result: dict[str, Any] | None = None
-
-        def attempt_snapshot_remove() -> tuple[bool, dict[str, Any]]:
-            """Try removing the item by resyncing the day snapshot without it."""
-            return run_attempt(
-                "snapshot_remove",
-                lambda: self.remove_day_item_via_snapshot(user_id, day, meal_key, item_id),
-            )
-
-        def attempt_soft_deleted_at(step_name: str = "soft_deleted_at") -> tuple[bool, dict[str, Any]]:
-            """Try a soft-delete by setting deletedAt on the item in the snapshot."""
-            return run_attempt(
-                step_name,
-                lambda: self.soft_remove_day_item_via_snapshot(
-                    user_id,
-                    day,
-                    meal_key,
-                    item_id,
-                    mark_invisible=False,
-                    use_deleted_at=True,
-                ),
-            )
-
-        def attempt_soft_aggressive() -> tuple[bool, dict[str, Any]]:
-            """Try an aggressive soft-delete that also marks the item invisible."""
-            if not use_aggressive_soft_delete:
-                attempts.append(
-                    {
-                        "step": "soft_aggressive",
-                        "ok": False,
-                        "cleanupMode": "disabled",
-                        "result": None,
-                    }
-                )
-                return False, {}
-            return run_attempt(
-                "soft_aggressive",
-                lambda: self.soft_remove_day_item_via_snapshot(
-                    user_id,
-                    day,
-                    meal_key,
-                    item_id,
-                    soft_delete_quantity=0.0,
-                    mark_invisible=True,
-                    use_deleted_at=False,
-                ),
-            )
-
-        # deletedAt is how the app itself deletes; the server hides such rows from the
-        # day GET. Leaving a row out of the payload never deletes it (upsert by id).
-        if resolved_kind == "normal_item":
-            for runner in (
-                attempt_soft_deleted_at,
-                attempt_snapshot_remove,
-                attempt_soft_aggressive,
-            ):
-                ok, result = runner()
-                last_result = result
-                if ok:
-                    break
-        elif resolved_kind == "custom_add_item":
-            for runner in (
-                attempt_soft_deleted_at,
-                attempt_snapshot_remove,
-                attempt_soft_aggressive,
-            ):
-                ok, result = runner()
-                last_result = result
-                if ok:
-                    break
-        else:
-            retry_count = max(1, int(max_soft_delete_retries))
-            for idx in range(retry_count):
-                ok, result = attempt_soft_deleted_at(step_name=f"soft_deleted_at_retry_{idx + 1}")
-                last_result = result
-                if ok:
-                    break
-            if not self._is_cleanup_ok(last_result):
-                for runner in (
-                    attempt_soft_aggressive,
-                    attempt_snapshot_remove,
-                ):
-                    ok, result = runner()
-                    last_result = result
-                    if ok:
-                        break
-
-        final_ok = self._is_cleanup_ok(last_result)
-        response: dict[str, Any] = dict(last_result or {})
-        response.update(
-            {
-                "ok": final_ok,
-                "requestedKind": requested_kind,
-                "resolvedKind": resolved_kind,
-                "classification": classification,
-                "attempts": attempts,
-            }
-        )
-        return response
 
     def remove_day_item(
         self,
         user_id: str,
-        day: date,
-        meal_key: str,
-        item_id: str | int,
+        day: date | str,
         *,
-        delete_all_related_meals: bool = False,
-        use_aggressive_soft_delete: bool = True,
-    ) -> Any:
-        """Remove a planner item using automatic kind-based strategy selection.
+        meal_type: str,
+        item_id: str | int,
+    ) -> dict[str, Any]:
+        """Delete a planner row the way the app does (``deletedAt``) and confirm it is gone.
 
-        Returns a dict containing an ``ok`` boolean.  A falsy ``ok`` means all
-        delete strategies were exhausted without backend confirmation — handle
-        this case explicitly rather than assuming the item was removed.
+        Pass the row's ``planDayDietItemId`` as ``item_id`` (it is found in any meal); a
+        ``productId`` is accepted only when exactly one row of ``meal_type`` has it. Check
+        ``ok``: ``False`` means the row was not found (``reason`` is ``item_not_found`` and
+        ``message`` lists the day's rows) or is still there after the sync.
         """
-        logger.debug("remove_day_item user=%s day=%s meal=%s item=%s", user_id, day, meal_key, item_id)
-        return self.remove_day_item_with_strategy(
-            user_id,
-            day,
-            meal_key,
-            item_id,
-            item_kind="auto",
-            delete_all_related_meals=delete_all_related_meals,
-            use_aggressive_soft_delete=use_aggressive_soft_delete,
-            max_soft_delete_retries=2,
-        )
+        day = as_date(day)
+        logger.debug("remove_day_item user=%s day=%s meal=%s item=%s", user_id, day, meal_type, item_id)
+        day_data = self.get_day(user_id, day)
+        found = self._locate_row(day_data, item_id, meal_type=meal_type)
+        return self._remove_row(user_id, day, day_data, found, meal_key=self.normalize_meal_key(meal_type), item_id=item_id)
 
-    def remove_activity_day_item(self, user_id: str, day: date, item_id: str | int) -> Any:
-        """Deprecated: activities have no DELETE route.
+    # ------------------------------------------------------------------
+    # Activities (workouts) travel in the same day sync, under "activities", in the
+    # write shape below (recorded live). The day GET lists them under "activityPlan" in
+    # a longer read shape, which the sync rejects field by field when sent back.
+    # ------------------------------------------------------------------
 
-        The app removes an activity by re-sending it in the day sync ``activities`` list
-        with ``deletedAt`` set.
+    @staticmethod
+    def _find_activity(day_data: dict[str, Any], row_id: str) -> dict[str, Any] | None:
+        return next((a for a in as_dict_list(day_data.get("activityPlan")) if str(a.get("uuid")) == str(row_id)), None)
+
+    @staticmethod
+    def _describe_activities(activities: list[dict[str, Any]]) -> str:
+        return "; ".join(f"{a.get('uuid')} ({a.get('activityName')}, {a.get('energy')} kcal)" for a in activities) or "none"
+
+    def add_activity(
+        self,
+        user_id: str,
+        day: date | str,
+        *,
+        activity_id: int | str,
+        minutes: int,
+        energy: int,
+        row_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Log ``minutes`` of a catalog activity that burned ``energy`` kcal.
+
+        ``activity_id`` comes from ``client.activities.search(phrase)``. The server stores
+        ``energy`` exactly as sent and does not compute it; ``activities.search(phrase,
+        bmr=..., sex=...)`` returns ``energy`` values computed for the user to derive it
+        from. ``row_id`` (a UUID v1) becomes the activity's ``uuid`` and makes a retry
+        safe, as for the add_* rows; one that is already on the day with another activity,
+        energy or duration raises FitatuValidationError instead of overwriting it. The day
+        is re-read: ``ok`` says the activity is there, ``rowId`` is what
+        :meth:`remove_activity` takes.
         """
-        _warn_unsupported_route("remove_activity_day_item", "a day sync with deletedAt on the activity")
-        return self._client.request_first_success(
-            "DELETE",
-            [
-                f"/activity-plan/{user_id}/day/{day.isoformat()}/{item_id}",
-                f"/v2/activity-plan/{user_id}/day/{day.isoformat()}/{item_id}",
-                f"/v3/activity-plan/{user_id}/day/{day.isoformat()}/{item_id}",
-            ],
-        )
+        day = as_date(day)
+        validate_positive_int(minutes, "minutes")
+        validate_positive_int(energy, "energy")
+        activity: dict[str, Any] = {
+            "uuid": _row_id(row_id),
+            "planDayActivityType": 1,
+            "activityId": int(validate_numeric_id(activity_id, "activity_id")),
+            "energy": energy,
+            "simpleMeasure": {"measureId": 1, "value": minutes},  # measure 1 = minutes
+            "advancedMeasures": [],
+            "deletedAt": None,
+        }
+        existing = None if row_id is None else self._find_activity(self.get_day(user_id, day), activity["uuid"])
+        if existing is not None and (
+            str(existing.get("activityId")),
+            existing.get("energy"),
+            [measure.get("value") for measure in as_dict_list(existing.get("simpleMeasures"))],
+        ) != (str(activity["activityId"]), energy, [minutes]):
+            raise FitatuValidationError(
+                f"row_id {activity['uuid']} already belongs to another activity on this day: "
+                f"{self._describe_activities([existing])}. If this add repeats an earlier one, that attempt "
+                "was saved and the activity has changed since: do not add it again. An activity cannot be "
+                "updated: remove it and add it again"
+            )
+        sync_response = self.sync_single_day(user_id, day, day_payload={"activities": [activity]})
+        return {
+            "ok": self._find_activity(self.get_day(user_id, day), activity["uuid"]) is not None,
+            "rowId": activity["uuid"],
+            "addedActivity": activity,
+            "syncResponse": sync_response,
+        }
+
+    def remove_activity(self, user_id: str, day: date | str, *, item_id: str) -> dict[str, Any]:
+        """Delete a logged activity by its ``uuid`` (``item_id``, the ``rowId`` of :meth:`add_activity`).
+
+        Like the app, the activity is re-sent with ``deletedAt``, converted to the write
+        shape, then the day is re-read: ``ok`` says it is gone. An activity that is not on
+        the day is not an error, as for rows: ``ok`` is False, ``reason`` is
+        ``item_not_found`` and ``message`` lists the day's activities.
+        """
+        day = as_date(day)
+        day_data = self.get_day(user_id, day)
+        activity = self._find_activity(day_data, item_id)
+        if activity is None:
+            listing = self._describe_activities(as_dict_list(day_data.get("activityPlan")))
+            return {
+                "ok": False,
+                "rowId": item_id,
+                "reason": "item_not_found",
+                "message": f"activity not found: {item_id!r}; activities on this day: {listing}",
+                "removed": None,
+                "syncResponse": None,
+            }
+        # shortcut: only the first simple measure is carried over; an activity logged with advanced
+        # measures only would be rejected (FitatuPlannerSyncError). Map those if one turns up.
+        measure = next(iter(as_dict_list(activity.get("simpleMeasures"))), {})
+        deleted: dict[str, Any] = {
+            "uuid": activity.get("uuid"),
+            "planDayActivityType": activity.get("planDayActivityType"),
+            "activityId": activity.get("activityId"),
+            "energy": activity.get("energy"),
+            "simpleMeasure": {"measureId": measure.get("measureId"), "value": measure.get("value")},
+            "advancedMeasures": [],
+            "deletedAt": self._now_timestamp(),
+        }
+        sync_response = self.sync_single_day(user_id, day, day_payload={"activities": [deleted]})
+        return {
+            "ok": self._find_activity(self.get_day(user_id, day), str(activity.get("uuid"))) is None,
+            "rowId": activity.get("uuid"),
+            "removed": activity,
+            "syncResponse": sync_response,
+        }

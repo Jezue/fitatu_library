@@ -34,7 +34,7 @@ jobs:
         run: ruff check .
 
       - name: Type check
-        run: mypy src
+        run: mypy src demo.py example.py
 
       - name: Test
         run: pytest --cov=fitatu_api --cov-report=term-missing --cov-report=xml

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fitatu-api"
-version = "0.4.0"
+version = "0.5.0"
 description = "Unofficial Python API client for Fitatu — built for AI agents and automation."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -62,12 +62,19 @@ include = [
   "/docs",
 ]
 
+[tool.hatch.envs.default]
+# The scripts below need the dev tools (ruff, mypy, pytest, build) in hatch's environment.
+features = ["dev"]
+
 [tool.hatch.envs.default.scripts]
-format = "ruff format . && ruff check . --fix"
-lint = "ruff check . && mypy src"
+# Lint fixes only: the code is not kept in ruff format style, and neither CI nor pre-commit checks it.
+format = "ruff check . --fix"
+lint = "ruff check . && mypy src demo.py example.py"
 test = "pytest -q"
 testcov = "pytest -q --cov-report=html"
-typecheck = "mypy src"
+typecheck = "mypy src demo.py example.py"
+# Lint, tests and the package build in one command: hatch run all
+all = ["lint", "test", "python -m build"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

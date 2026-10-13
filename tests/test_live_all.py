@@ -1,141 +1,139 @@
-"""
-Live integration tests against the real Fitatu API.
+"""Live tests against the real Fitatu API, for the account in your session file.
 
-Guarded by FITATU_RUN_LIVE_TESTS=1. All write operations add items and
-clean them up via pytest fixtures (yield-based teardown). No day is cleared
-in bulk; no user profile is permanently modified.
+Skipped unless FITATU_RUN_LIVE_TESTS=1. The session is the one `fitatu-api login` writes
+(~/.fitatu/session.json, or the file in $FITATU_SESSION / $FITATU_SESSION_PATH), loaded
+with FitatuApiClient.from_session(), so refreshed tokens are written back to it.
 
-Required env vars:
-    FITATU_RUN_LIVE_TESTS=1
-    FITATU_SESSION_PATH       Path to a JSON session file
-    FITATU_LIVE_USER_ID       The Fitatu numeric user ID
+What a run changes on the account, and how it is put back:
+
+- Food rows and one activity on FITATU_LIVE_DAY. Each test deletes exactly the rows it
+  added (by row id) and fails when one is left behind; other rows on that day are not
+  touched. A day on or before today is refused.
+- Water on FITATU_LIVE_DAY: changed, then set back to the value read before (a day that
+  had no water entry is left with 0 ml).
+- A body measurement on FITATU_LIVE_MEASUREMENT_DAY, only when that date has none:
+  written, then deleted.
+- The bearer token: test_refresh_access_token gets a new one, which is saved to the
+  session file. Fitatu does not rotate refresh tokens, so the refresh token and older
+  bearer tokens keep working.
+- Recently used foods: logging the catalog product and recipe puts them in the account's
+  recent foods (and first in its own search hits) and raises their use counts. This is
+  not put back.
+
+With FITATU_LIVE_RUN_WRITE_ACCOUNT=1 also:
+
+- the water glass size in settings: changed, then set back to the value read before;
+- a product in Fitatu's shared food catalog and a private recipe: created, then deleted.
 
 Optional env vars:
-    FITATU_LIVE_RECIPE_ID     Recipe ID for add-recipe tests   (default: skipped)
-    FITATU_LIVE_PRODUCT_ID    Known product ID                 (default: searched live)
-    FITATU_LIVE_MEAL_KEY      Meal slot for write tests        (default: snack)
-    FITATU_LIVE_DAY           ISO date for planner tests       (default: a year from today)
-    FITATU_LIVE_MEASUREMENT_DAY  ISO date with no body measurement, used for the
-                              measurement write round trip     (default: 2020-01-01)
-
-Planner tests clear the test meal on FITATU_LIVE_DAY before and after the run, so
-never point it at a day with entries you care about. The default is a day a year
-ahead, which a normal diary does not have.
-    FITATU_LIVE_RUN_WRITE_RECIPE=1   Enable create_recipe test
-    FITATU_LIVE_RUN_WRITE_PRODUCT=1  Enable create_product test
+    FITATU_LIVE_DAY              YYYY-MM-DD after today       (default: a year from today)
+    FITATU_LIVE_MEAL_KEY         meal the write tests use      (default: snack)
+    FITATU_LIVE_PRODUCT_ID       catalog product to log        (default: first PRODUCT hit for "jajko kurze")
+    FITATU_LIVE_RECIPE_ID        catalog recipe to log         (default: first free recipe in the catalog)
+    FITATU_LIVE_MEASUREMENT_DAY  YYYY-MM-DD with no measurement (default: 2020-01-01)
+    FITATU_LIVE_RUN_WRITE_ACCOUNT=1  also run the account writes listed above
 """
 
 from __future__ import annotations
 
 import json
 import os
-import time
 from collections.abc import Generator
 from datetime import date, timedelta
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-from fitatu_api import FitatuApiClient, FitatuApiError, FitatuAuthContext, FitatuLibrary
+from fitatu_api import FitatuApiClient, FitatuApiError, FitatuAuthError, FitatuLibrary, FitatuTools
+from fitatu_api.agent import TOOLS
+from fitatu_api.planner import _new_row_id
 
-# ---------------------------------------------------------------------------
-# Guard & helpers
-# ---------------------------------------------------------------------------
-
-LIVE_TESTS_ENABLED = os.getenv("FITATU_RUN_LIVE_TESTS") == "1"
-
-skip_unless_live = pytest.mark.skipif(
-    not LIVE_TESTS_ENABLED, reason="Set FITATU_RUN_LIVE_TESTS=1 to run"
+pytestmark = pytest.mark.skipif(
+    os.getenv("FITATU_RUN_LIVE_TESTS") != "1", reason="Set FITATU_RUN_LIVE_TESTS=1 to run"
 )
 
 SEARCH_FALLBACK_PHRASE = "jajko kurze"
+TEST_PRODUCT_NAME = "__fitatu_api_live_test_product__"
+TEST_RECIPE_NAME = "__fitatu_api_live_test_recipe__"
 
 
 def _env(key: str, default: str | None = None) -> str | None:
-    value = os.getenv(key, "").strip() or None
-    return value if value is not None else default
+    return os.getenv(key, "").strip() or default
 
 
-def _default_live_day() -> date:
-    # Write tests clear the test meal on this day; keep them away from the real diary.
-    return date.today() + timedelta(days=365)
+def _require_account_writes() -> None:
+    if os.getenv("FITATU_LIVE_RUN_WRITE_ACCOUNT") != "1":
+        pytest.skip("Set FITATU_LIVE_RUN_WRITE_ACCOUNT=1 to change settings and the shared catalog")
 
 
-def _require_env(key: str) -> str:
-    value = _env(key)
-    if not value:
-        pytest.skip(f"Missing required env var: {key}")
-    return value  # type: ignore[return-value]
+def _new_row(added_rows: list[str]) -> str:
+    """A row id for an add, registered for cleanup before the add is sent."""
+    row_id = _new_row_id()
+    added_rows.append(row_id)
+    return row_id
+
+
+def _row_ids(client: FitatuApiClient, user_id: str, day: date) -> set[str]:
+    return {str(row.get("planDayDietItemId")) for row in _all_rows(client, user_id, day)}
+
+
+def _all_rows(client: FitatuApiClient, user_id: str, day: date) -> list[dict[str, Any]]:
+    diet_plan = client.planner.get_day(user_id, day).get("dietPlan") or {}
+    return [row for bucket in diet_plan.values() for row in (bucket or {}).get("items") or []]
+
+
+def _water_ml(client: FitatuApiClient, user_id: str, day: date) -> int:
+    return int(((client.water.get_day(user_id, day) or {}).get("water") or {}).get("waterConsumption") or 0)
+
+
+def _assert_deleted(client: FitatuApiClient, path: str, what: str) -> None:
+    """Fail unless ``GET path`` now answers 404, i.e. the DELETE really removed it."""
+    try:
+        client.request("GET", path)
+    except FitatuApiError as exc:
+        if exc.status_code == 404:
+            return
+        pytest.fail(f"cleanup check failed ({exc}); make sure {what} is deleted", pytrace=False)
+    pytest.fail(f"cleanup failed: {what} is still there after DELETE; delete it by hand", pytrace=False)
+
+
+def _ok(result: dict[str, Any]) -> Any:
+    """The data of a successful FitatuTools.call() result."""
+    json.dumps(result)  # what an agent gets back must be JSON
+    assert result["ok"], result
+    return result["data"]
 
 
 # ---------------------------------------------------------------------------
-# Module-scoped fixtures
+# Fixtures
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module", autouse=True)
-def meal_clean_slate(
-    session_data: dict[str, Any],
-) -> Generator[None, None, None]:
-    """Clear the test meal at the start and end of the module to prevent state leakage."""
-    if not LIVE_TESTS_ENABLED:
-        yield
-        return
-    uid = _env("FITATU_LIVE_USER_ID")
-    if not uid:
-        yield
-        return
-    raw = _env("FITATU_LIVE_DAY")
-    day = date.fromisoformat(raw) if raw else _default_live_day()
-    mk = _env("FITATU_LIVE_MEAL_KEY", "snack") or "snack"
-
-    auth = FitatuAuthContext.from_session_data(session_data)
-    with FitatuApiClient(auth=auth) as c:
-        for kind in ("normal_item", "custom_recipe_item", "custom_add_item"):
-            try:
-                c.planner.remove_day_items_by_kind(uid, day, item_kind=kind, meal_key=mk)
-            except FitatuApiError:
-                pass
-    time.sleep(1)  # Allow API cache to settle after cleanup
-    yield
-    auth2 = FitatuAuthContext.from_session_data(session_data)
-    with FitatuApiClient(auth=auth2) as c:
-        for kind in ("normal_item", "custom_recipe_item", "custom_add_item"):
-            try:
-                c.planner.remove_day_items_by_kind(uid, day, item_kind=kind, meal_key=mk)
-            except FitatuApiError:
-                pass
-
-
 @pytest.fixture(scope="module")
-def session_data() -> dict[str, Any]:
-    if not LIVE_TESTS_ENABLED:
-        pytest.skip("Set FITATU_RUN_LIVE_TESTS=1 to run")
-    session_path = Path(_require_env("FITATU_SESSION_PATH"))
-    if not session_path.exists():
-        pytest.skip(f"Session file does not exist: {session_path}")
-    return json.loads(session_path.read_text(encoding="utf-8"))
-
-
-@pytest.fixture(scope="module")
-def client(session_data: dict[str, Any]) -> Generator[FitatuApiClient, None, None]:
-    auth = FitatuAuthContext.from_session_data(session_data)
-    with FitatuApiClient(auth=auth) as api_client:
+def client() -> Generator[FitatuApiClient, None, None]:
+    try:
+        api_client = FitatuApiClient.from_session()
+    except FitatuAuthError as exc:
+        pytest.skip(str(exc))
+    with api_client:
         yield api_client
 
 
 @pytest.fixture(scope="module")
-def user_id() -> str:
-    return _require_env("FITATU_LIVE_USER_ID")
+def user_id(client: FitatuApiClient) -> str:
+    uid = client.auth.fitatu_user_id
+    if not uid:
+        pytest.skip("The session has no Fitatu user id; run `fitatu-api login`")
+    return uid
 
 
 @pytest.fixture(scope="module")
 def test_date() -> date:
     raw = _env("FITATU_LIVE_DAY")
-    if raw:
-        return date.fromisoformat(raw)
-    return _default_live_day()
+    day = date.fromisoformat(raw) if raw else date.today() + timedelta(days=365)
+    if day <= date.today():
+        pytest.fail(f"FITATU_LIVE_DAY={raw} is not after today; the write tests would change your diary", pytrace=False)
+    return day
 
 
 @pytest.fixture(scope="module")
@@ -148,13 +146,11 @@ def known_product_id(client: FitatuApiClient) -> str:
     explicit = _env("FITATU_LIVE_PRODUCT_ID")
     if explicit:
         return explicit
-    results = client.search_food(SEARCH_FALLBACK_PHRASE, limit=1)
-    if not results:
-        pytest.skip("search_food returned no results; cannot determine known_product_id")
-    food_id = results[0].get("foodId") or results[0].get("id")
-    if not food_id:
-        pytest.skip("Search result missing foodId/id field")
-    return str(food_id)
+    hits = client.search_food(SEARCH_FALLBACK_PHRASE, limit=5)
+    hit = next((row for row in hits if row.get("type") == "PRODUCT" and row.get("foodId")), None)
+    if hit is None:
+        pytest.skip(f"No PRODUCT hit for {SEARCH_FALLBACK_PHRASE!r}; set FITATU_LIVE_PRODUCT_ID")
+    return str(hit["foodId"])
 
 
 @pytest.fixture(scope="module")
@@ -171,13 +167,32 @@ def known_recipe_id(client: FitatuApiClient) -> str:
 
 
 @pytest.fixture(scope="module")
-def facade(session_data: dict[str, Any]) -> FitatuLibrary:
-    return FitatuLibrary(session_data=session_data)
+def facade() -> Generator[FitatuLibrary, None, None]:
+    try:
+        library = FitatuLibrary.from_session()
+    except FitatuAuthError as exc:
+        pytest.skip(str(exc))
+    with library:
+        yield library
 
 
-# ---------------------------------------------------------------------------
-# Function-scoped write+cleanup fixtures
-# ---------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def tools(client: FitatuApiClient) -> FitatuTools:
+    return FitatuTools(client)
+
+
+@pytest.fixture()
+def added_rows(client: FitatuApiClient, user_id: str, test_date: date) -> Generator[list[str], None, None]:
+    """Row ids a test adds on the live day; teardown deletes exactly those and fails if one stays."""
+    row_ids: list[str] = []
+    yield row_ids
+    if row_ids:
+        # Ids the test already removed are reported as missing, which is fine; failed ones are still there.
+        result = client.planner.remove_day_items_by_kind(
+            user_id, test_date, item_kind="auto", all_meals=True, row_ids=row_ids
+        )
+        left = [attempt["itemId"] for attempt in result["attempts"] if not attempt["ok"]]
+        assert not left, f"cleanup failed: delete rows {left} on {test_date} by hand"
 
 
 @pytest.fixture()
@@ -187,7 +202,8 @@ def added_product_item(
     test_date: date,
     meal_key: str,
     known_product_id: str,
-) -> Generator[dict[str, Any], None, None]:
+    added_rows: list[str],
+) -> dict[str, Any]:
     result = client.planner.add_product_to_day_meal(
         user_id,
         test_date,
@@ -195,20 +211,10 @@ def added_product_item(
         product_id=known_product_id,
         measure_id=1,
         measure_quantity=50,
-        source="API",
+        row_id=_new_row(added_rows),
     )
-    assert result.get("ok"), f"Setup: add_product_to_day_meal failed: {result}"
-    time.sleep(1)  # Allow API cache to settle before test reads the item
-    yield result
-    # Use remove_day_items_by_kind — more reliable than per-item removal when
-    # multiple items with the same productId accumulate in the meal.
-    try:
-        client.planner.remove_day_items_by_kind(
-            user_id, test_date, item_kind="normal_item", meal_key=meal_key
-        )
-    except FitatuApiError:
-        pass
-    time.sleep(0.8)  # Allow API cache to expire before next test reads the day
+    assert result["ok"], f"Setup: add_product_to_day_meal failed: {result}"
+    return result
 
 
 @pytest.fixture()
@@ -217,7 +223,8 @@ def added_custom_item(
     user_id: str,
     test_date: date,
     meal_key: str,
-) -> Generator[dict[str, Any], None, None]:
+    added_rows: list[str],
+) -> dict[str, Any]:
     result = client.planner.add_custom_item_to_day_meal(
         user_id,
         test_date,
@@ -227,21 +234,10 @@ def added_custom_item(
         protein_g=1,
         fat_g=0.5,
         carbs_g=1,
-        source="API",
+        row_id=_new_row(added_rows),
     )
-    assert result.get("ok"), f"Setup: add_custom_item_to_day_meal failed: {result}"
-    time.sleep(1)
-    yield result
-    try:
-        client.planner.remove_day_items_by_kind(
-            user_id, test_date, item_kind="custom_recipe_item", meal_key=meal_key
-        )
-        client.planner.remove_day_items_by_kind(
-            user_id, test_date, item_kind="custom_add_item", meal_key=meal_key
-        )
-    except FitatuApiError:
-        pass
-    time.sleep(0.8)
+    assert result["ok"], f"Setup: add_custom_item_to_day_meal failed: {result}"
+    return result
 
 
 @pytest.fixture()
@@ -251,30 +247,24 @@ def added_recipe_item(
     test_date: date,
     meal_key: str,
     known_recipe_id: str,
-) -> Generator[dict[str, Any], None, None]:
+    added_rows: list[str],
+) -> dict[str, Any]:
     result = client.planner.add_recipe_to_day_meal(
         user_id,
         test_date,
         meal_type=meal_key,
         recipe_id=known_recipe_id,
-        hydrate_from_recipe_details=True,
+        row_id=_new_row(added_rows),
     )
-    assert result.get("ok"), f"Setup: add_recipe_to_day_meal failed: {result}"
-    yield result
-    try:
-        client.planner.remove_day_items_by_kind(
-            user_id, test_date, item_kind="custom_recipe_item", meal_key=meal_key
-        )
-    except FitatuApiError:
-        pass
+    assert result["ok"], f"Setup: add_recipe_to_day_meal failed: {result}"
+    return result
 
 
 # ---------------------------------------------------------------------------
-# TestClientReadOnly
+# Client reads
 # ---------------------------------------------------------------------------
 
 
-@skip_unless_live
 class TestClientReadOnly:
     def test_search_food_returns_list(self, client: FitatuApiClient) -> None:
         results = client.search_food("kurczak", limit=3)
@@ -285,7 +275,7 @@ class TestClientReadOnly:
         results = client.search_food("jajko", limit=5)
         assert results
         first = results[0]
-        assert first.get("foodId") or first.get("id"), f"Search result missing foodId/id: {first}"
+        assert first.get("foodId"), f"Search result missing foodId: {first}"
         assert "name" in first, f"Search result missing 'name': {first}"
 
     def test_search_food_pagination(self, client: FitatuApiClient) -> None:
@@ -299,9 +289,7 @@ class TestClientReadOnly:
         assert isinstance(details, dict)
         assert details
 
-    def test_get_product_details_has_measures(
-        self, client: FitatuApiClient, known_product_id: str
-    ) -> None:
+    def test_get_product_details_has_measures(self, client: FitatuApiClient, known_product_id: str) -> None:
         details = client.get_product_details(known_product_id)
         measures = details.get("measures")
         assert isinstance(measures, list), f"Expected 'measures' list, got: {type(measures)}"
@@ -330,123 +318,20 @@ class TestClientReadOnly:
     def test_describe_auth_state(self, client: FitatuApiClient) -> None:
         state = client.describe_auth_state()
         assert isinstance(state, dict)
-        assert "lifecycle_state" in state
-        assert state.get("lifecycle_state") in {
-            "healthy",
-            "token_only",
-            "refresh_only",
-            "relogin_required",
-            "reauth_failed",
-        }
-
-    def test_management_report(self, client: FitatuApiClient) -> None:
-        report = client.management_report()
-        assert isinstance(report, dict)
-        assert "management_report_schema_version" in report
-        assert "lifecycle_state" in report
-        assert "modules" in report
-        assert isinstance(report["modules"], list)
-        assert len(report["modules"]) > 0
+        assert state["has_bearer_token"] is True
 
 
 # ---------------------------------------------------------------------------
-# TestClientUserAndSettings
+# Planner reads
 # ---------------------------------------------------------------------------
 
 
-@skip_unless_live
-class TestClientUserAndSettings:
-    def test_get_user(self, client: FitatuApiClient, user_id: str) -> None:
-        profile = client.get_user(user_id)
-        assert isinstance(profile, dict)
-        assert profile
-
-    def test_get_user_settings(
-        self, client: FitatuApiClient, user_id: str, test_date: date
-    ) -> None:
-        settings = client.get_user_settings(user_id, day=test_date)
-        assert isinstance(settings, dict)
-        assert settings
-
-    def test_get_user_settings_for_day(
-        self, client: FitatuApiClient, user_id: str, test_date: date
-    ) -> None:
-        settings = client.get_user_settings_for_day(user_id, test_date)
-        assert isinstance(settings, dict)
-        assert settings
-
-    def test_get_user_settings_new(self, client: FitatuApiClient, user_id: str) -> None:
-        settings_new = client.get_user_settings_new(user_id)
-        assert isinstance(settings_new, dict)
-        assert settings_new
-
-    def test_get_diet_plan_settings(self, client: FitatuApiClient, user_id: str) -> None:
-        settings = client.get_diet_plan_settings(user_id)
-        assert isinstance(settings, dict)
-        assert settings
-
-    def test_get_water(
-        self, client: FitatuApiClient, user_id: str, test_date: date
-    ) -> None:
-        water = client.get_water(user_id, test_date)
-        assert water is None or isinstance(water, (dict, list))
-
-    def test_get_activities_catalog(self, client: FitatuApiClient) -> None:
-        catalog = client.get_activities_catalog()
-        assert catalog is not None
-        assert isinstance(catalog, (dict, list))
-
-    def test_get_food_tags_recipe(self, client: FitatuApiClient) -> None:
-        tags = client.get_food_tags_recipe()
-        assert tags is not None
-
-
-# ---------------------------------------------------------------------------
-# TestProbeEndpoints
-# ---------------------------------------------------------------------------
-
-
-@skip_unless_live
-class TestProbeEndpoints:
-    def test_probe_known_endpoints_returns_list(
-        self, client: FitatuApiClient, user_id: str, test_date: date
-    ) -> None:
-        results = client.probe_known_endpoints(user_id, test_date)
-        assert isinstance(results, list)
-        assert len(results) > 0
-        for entry in results:
-            assert "method" in entry
-            assert "path" in entry
-            assert "ok" in entry
-
-    def test_probe_majority_succeed(
-        self, client: FitatuApiClient, user_id: str, test_date: date
-    ) -> None:
-        results = client.probe_known_endpoints(user_id, test_date)
-        ok_count = sum(1 for r in results if r.get("ok"))
-        total = len(results)
-        failed = [r for r in results if not r.get("ok")]
-        assert ok_count >= total * 0.75, (
-            f"Only {ok_count}/{total} probes succeeded. Failed: {failed}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# TestPlannerReadOnly
-# ---------------------------------------------------------------------------
-
-
-@skip_unless_live
 class TestPlannerReadOnly:
-    def test_get_day_returns_dict(
-        self, client: FitatuApiClient, user_id: str, test_date: date
-    ) -> None:
+    def test_get_day_returns_dict(self, client: FitatuApiClient, user_id: str, test_date: date) -> None:
         day = client.planner.get_day(user_id, test_date)
         assert isinstance(day, dict)
 
-    def test_get_day_has_diet_plan(
-        self, client: FitatuApiClient, user_id: str, test_date: date
-    ) -> None:
+    def test_get_day_has_diet_plan(self, client: FitatuApiClient, user_id: str, test_date: date) -> None:
         day = client.planner.get_day(user_id, test_date)
         assert "dietPlan" in day, f"'dietPlan' not in day keys: {list(day.keys())}"
         assert isinstance(day["dietPlan"], dict)
@@ -454,20 +339,20 @@ class TestPlannerReadOnly:
     def test_get_meal_returns_dict(
         self, client: FitatuApiClient, user_id: str, test_date: date, meal_key: str
     ) -> None:
-        meal = client.planner.get_meal(user_id, test_date, meal_key)
+        meal = client.planner.get_meal(user_id, test_date, meal_type=meal_key)
         assert isinstance(meal, dict)
 
     def test_list_meal_items_returns_list(
         self, client: FitatuApiClient, user_id: str, test_date: date, meal_key: str
     ) -> None:
-        items = client.planner.list_meal_items(user_id, test_date, meal_key)
+        items = client.planner.list_meal_items(user_id, test_date, meal_type=meal_key)
         assert isinstance(items, list)
 
     def test_find_meal_item_returns_none_for_nonexistent(
         self, client: FitatuApiClient, user_id: str, test_date: date, meal_key: str
     ) -> None:
         result = client.planner.find_meal_item(
-            user_id, test_date, meal_key, "__nonexistent_xyz_9999__"
+            user_id, test_date, meal_type=meal_key, query="__nonexistent_xyz_9999__"
         )
         assert result is None
 
@@ -479,31 +364,11 @@ class TestPlannerReadOnly:
         for row in rows:
             assert "meal" in row
             assert "itemId" in row
-            assert "resolvedKind" in row
-            assert row["resolvedKind"] in {
-                "normal_item",
-                "custom_add_item",
-                "custom_recipe_item",
-            }
-
-    def test_client_get_day_plan(
-        self, client: FitatuApiClient, user_id: str, test_date: date
-    ) -> None:
-        day = client.get_day_plan(user_id, test_date)
-        assert isinstance(day, dict)
-        assert "dietPlan" in day
+            assert row["resolvedKind"] in {"normal_item", "custom_add_item", "custom_recipe_item"}
 
 
-# ---------------------------------------------------------------------------
-# TestPlannerResolveProductMeasure
-# ---------------------------------------------------------------------------
-
-
-@skip_unless_live
 class TestPlannerResolveProductMeasure:
-    def test_resolve_grams(
-        self, client: FitatuApiClient, known_product_id: str
-    ) -> None:
+    def test_resolve_grams(self, client: FitatuApiClient, known_product_id: str) -> None:
         result = client.planner.resolve_product_measure(
             product_id=known_product_id,
             requested_amount=100,
@@ -515,9 +380,7 @@ class TestPlannerResolveProductMeasure:
         assert result.get("measureQuantity") is not None
         assert result.get("strategy") is not None
 
-    def test_resolve_includes_product_id(
-        self, client: FitatuApiClient, known_product_id: str
-    ) -> None:
+    def test_resolve_includes_product_id(self, client: FitatuApiClient, known_product_id: str) -> None:
         result = client.planner.resolve_product_measure(
             product_id=known_product_id,
             requested_amount=50,
@@ -528,19 +391,14 @@ class TestPlannerResolveProductMeasure:
 
 
 # ---------------------------------------------------------------------------
-# TestPlannerAddProduct
+# Planner writes on the live day (every added row is deleted by added_rows)
 # ---------------------------------------------------------------------------
 
 
-@skip_unless_live
 class TestPlannerAddProduct:
-    def test_add_product_returns_ok(self, added_product_item: dict[str, Any]) -> None:
-        assert added_product_item.get("ok") is True
-
     def test_add_product_has_added_item(self, added_product_item: dict[str, Any]) -> None:
-        added = added_product_item.get("addedItem")
-        assert isinstance(added, dict)
-        assert added.get("planDayDietItemId"), "addedItem must have planDayDietItemId"
+        added = added_product_item["addedItem"]
+        assert added["planDayDietItemId"] == added_product_item["rowId"]
         assert added.get("productId") is not None
 
     def test_add_product_appears_in_meal(
@@ -551,14 +409,9 @@ class TestPlannerAddProduct:
         test_date: date,
         meal_key: str,
     ) -> None:
-        added_id = str((added_product_item.get("addedItem") or {}).get("planDayDietItemId") or "")
-        assert added_id
-        items = client.planner.list_meal_items(user_id, test_date, meal_key)
-        found = any(str(i.get("planDayDietItemId")) == added_id for i in items)
-        assert found, (
-            f"Added item {added_id} not found in meal. "
-            f"IDs: {[i.get('planDayDietItemId') for i in items]}"
-        )
+        items = client.planner.list_meal_items(user_id, test_date, meal_type=meal_key)
+        ids = [str(i.get("planDayDietItemId")) for i in items]
+        assert added_product_item["rowId"] in ids, f"Added row not found in meal. IDs: {ids}"
 
     def test_add_search_result_to_day_meal(
         self,
@@ -566,6 +419,7 @@ class TestPlannerAddProduct:
         user_id: str,
         test_date: date,
         meal_key: str,
+        added_rows: list[str],
     ) -> None:
         result = client.planner.add_search_result_to_day_meal(
             user_id,
@@ -574,32 +428,16 @@ class TestPlannerAddProduct:
             phrase=SEARCH_FALLBACK_PHRASE,
             index=0,
             measure_quantity=1,
+            row_id=_new_row(added_rows),
         )
-        assert result.get("ok") is True
-        item_id = str((result.get("addedItem") or {}).get("planDayDietItemId") or "")
-        assert item_id
-        try:
-            client.planner.remove_day_items_by_kind(
-                user_id, test_date, item_kind="normal_item", meal_key=meal_key
-            )
-        except FitatuApiError:
-            pass
+        assert result["ok"] is True
+        assert result["rowId"] in _row_ids(client, user_id, test_date)
 
 
-# ---------------------------------------------------------------------------
-# TestPlannerAddCustomItem
-# ---------------------------------------------------------------------------
-
-
-@skip_unless_live
 class TestPlannerAddCustomItem:
-    def test_add_custom_item_returns_ok(self, added_custom_item: dict[str, Any]) -> None:
-        assert added_custom_item.get("ok") is True
-
     def test_add_custom_item_has_added_item(self, added_custom_item: dict[str, Any]) -> None:
-        added = added_custom_item.get("addedItem")
-        assert isinstance(added, dict)
-        assert added.get("planDayDietItemId")
+        added = added_custom_item["addedItem"]
+        assert added["planDayDietItemId"] == added_custom_item["rowId"]
         assert added.get("name") == "__live_test_custom_item__"
 
     def test_add_custom_item_appears_in_meal(
@@ -610,33 +448,13 @@ class TestPlannerAddCustomItem:
         test_date: date,
         meal_key: str,
     ) -> None:
-        added_id = str((added_custom_item.get("addedItem") or {}).get("planDayDietItemId") or "")
-        time.sleep(0.5)  # Allow eventual consistency to settle
-        items = client.planner.list_meal_items(user_id, test_date, meal_key)
-        found = any(str(i.get("planDayDietItemId")) == added_id for i in items)
-        assert found, f"Custom item {added_id} not found in meal"
+        items = client.planner.list_meal_items(user_id, test_date, meal_type=meal_key)
+        assert any(str(i.get("planDayDietItemId")) == added_custom_item["rowId"] for i in items)
 
 
-# ---------------------------------------------------------------------------
-# TestPlannerAddRecipe
-# ---------------------------------------------------------------------------
-
-
-@skip_unless_live
 class TestPlannerAddRecipe:
-    def test_add_recipe_returns_ok(self, added_recipe_item: dict[str, Any]) -> None:
-        assert added_recipe_item.get("ok") is True
-
-    def test_add_recipe_has_added_item(self, added_recipe_item: dict[str, Any]) -> None:
-        added = added_recipe_item.get("addedItem")
-        assert isinstance(added, dict)
-        assert added.get("planDayDietItemId")
-
-    def test_add_recipe_item_has_recipe_id(
-        self, added_recipe_item: dict[str, Any], known_recipe_id: str
-    ) -> None:
-        added = added_recipe_item.get("addedItem") or {}
-        assert str(added.get("recipeId")) == str(known_recipe_id)
+    def test_add_recipe_item_has_recipe_id(self, added_recipe_item: dict[str, Any], known_recipe_id: str) -> None:
+        assert str(added_recipe_item["addedItem"].get("recipeId")) == str(known_recipe_id)
 
     def test_add_recipe_appears_in_meal(
         self,
@@ -647,21 +465,12 @@ class TestPlannerAddRecipe:
         meal_key: str,
         known_recipe_id: str,
     ) -> None:
-        items = client.planner.list_meal_items(user_id, test_date, meal_key)
-        # Match by recipeId — planDayDietItemId may be reassigned by server
-        matched = next(
-            (i for i in items if str(i.get("recipeId")) == str(known_recipe_id) and i.get("deletedAt") is None),
-            None,
-        )
-        assert matched is not None, f"Recipe {known_recipe_id} not found in meal items: {[i.get('recipeId') for i in items]}"
+        items = client.planner.list_meal_items(user_id, test_date, meal_type=meal_key)
+        matched = next((i for i in items if str(i.get("planDayDietItemId")) == added_recipe_item["rowId"]), None)
+        assert matched is not None, f"Recipe row not found in meal: {[i.get('recipeId') for i in items]}"
+        assert str(matched.get("recipeId")) == str(known_recipe_id)
 
 
-# ---------------------------------------------------------------------------
-# TestPlannerUpdateItem
-# ---------------------------------------------------------------------------
-
-
-@skip_unless_live
 class TestPlannerUpdateItem:
     def test_update_measure_quantity(
         self,
@@ -671,18 +480,10 @@ class TestPlannerUpdateItem:
         test_date: date,
         meal_key: str,
     ) -> None:
-        item_id = str((added_product_item.get("addedItem") or {}).get("planDayDietItemId") or "")
-        assert item_id
-        time.sleep(0.5)  # Allow API cache to settle before update reads back
         result = client.planner.update_day_item(
-            user_id,
-            test_date,
-            meal_type=meal_key,
-            item_id=item_id,
-            measure_quantity=75,
+            user_id, test_date, meal_type=meal_key, item_id=added_product_item["rowId"], measure_quantity=75
         )
-        assert isinstance(result, dict)
-        assert "ok" in result and "after" in result
+        assert result["ok"], result
 
     def test_update_eaten_flag(
         self,
@@ -692,24 +493,12 @@ class TestPlannerUpdateItem:
         test_date: date,
         meal_key: str,
     ) -> None:
-        item_id = str((added_product_item.get("addedItem") or {}).get("planDayDietItemId") or "")
         result = client.planner.update_day_item(
-            user_id,
-            test_date,
-            meal_type=meal_key,
-            item_id=item_id,
-            eaten=True,
+            user_id, test_date, meal_type=meal_key, item_id=added_product_item["rowId"], eaten=True
         )
-        assert isinstance(result, dict)
-        assert "ok" in result and "after" in result
+        assert result["ok"], result
 
 
-# ---------------------------------------------------------------------------
-# TestPlannerRemoveItem
-# ---------------------------------------------------------------------------
-
-
-@skip_unless_live
 class TestPlannerRemoveItem:
     def test_classify_day_item_for_removal(
         self,
@@ -719,249 +508,145 @@ class TestPlannerRemoveItem:
         test_date: date,
         meal_key: str,
     ) -> None:
-        tentative_id = str((added_product_item.get("addedItem") or {}).get("planDayDietItemId") or "")
-        # Server may reassign the client-generated UUID — resolve the real ID from the meal.
-        time.sleep(0.5)
-        live_items = client.planner.list_meal_items(user_id, test_date, meal_key)
-        item_id = tentative_id
-        if live_items and not any(str(i.get("planDayDietItemId")) == tentative_id for i in live_items):
-            # UUID was reassigned; use any active item in the meal
-            active = [i for i in live_items if i.get("deletedAt") is None and float(i.get("measureQuantity") or 0) > 0]
-            if active:
-                item_id = str(active[0].get("planDayDietItemId") or "")
-        if not item_id:
-            pytest.skip("No item found in meal to classify")
         classification = client.planner.classify_day_item_for_removal(
-            user_id, test_date, meal_key, item_id
+            user_id, test_date, meal_type=meal_key, item_id=added_product_item["rowId"]
         )
-        assert isinstance(classification, dict)
-        assert classification.get("found") is True, f"classify returned found=False for id={item_id}: {classification}"
-        assert classification.get("resolvedKind") in {
-            "normal_item",
-            "custom_add_item",
-            "custom_recipe_item",
-        }
-        assert classification.get("item") is not None
+        assert classification["found"] is True
+        assert classification["resolvedKind"] == "normal_item"
+        assert classification["item"] is not None
 
-    def test_remove_product_with_strategy(
+    def test_remove_custom_item(
         self,
-        client: FitatuApiClient,
-        user_id: str,
-        test_date: date,
-        meal_key: str,
-        known_product_id: str,
-    ) -> None:
-        add_result = client.planner.add_product_to_day_meal(
-            user_id,
-            test_date,
-            meal_type=meal_key,
-            product_id=known_product_id,
-            measure_id=1,
-            measure_quantity=10,
-            source="API",
-        )
-        assert add_result.get("ok")
-        item_id = str((add_result.get("addedItem") or {}).get("planDayDietItemId") or "")
-        assert item_id
-        time.sleep(1)
-
-        remove_result = client.planner.remove_day_item_with_strategy(
-            user_id, test_date, meal_key, item_id, item_kind="auto"
-        )
-        assert isinstance(remove_result, dict)
-        # Note: ok=False is expected for normal_item when snapshot removal is unreliable.
-        # We verify the item is actually gone from the meal rather than relying on ok flag.
-        time.sleep(0.5)
-        items_after = client.planner.list_meal_items(user_id, test_date, meal_key)
-        item_still_present = any(
-            str(i.get("planDayDietItemId")) == item_id
-            and float(i.get("measureQuantity") or 1) > 0.05
-            and i.get("deletedAt") is None
-            for i in items_after
-        )
-        assert not item_still_present, (
-            f"Item {item_id} still present after remove_day_item_with_strategy: {remove_result}"
-        )
-        # Cleanup any residual items
-        try:
-            client.planner.remove_day_items_by_kind(
-                user_id, test_date, item_kind="normal_item", meal_key=meal_key
-            )
-        except FitatuApiError:
-            pass
-        time.sleep(0.8)  # Allow API cache to settle before next test
-
-    def test_remove_custom_item_with_strategy(
-        self,
+        added_custom_item: dict[str, Any],
         client: FitatuApiClient,
         user_id: str,
         test_date: date,
         meal_key: str,
     ) -> None:
-        add_result = client.planner.add_custom_item_to_day_meal(
-            user_id,
-            test_date,
-            meal_type=meal_key,
-            name="__remove_test_item__",
-            calories=5,
-            protein_g=0,
-            fat_g=0,
-            carbs_g=1,
-        )
-        assert add_result.get("ok")
-        item_id = str((add_result.get("addedItem") or {}).get("planDayDietItemId") or "")
-        assert item_id
-        time.sleep(1)
-
-        remove_result = client.planner.remove_day_item_with_strategy(
-            user_id, test_date, meal_key, item_id, item_kind="custom_recipe_item"
-        )
-        assert isinstance(remove_result, dict)
-        # Verify removal by checking item is gone from meal (ok flag may be unreliable)
-        time.sleep(0.5)
-        items_after = client.planner.list_meal_items(user_id, test_date, meal_key)
-        item_still_present = any(
-            str(i.get("planDayDietItemId")) == item_id
-            and i.get("deletedAt") is None
-            for i in items_after
-        )
-        assert not item_still_present, f"Custom item {item_id} still present after removal: {remove_result}"
-        # Cleanup any residual custom items
-        try:
-            client.planner.remove_day_items_by_kind(
-                user_id, test_date, item_kind="custom_recipe_item", meal_key=meal_key
-            )
-            client.planner.remove_day_items_by_kind(
-                user_id, test_date, item_kind="custom_add_item", meal_key=meal_key
-            )
-        except FitatuApiError:
-            pass
-        time.sleep(0.8)  # Allow API cache to settle before next test
+        row_id = added_custom_item["rowId"]
+        result = client.planner.remove_day_item(user_id, test_date, meal_type=meal_key, item_id=row_id)
+        assert result["ok"], result
+        assert row_id not in _row_ids(client, user_id, test_date)
 
     def test_remove_day_item(
         self,
+        added_product_item: dict[str, Any],
+        client: FitatuApiClient,
+        user_id: str,
+        test_date: date,
+        meal_key: str,
+    ) -> None:
+        row_id = added_product_item["rowId"]
+        result = client.planner.remove_day_item(user_id, test_date, meal_type=meal_key, item_id=row_id)
+        assert result["ok"], result
+        assert row_id not in _row_ids(client, user_id, test_date)
+
+
+class TestFullCycleAddRemove:
+    """Add a product, a custom row and a recipe, then remove the three by row id in one call."""
+
+    def test_full_cycle(
+        self,
         client: FitatuApiClient,
         user_id: str,
         test_date: date,
         meal_key: str,
         known_product_id: str,
+        known_recipe_id: str,
+        added_rows: list[str],
     ) -> None:
-        add_result = client.planner.add_product_to_day_meal(
-            user_id,
-            test_date,
-            meal_type=meal_key,
-            product_id=known_product_id,
-            measure_id=1,
-            measure_quantity=5,
-            source="API",
+        planner = client.planner
+        added = [
+            planner.add_product_to_day_meal(
+                user_id, test_date, meal_type=meal_key, product_id=known_product_id,
+                measure_id=1, measure_quantity=100, row_id=_new_row(added_rows),
+            ),
+            planner.add_custom_item_to_day_meal(
+                user_id, test_date, meal_type=meal_key, name="__full_cycle_test__",
+                calories=10, protein_g=1, fat_g=0, carbs_g=1, row_id=_new_row(added_rows),
+            ),
+            planner.add_recipe_to_day_meal(
+                user_id, test_date, meal_type=meal_key, recipe_id=known_recipe_id, row_id=_new_row(added_rows),
+            ),
+        ]
+        assert all(result["ok"] for result in added), added
+        assert set(added_rows) <= _row_ids(client, user_id, test_date)
+
+        removed = planner.remove_day_items_by_kind(
+            user_id, test_date, item_kind="auto", meal_type=meal_key, row_ids=list(added_rows)
         )
-        assert add_result.get("ok")
-        tentative_id = str((add_result.get("addedItem") or {}).get("planDayDietItemId") or "")
-        time.sleep(1)
-        # Resolve real item ID in case server reassigned the UUID
-        live_items = client.planner.list_meal_items(user_id, test_date, meal_key)
-        item_id = tentative_id
-        if live_items and not any(str(i.get("planDayDietItemId")) == tentative_id for i in live_items):
-            active = [i for i in live_items if i.get("deletedAt") is None and float(i.get("measureQuantity") or 0) > 0]
-            if active:
-                item_id = str(active[0].get("planDayDietItemId") or "")
-        result = client.planner.remove_day_item(user_id, test_date, meal_key, item_id)
-        assert isinstance(result, dict)
-        # Verify removal by checking item is gone (ok flag unreliable when UUID was reassigned)
-        time.sleep(0.5)
-        items_after = client.planner.list_meal_items(user_id, test_date, meal_key)
-        item_still_present = any(
-            str(i.get("planDayDietItemId")) == item_id
-            and i.get("deletedAt") is None
-            and float(i.get("measureQuantity") or 0) > 0.05
-            for i in items_after
+        assert removed["ok"], removed
+        assert not set(added_rows) & _row_ids(client, user_id, test_date)
+
+
+class TestEatenFlagSurvivesSync:
+    def test_adding_an_item_keeps_eaten_on_existing_items(
+        self,
+        client: FitatuApiClient,
+        user_id: str,
+        test_date: date,
+        meal_key: str,
+        added_product_item: dict[str, Any],
+        added_rows: list[str],
+    ) -> None:
+        row_id = added_product_item["rowId"]
+        client.planner.update_day_item(user_id, test_date, meal_type=meal_key, item_id=row_id, eaten=True)
+        client.planner.add_custom_item_to_day_meal(
+            user_id, test_date, meal_type=meal_key,
+            name="__eaten_regression__", calories=1, protein_g=0, fat_g=0, carbs_g=0,
+            row_id=_new_row(added_rows),
         )
-        assert not item_still_present, f"Item {item_id} still present after remove_day_item: {result}"
-        # Ensure full cleanup
-        try:
-            client.planner.remove_day_items_by_kind(
-                user_id, test_date, item_kind="normal_item", meal_key=meal_key
-            )
-        except FitatuApiError:
-            pass
+        target = next(i for i in _all_rows(client, user_id, test_date) if i.get("planDayDietItemId") == row_id)
+        assert target.get("eaten") is True
 
 
 # ---------------------------------------------------------------------------
-# TestServiceModulesReadOnly
+# Service modules
 # ---------------------------------------------------------------------------
 
 
-@skip_unless_live
 class TestServiceModulesReadOnly:
-    def test_user_settings_get_profile(
-        self, client: FitatuApiClient, user_id: str
-    ) -> None:
+    def test_user_settings_get_profile(self, client: FitatuApiClient, user_id: str) -> None:
         profile = client.user_settings.get_profile(user_id)
         assert isinstance(profile, dict)
         assert profile
 
     def test_user_settings_get(self, client: FitatuApiClient, user_id: str) -> None:
-        settings = client.user_settings.get(user_id)
+        with pytest.warns(DeprecationWarning):
+            settings = client.user_settings.get(user_id)
         assert isinstance(settings, dict)
+        assert settings
 
-    def test_user_settings_get_for_day(
-        self, client: FitatuApiClient, user_id: str, test_date: date
-    ) -> None:
-        settings = client.user_settings.get_for_day(user_id, test_date)
+    def test_user_settings_get_for_day(self, client: FitatuApiClient, user_id: str, test_date: date) -> None:
+        with pytest.warns(DeprecationWarning):
+            settings = client.user_settings.get_for_day(user_id, test_date)
         assert isinstance(settings, dict)
+        assert settings
 
     def test_user_settings_get_new(self, client: FitatuApiClient, user_id: str) -> None:
         settings_new = client.user_settings.get_new(user_id)
         assert isinstance(settings_new, dict)
-
-    def test_user_settings_get_firebase_token(
-        self, client: FitatuApiClient, user_id: str
-    ) -> None:
-        # Result may be None or a token value; verify the call doesn't raise
-        client.user_settings.get_firebase_token(user_id)
+        assert settings_new
 
     def test_diet_plan_get_settings(self, client: FitatuApiClient, user_id: str) -> None:
-        settings = client.diet_plan.get_settings(user_id)
+        with pytest.warns(DeprecationWarning):
+            settings = client.diet_plan.get_settings(user_id)
         assert isinstance(settings, dict)
         assert settings
 
     def test_diet_plan_get_meal_schema(self, client: FitatuApiClient, user_id: str) -> None:
-        schema = client.diet_plan.get_meal_schema(user_id)
+        with pytest.warns(DeprecationWarning):
+            schema = client.diet_plan.get_meal_schema(user_id)
         assert schema is not None
 
-    def test_diet_plan_get_default_meal_schema(
-        self, client: FitatuApiClient, user_id: str
-    ) -> None:
-        schema = client.diet_plan.get_default_meal_schema(user_id)
+    def test_diet_plan_get_default_meal_schema(self, client: FitatuApiClient, user_id: str) -> None:
+        with pytest.warns(DeprecationWarning):
+            schema = client.diet_plan.get_default_meal_schema(user_id)
         assert schema is not None
 
-    def test_water_get_day(
-        self, client: FitatuApiClient, user_id: str, test_date: date
-    ) -> None:
+    def test_water_get_day(self, client: FitatuApiClient, user_id: str, test_date: date) -> None:
         result = client.water.get_day(user_id, test_date)
         assert result is None or isinstance(result, (dict, list))
-
-    def test_water_set_day(
-        self, client: FitatuApiClient, user_id: str, test_date: date
-    ) -> None:
-        before = client.water.get_day(user_id, test_date)
-        original = int(((before or {}).get("water") or {}).get("waterConsumption") or 0)
-        result = client.water.set_day(user_id, test_date, original)
-        assert isinstance(result, dict)
-        after = client.water.get_day(user_id, test_date)
-        assert int(((after or {}).get("water") or {}).get("waterConsumption") or 0) == original
-
-    def test_water_add_intake(
-        self, client: FitatuApiClient, user_id: str, test_date: date
-    ) -> None:
-        before = client.water.get_day(user_id, test_date)
-        original = int(((before or {}).get("water") or {}).get("waterConsumption") or 0)
-        client.water.add_intake(user_id, test_date, 250)
-        after = client.water.get_day(user_id, test_date)
-        added = int(((after or {}).get("water") or {}).get("waterConsumption") or 0)
-        assert added == original + 250
-        # Restore
-        client.water.set_day(user_id, test_date, original)
 
     def test_activities_get_catalog(self, client: FitatuApiClient) -> None:
         catalog = client.activities.get_catalog()
@@ -972,58 +657,39 @@ class TestServiceModulesReadOnly:
         tags = client.resources.get_food_tags_recipe()
         assert tags is not None
 
-    def test_cms_graphql_simple_query(self, client: FitatuApiClient) -> None:
-        result = client.cms.graphql("{ __typename }")
-        assert result is not None
 
-
-# ---------------------------------------------------------------------------
-# TestServiceModulesWrite
-# ---------------------------------------------------------------------------
-
-
-@skip_unless_live
-class TestServiceModulesWrite:
-    def test_update_system_info_roundtrip(
-        self, client: FitatuApiClient, user_id: str
-    ) -> None:
-        result = client.user_settings.update_system_info(
-            user_id,
-            app_version="4.13.1",
-            system_info="FITATU-WEB",
-        )
-        assert isinstance(result, dict)
-
-    def test_update_water_settings_roundtrip(
-        self, client: FitatuApiClient, user_id: str
-    ) -> None:
+class TestWaterOnTheLiveDay:
+    def test_water_set_day(self, client: FitatuApiClient, user_id: str, test_date: date) -> None:
+        original = _water_ml(client, user_id, test_date)
         try:
-            settings_new = client.user_settings.get_new(user_id)
-            current_unit_capacity = int((settings_new.get("waterSettings") or {}).get("unitCapacity") or 250)
-        except FitatuApiError:
-            current_unit_capacity = 250
+            client.water.set_day(user_id, test_date, original + 100)
+            assert _water_ml(client, user_id, test_date) == original + 100
+        finally:
+            client.water.set_day(user_id, test_date, original)
+            restored = _water_ml(client, user_id, test_date)
+            assert restored == original, f"cleanup failed: set water on {test_date} back to {original} ml by hand"
 
-        result = client.user_settings.update_water_settings(
-            user_id, unit_capacity=current_unit_capacity
-        )
-        assert isinstance(result, dict)
+    def test_water_add_intake(self, client: FitatuApiClient, user_id: str, test_date: date) -> None:
+        original = _water_ml(client, user_id, test_date)
+        try:
+            client.water.add_intake(user_id, test_date, 250)
+            assert _water_ml(client, user_id, test_date) == original + 250
+        finally:
+            client.water.set_day(user_id, test_date, original)
+            restored = _water_ml(client, user_id, test_date)
+            assert restored == original, f"cleanup failed: set water on {test_date} back to {original} ml by hand"
 
 
-# ---------------------------------------------------------------------------
-# TestAuthRefresh
-# ---------------------------------------------------------------------------
-
-
-@skip_unless_live
 class TestAuthRefresh:
     def test_refresh_access_token(self, client: FitatuApiClient) -> None:
         if not client.auth.refresh_token:
             pytest.skip("No refresh_token in session; skipping refresh test")
+        before = client.auth.bearer_token
         result = client.refresh_access_token()
         assert isinstance(result, dict)
         assert result.get("status") == "ok", f"Token refresh failed: {result}"
-        assert result.get("token"), "refresh result missing 'token'"
-        assert client.auth.bearer_token == result.get("token")
+        assert client.auth.bearer_token and client.auth.bearer_token != before
+        assert client.auth.bearer_token not in json.dumps(result)
 
     def test_describe_auth_state_after_refresh(self, client: FitatuApiClient) -> None:
         state = client.describe_auth_state()
@@ -1031,32 +697,50 @@ class TestAuthRefresh:
 
 
 # ---------------------------------------------------------------------------
-# TestClientWriteRecipe (opt-in)
+# Account writes (FITATU_LIVE_RUN_WRITE_ACCOUNT=1): settings and the food catalog
 # ---------------------------------------------------------------------------
 
 
-@skip_unless_live
-class TestClientWriteRecipe:
+class TestAccountWrites:
     @pytest.fixture(autouse=True)
-    def require_write_recipe(self) -> None:
-        if os.getenv("FITATU_LIVE_RUN_WRITE_RECIPE") != "1":
-            pytest.skip("Set FITATU_LIVE_RUN_WRITE_RECIPE=1 to run recipe-creation tests")
+    def require_account_writes(self) -> None:
+        _require_account_writes()
 
-    def test_create_recipe_returns_dict(
-        self,
-        client: FitatuApiClient,
-        known_product_id: str,
-    ) -> None:
-        product_details = client.get_product_details(known_product_id)
-        measures = product_details.get("measures") or []
-        measure_id = measures[0].get("id") if measures else 1
+    def test_water_settings_round_trip(self, client: FitatuApiClient, user_id: str) -> None:
+        def unit_capacity() -> Any:
+            return (client.user_settings.get_new(user_id).get("waterSettings") or {}).get("unitCapacity")
 
-        result = client.create_recipe(
-            name="__live_test_recipe_DO_NOT_USE__",
+        original = unit_capacity()
+        if not isinstance(original, int) or isinstance(original, bool):
+            pytest.skip(f"settings-new has no integer waterSettings.unitCapacity ({original!r})")
+        changed = 300 if original != 300 else 250
+        try:
+            client.user_settings.update_water_settings(user_id, unit_capacity=changed)
+            assert unit_capacity() == changed
+        finally:
+            client.user_settings.update_water_settings(user_id, unit_capacity=original)
+            assert unit_capacity() == original, f"cleanup failed: set the water glass size back to {original} ml"
+
+    def test_create_and_delete_product(self, client: FitatuApiClient) -> None:
+        created = client.create_product(
+            name=TEST_PRODUCT_NAME, brand="fitatu-api live test", energy=10, protein=1, fat=0, carbohydrate=1
+        )
+        product_id = created.get("id")
+        assert product_id, f"POST /products returned no id ({created}); delete {TEST_PRODUCT_NAME!r} by hand"
+        try:
+            assert client.get_product_details(product_id)
+        finally:
+            client.delete_product(product_id)
+            _assert_deleted(client, f"/products/{int(product_id)}", f"product {product_id} {TEST_PRODUCT_NAME!r}")
+
+    def test_create_and_delete_recipe(self, client: FitatuApiClient, known_product_id: str) -> None:
+        measures = client.get_product_details(known_product_id).get("measures") or []
+        created = client.create_recipe(
+            name=TEST_RECIPE_NAME,
             items=[
                 {
                     "itemId": known_product_id,
-                    "measureId": measure_id,
+                    "measureId": measures[0].get("id") if measures else 1,
                     "measureQuantity": 1,
                     "type": "PRODUCT",
                 }
@@ -1065,273 +749,204 @@ class TestClientWriteRecipe:
             serving="1",
             shared=False,
         )
-        assert isinstance(result, dict)
-        assert result
+        recipe_id = created.get("id")
+        assert recipe_id, f"POST /recipes returned no id ({created}); delete {TEST_RECIPE_NAME!r} by hand"
+        try:
+            assert client.get_recipe(recipe_id)
+        finally:
+            # The library has no helper for this; DELETE /recipes/{id} is what the app sends
+            # (docs/APP_4_17_1_API_CATALOG.md). An error here means the recipe is still there.
+            client.request("DELETE", f"/recipes/{int(recipe_id)}")
+            _assert_deleted(client, f"/recipes/{int(recipe_id)}", f"recipe {recipe_id} {TEST_RECIPE_NAME!r}")
 
 
 # ---------------------------------------------------------------------------
-# TestClientWriteProduct (opt-in)
+# Facade
 # ---------------------------------------------------------------------------
 
 
-@skip_unless_live
-class TestClientWriteProduct:
-    @pytest.fixture(autouse=True)
-    def require_write_product(self) -> None:
-        if os.getenv("FITATU_LIVE_RUN_WRITE_PRODUCT") != "1":
-            pytest.skip("Set FITATU_LIVE_RUN_WRITE_PRODUCT=1 to run product-creation tests")
-
-    def test_create_product_returns_dict(self, client: FitatuApiClient) -> None:
-        result = client.create_product(
-            name="__live_test_product_DO_NOT_USE__",
-            brand="TestBrand",
-            energy=10,
-            protein=1,
-            fat=0,
-            carbohydrate=1,
-        )
-        assert isinstance(result, dict)
-        assert result
-
-
-# ---------------------------------------------------------------------------
-# TestFacadeReadOnly
-# ---------------------------------------------------------------------------
-
-
-@skip_unless_live
 class TestFacadeReadOnly:
     def test_describe_session(self, facade: FitatuLibrary) -> None:
         state = facade.describe_session()
         assert isinstance(state, dict)
-        assert "lifecycle_state" in state
+        assert state["has_bearer_token"] is True
 
     def test_export_session_context(self, facade: FitatuLibrary) -> None:
         ctx = facade.export_session_context()
         assert isinstance(ctx, dict)
-        assert "api_cluster" in ctx
-
-    def test_management_report(self, facade: FitatuLibrary) -> None:
-        report = facade.management_report()
-        assert isinstance(report, dict)
-        assert "management_report_schema_version" in report
+        assert "app_searchlocale" in ctx
+        assert "bearer_token" not in ctx
 
     def test_search_food(self, facade: FitatuLibrary) -> None:
-        results = facade.search_food("jajko", limit=3)
-        assert isinstance(results, list)
-        assert len(results) > 0
+        result = facade.search_food_via_api(phrase="jajko", limit=3)
+        assert result["status"] == "ok", result
+        assert len(result["result"]) > 0
 
     def test_get_recipes_catalog_via_api(self, facade: FitatuLibrary) -> None:
         result = facade.get_recipes_catalog_via_api()
-        assert isinstance(result, dict)
-        assert result.get("status") == "ok"
+        assert result.get("status") == "ok", result
 
     def test_get_recipe_via_api(self, facade: FitatuLibrary, known_recipe_id: str) -> None:
         result = facade.get_recipe_via_api(recipe_id=known_recipe_id)
-        assert isinstance(result, dict)
-        assert result.get("status") == "ok"
+        assert result.get("status") == "ok", result
         assert result.get("result") is not None
 
 
-# ---------------------------------------------------------------------------
-# TestFacadeWritePlanner
-# ---------------------------------------------------------------------------
-
-
-@skip_unless_live
 class TestFacadeWritePlanner:
     def test_add_custom_item_and_remove(
-        self,
-        facade: FitatuLibrary,
-        user_id: str,
-        test_date: date,
-        meal_key: str,
+        self, facade: FitatuLibrary, test_date: date, meal_key: str, added_rows: list[str]
     ) -> None:
         add_result = facade.add_custom_item_to_day_meal_via_api(
             target_date=test_date,
-            meal_key=meal_key,
+            meal_type=meal_key,
             name="__facade_live_test__",
             calories=5,
             protein_g=0,
             fat_g=0,
             carbs_g=1,
-            user_id=user_id,
+            row_id=_new_row(added_rows),
         )
-        assert add_result.get("status") == "ok", f"Facade add_custom_item failed: {add_result}"
-        inner = add_result.get("result") or {}
-        item_id = str((inner.get("addedItem") or {}).get("planDayDietItemId") or "")
-        assert item_id
-
-        time.sleep(2)  # allow backend sync to propagate before remove
+        assert add_result["status"] == "ok", add_result
         remove_result = facade.remove_day_item_via_api(
-            target_date=test_date,
-            meal_key=meal_key,
-            item_id=item_id,
-            user_id=user_id,
+            target_date=test_date, meal_type=meal_key, item_id=add_result["result"]["rowId"]
         )
-        assert remove_result.get("status") == "ok", f"Facade remove failed: {remove_result}"
+        assert remove_result["status"] == "ok", remove_result
 
     def test_add_product_and_remove(
         self,
         facade: FitatuLibrary,
-        user_id: str,
         test_date: date,
         meal_key: str,
         known_product_id: str,
+        added_rows: list[str],
     ) -> None:
         add_result = facade.add_product_to_day_meal_via_api(
             target_date=test_date,
-            meal_key=meal_key,
+            meal_type=meal_key,
             product_id=known_product_id,
             measure_id=1,
             measure_quantity=10,
-            user_id=user_id,
+            row_id=_new_row(added_rows),
         )
-        assert add_result.get("status") == "ok", f"Facade add_product failed: {add_result}"
-        inner = add_result.get("result") or {}
-        item_id = str((inner.get("addedItem") or {}).get("planDayDietItemId") or "")
-        assert item_id
-
-        time.sleep(2)  # allow backend sync to propagate before remove
+        assert add_result["status"] == "ok", add_result
         remove_result = facade.remove_day_item_via_api(
-            target_date=test_date,
-            meal_key=meal_key,
-            item_id=item_id,
-            user_id=user_id,
+            target_date=test_date, meal_type=meal_key, item_id=add_result["result"]["rowId"]
         )
-        assert remove_result.get("status") == "ok", f"Facade remove failed: {remove_result}"
+        assert remove_result["status"] == "ok", remove_result
 
     def test_add_recipe_and_remove(
         self,
         facade: FitatuLibrary,
-        user_id: str,
         test_date: date,
         meal_key: str,
         known_recipe_id: str,
+        added_rows: list[str],
     ) -> None:
         add_result = facade.add_recipe_to_day_meal_via_api(
-            target_date=test_date,
-            meal_key=meal_key,
-            recipe_id=known_recipe_id,
-            user_id=user_id,
+            target_date=test_date, meal_type=meal_key, recipe_id=known_recipe_id, row_id=_new_row(added_rows)
         )
-        assert add_result.get("status") == "ok", f"Facade add_recipe failed: {add_result}"
-        inner = add_result.get("result") or {}
-        item_id = str((inner.get("addedItem") or {}).get("planDayDietItemId") or "")
-        assert item_id
-
-        time.sleep(2)  # allow backend sync to propagate before remove
+        assert add_result["status"] == "ok", add_result
         remove_result = facade.remove_day_item_via_api(
-            target_date=test_date,
-            meal_key=meal_key,
-            item_id=item_id,
-            user_id=user_id,
+            target_date=test_date, meal_type=meal_key, item_id=add_result["result"]["rowId"]
         )
-        assert remove_result.get("status") == "ok", f"Facade remove recipe failed: {remove_result}"
+        assert remove_result["status"] == "ok", remove_result
 
 
 # ---------------------------------------------------------------------------
-# TestFullCycleAddRemove
+# Agent tools (FitatuTools.call, as an agent calls them)
 # ---------------------------------------------------------------------------
 
 
-@skip_unless_live
-class TestFullCycleAddRemove:
-    """Add product + custom item + recipe, then remove all and verify meal is empty."""
+class TestTools:
+    def test_every_read_tool(self, tools: FitatuTools, test_date: date, known_product_id: str) -> None:
+        today = date.today()
+        arguments: dict[str, dict[str, Any]] = {
+            "get_day": {"date": test_date.isoformat()},
+            "get_targets": {"date": today.isoformat()},
+            "get_range_summary": {"from_date": (today - timedelta(days=6)).isoformat(), "to_date": today.isoformat()},
+            "search_food": {"phrase": "jajko", "limit": 3},
+            "get_food_measures": {"food_id": int(known_product_id), "food_type": "PRODUCT"},
+            "get_recent_foods": {"meal": "breakfast"},
+            "get_favorite_foods": {},
+            "get_weight_history": {"limit": 5},
+            "get_water": {"date": test_date.isoformat()},
+            "search_activity": {"phrase": "bieganie", "limit": 3},
+        }
+        assert set(arguments) == {tool["name"] for tool in TOOLS if tool["annotations"]["readOnlyHint"]}
+        results = {name: tools.call(name, args) for name, args in arguments.items()}
+        json.dumps(results)
+        assert not {name: result for name, result in results.items() if not result["ok"]}
 
-    def test_full_cycle(
+    def test_add_update_move_and_remove_food(
         self,
+        tools: FitatuTools,
         client: FitatuApiClient,
         user_id: str,
         test_date: date,
         meal_key: str,
         known_product_id: str,
-        known_recipe_id: str,
+        added_rows: list[str],
     ) -> None:
-        # --- Add product ---
-        r_product = client.planner.add_product_to_day_meal(
-            user_id, test_date, meal_type=meal_key,
-            product_id=known_product_id, measure_id=1, measure_quantity=100, source="API",
-        )
-        assert r_product.get("ok"), f"add product failed: {r_product}"
-        time.sleep(2)  # Let snapshot propagate before next add
+        day = test_date.isoformat()
+        food = {"food_id": int(known_product_id), "food_type": "PRODUCT"}
+        measure_id = _ok(tools.call("get_food_measures", food))["measures"][0]["measure_id"]
+        row_id = _new_row(added_rows)
+        added = _ok(tools.call("add_food", {"date": day, "meal": meal_key, **food, "quantity": 1, "measure_id": measure_id, "row_id": row_id}))
+        assert added == {"date": day, "meal": meal_key, "row_id": row_id, "ok": True}
 
-        # --- Add custom item ---
-        r_custom = client.planner.add_custom_item_to_day_meal(
-            user_id, test_date, meal_type=meal_key,
-            name="__full_cycle_test__", calories=10, protein_g=1, fat_g=0, carbs_g=1,
-        )
-        assert r_custom.get("ok"), f"add custom failed: {r_custom}"
-        time.sleep(2)  # Let snapshot propagate before next add
+        assert _ok(tools.call("update_item", {"date": day, "row_id": row_id, "eaten": True}))["ok"]
 
-        # --- Add recipe ---
-        r_recipe = client.planner.add_recipe_to_day_meal(
-            user_id, test_date, meal_type=meal_key,
-            recipe_id=known_recipe_id, hydrate_from_recipe_details=True,
-        )
-        assert r_recipe.get("ok"), f"add recipe failed: {r_recipe}"
+        other_meal = "breakfast" if meal_key != "breakfast" else "snack"
+        before = _row_ids(client, user_id, test_date)
+        try:
+            moved = _ok(tools.call("move_item", {"date": day, "row_id": row_id, "to_meal": other_meal}))
+        finally:
+            # The copy gets its id inside the planner; register it even when the call fails.
+            added_rows.extend(_row_ids(client, user_id, test_date) - before)
+        assert moved["ok"] and moved["meal"] == other_meal
 
-        # Let snapshot propagate before verify - polling instead of hard sleep
-        for _ in range(5):
-            time.sleep(2)
-            items_before = client.planner.list_meal_items(user_id, test_date, meal_key)
-            active_before = [i for i in items_before if i.get("deletedAt") is None and float(i.get("measureQuantity") or 0) > 0]
-            if len(active_before) >= 3:
-                break
-        assert len(active_before) >= 3, f"Expected >=3 items before removal, got {len(active_before)}"
+        removed = _ok(tools.call("remove_items", {"date": day, "row_ids": [moved["row_id"]]}))
+        assert removed["ok"] and removed["removed"] == [moved["row_id"]]
+        day_rows = {item["row_id"] for meal in _ok(tools.call("get_day", {"date": day}))["meals"] for item in meal["items"]}
+        assert not {row_id, moved["row_id"]} & day_rows
 
-        # --- Remove product (normal_item strategy) ---
-        client.planner.remove_day_items_by_kind(user_id, test_date, item_kind="normal_item", meal_key=meal_key)
-        time.sleep(0.8)
-
-        # --- Remove custom item (custom_recipe_item + custom_add_item strategy) ---
-        for kind in ("custom_recipe_item", "custom_add_item"):
-            try:
-                client.planner.remove_day_items_by_kind(user_id, test_date, item_kind=kind, meal_key=meal_key)
-            except FitatuApiError:
-                pass
-        time.sleep(0.8)
-
-        # --- Verify meal is empty ---
-        items_after = client.planner.list_meal_items(user_id, test_date, meal_key)
-        active_after = [
-            i for i in items_after
-            if i.get("deletedAt") is None and float(i.get("measureQuantity") or 0) > 0.05
-        ]
-        assert len(active_after) == 0, (
-            f"Meal not empty after removing all items. Remaining: "
-            f"{[(i.get('planDayDietItemId'), i.get('productId'), i.get('recipeId')) for i in active_after]}"
-        )
-
-
-@skip_unless_live
-class TestEatenFlagSurvivesSync:
-    def test_adding_an_item_keeps_eaten_on_existing_items(
-        self,
-        client: FitatuApiClient,
-        user_id: str,
-        test_date: date,
-        meal_key: str,
-        added_product_item: dict[str, Any],
+    def test_add_and_remove_custom_item(
+        self, tools: FitatuTools, test_date: date, meal_key: str, added_rows: list[str]
     ) -> None:
-        item_id = added_product_item["addedItem"]["planDayDietItemId"]
-        client.planner.update_day_item(user_id, test_date, meal_type=meal_key, item_id=item_id, eaten=True)
-        client.planner.add_custom_item_to_day_meal(
-            user_id, test_date, meal_type=meal_key,
-            name="__eaten_regression__", calories=1, protein_g=0, fat_g=0, carbs_g=0,
-        )
-        time.sleep(1)
-        items = client.planner.list_meal_items(user_id, test_date, meal_key)
-        target = next(i for i in items if i.get("planDayDietItemId") == item_id)
-        assert target.get("eaten") is True
-        for kind in ("custom_add_item", "custom_recipe_item"):
-            try:
-                client.planner.remove_day_items_by_kind(user_id, test_date, item_kind=kind, meal_key=meal_key)
-            except FitatuApiError:
-                pass
+        day = test_date.isoformat()
+        row_id = _new_row(added_rows)
+        added = _ok(tools.call("add_custom_item", {
+            "date": day, "meal": meal_key, "name": "__tools_live_test__",
+            "energy_kcal": 10, "protein_g": 1, "fat_g": 0, "carbohydrate_g": 1, "eaten": True, "row_id": row_id,
+        }))
+        assert added["ok"], added  # also marked eaten
+        assert _ok(tools.call("remove_items", {"date": day, "row_ids": [row_id]}))["removed"] == [row_id]
+
+    def test_add_and_remove_activity(
+        self, tools: FitatuTools, client: FitatuApiClient, user_id: str, test_date: date
+    ) -> None:
+        day = test_date.isoformat()
+        hits = _ok(tools.call("search_activity", {"phrase": "bieganie", "limit": 1}))
+        if not hits:
+            pytest.skip("No activity found for 'bieganie'")
+        row_id = _new_row_id()
+        try:
+            added = _ok(tools.call("add_activity", {
+                "date": day, "activity_id": hits[0]["activity_id"], "minutes": 30, "energy_kcal": 123, "row_id": row_id,
+            }))
+            assert added["ok"], added
+            assert _ok(tools.call("remove_activity", {"date": day, "row_id": row_id}))["ok"]
+        finally:
+            client.planner.remove_activity(user_id, test_date, item_id=row_id)  # item_not_found once removed
+            left = {activity["row_id"] for activity in tools.get_day(day)["activities"]}
+            assert row_id not in left, f"cleanup failed: delete activity {row_id} on {day} by hand"
 
 
-@skip_unless_live
+# ---------------------------------------------------------------------------
+# Newer read-only endpoints and the measurement round trip
+# ---------------------------------------------------------------------------
+
+
 class TestNewReadOnlyEndpoints:
     def test_settings_new_for_a_day(self, client: FitatuApiClient, user_id: str) -> None:
         settings = client.user_settings.get_new(user_id, date.today())
@@ -1366,13 +981,12 @@ class TestNewReadOnlyEndpoints:
         assert isinstance(client.activities.search("bieganie", limit=2), list)
         assert isinstance(client.activities.get_recent(user_id), list)
 
-    def test_daily_targets_via_facade(self, facade: FitatuLibrary, user_id: str) -> None:
-        result = facade.get_daily_targets_via_api(user_id=user_id)
-        assert result["status"] == "ok"
+    def test_daily_targets_via_facade(self, facade: FitatuLibrary) -> None:
+        result = facade.get_daily_targets_via_api()
+        assert result["status"] == "ok", result
         assert result["result"]["energy"]
 
 
-@skip_unless_live
 class TestMeasurementWriteRoundTrip:
     def test_set_and_delete_on_an_empty_day(self, client: FitatuApiClient, user_id: str) -> None:
         day = date.fromisoformat(_env("FITATU_LIVE_MEASUREMENT_DAY", "2020-01-01") or "2020-01-01")
@@ -1384,4 +998,4 @@ class TestMeasurementWriteRoundTrip:
             assert float(saved["waist"]) == 80.0
         finally:
             client.measurements.delete_day(user_id, day)
-        assert client.measurements.get_day(user_id, day) is None
+            assert client.measurements.get_day(user_id, day) is None, f"cleanup failed: delete the measurement on {day} by hand"

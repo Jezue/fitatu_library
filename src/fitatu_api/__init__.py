@@ -1,41 +1,36 @@
 """Public package exports for fitatu-api."""
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
-from .api_client import (
-    ActivitiesModule,
-    AuthModule,
-    CmsModule,
-    DietPlanModule,
-    FitatuApiClient,
+from .agent import FitatuTools
+from .auth import FitatuAuthContext, FitatuTokenStore
+from .client import FitatuApiClient
+from .exceptions import (
     FitatuApiError,
-    FitatuAuthContext,
-    FitatuTokenStore,
+    FitatuAuthError,
+    FitatuConnectionError,
+    FitatuMaintenanceError,
+    FitatuNotFoundError,
+    FitatuPlannerSyncError,
+    FitatuRateLimitError,
+    FitatuValidationError,
+    describe_error,
+)
+from .facade import FitatuLibrary
+from .planner import PlannerModule
+from .service_modules import (
+    ActivitiesModule,
+    DietPlanModule,
     FoodsModule,
     MeasurementsModule,
-    PlannerModule,
     ResourcesModule,
     SummaryModule,
     UserSettingsModule,
     WaterModule,
 )
-from .constants import (
-    FITATU_LIFECYCLE_HEALTHY,
-    FITATU_LIFECYCLE_REAUTH_FAILED,
-    FITATU_LIFECYCLE_REFRESH_ONLY,
-    FITATU_LIFECYCLE_RELOGIN_REQUIRED,
-    FITATU_LIFECYCLE_TOKEN_ONLY,
-)
-from .exceptions import (
-    FitatuAuthError,
-    FitatuConnectionError,
-    FitatuPlannerSyncError,
-    FitatuRateLimitError,
-)
-from .facade import FitatuLibrary
-from .operational_store import FitatuOperationalEvent, FitatuOperationalStore
 
 __all__ = [
+    "FitatuTools",
     "FitatuLibrary",
     "FitatuApiClient",
     "FitatuAuthContext",
@@ -43,9 +38,12 @@ __all__ = [
     "FitatuAuthError",
     "FitatuConnectionError",
     "FitatuRateLimitError",
+    "FitatuMaintenanceError",
+    "FitatuValidationError",
+    "FitatuNotFoundError",
     "FitatuPlannerSyncError",
+    "describe_error",
     "FitatuTokenStore",
-    "AuthModule",
     "ActivitiesModule",
     "PlannerModule",
     "UserSettingsModule",
@@ -55,13 +53,5 @@ __all__ = [
     "SummaryModule",
     "FoodsModule",
     "ResourcesModule",
-    "CmsModule",
-    "FitatuOperationalStore",
-    "FitatuOperationalEvent",
-    "FITATU_LIFECYCLE_HEALTHY",
-    "FITATU_LIFECYCLE_TOKEN_ONLY",
-    "FITATU_LIFECYCLE_REFRESH_ONLY",
-    "FITATU_LIFECYCLE_RELOGIN_REQUIRED",
-    "FITATU_LIFECYCLE_REAUTH_FAILED",
     "__version__",
 ]

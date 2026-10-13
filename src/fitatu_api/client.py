@@ -5,33 +5,41 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
+import threading
 import time
 import uuid
 from collections.abc import Callable
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
+from urllib.parse import quote
 
 import requests
+from urllib3.exceptions import LocationParseError
+from urllib3.util import parse_url
 
-from ._validation import validate_positive_int
-from .auth import FitatuAuthContext, FitatuTokenStore
-from .constants import (
-    DEFAULT_FITATU_API_BASE_URL,
-    FITATU_LIFECYCLE_HEALTHY,
-    FITATU_LIFECYCLE_REAUTH_FAILED,
-    FITATU_LIFECYCLE_REFRESH_ONLY,
-    FITATU_LIFECYCLE_RELOGIN_REQUIRED,
-    FITATU_LIFECYCLE_TOKEN_ONLY,
-    FITATU_MANAGEMENT_REPORT_SCHEMA_VERSION,
+from ._shapes import as_dict, as_dict_list, read_reply, write_reply
+from ._validation import (
+    as_date,
+    validate_non_negative_int,
+    validate_numeric_id,
+    validate_positive_int,
 )
-from .exceptions import FitatuApiError, FitatuAuthError, FitatuConnectionError, FitatuRateLimitError
-from .operational_store import FitatuOperationalStore
+from .auth import FitatuAuthContext, FitatuTokenStore, jwt_user_id, resolve_session_path
+from .constants import DEFAULT_FITATU_API_BASE_URL
+from .exceptions import (
+    FitatuApiError,
+    FitatuAuthError,
+    FitatuConnectionError,
+    FitatuMaintenanceError,
+    FitatuRateLimitError,
+    FitatuValidationError,
+    body_field,
+)
 from .planner import PlannerModule
 from .service_modules import (
     ActivitiesModule,
-    AuthModule,
-    CmsModule,
     DietPlanModule,
     FoodsModule,
     MeasurementsModule,
@@ -43,11 +51,37 @@ from .service_modules import (
 
 logger = logging.getLogger(__name__)
 
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+MAX_RETRY_AFTER_SECONDS = 30.0
+# Refresh this long before the bearer token's exp, so a call does not start with a 401.
+REFRESH_MARGIN = timedelta(seconds=60)
+# describe_error's hint for a rejected login, where "log in again" is no advice.
+_LOGIN_REJECTED_HINT = (
+    "Check the e-mail and password. Accounts created with Apple or Facebook have no password: "
+    "copy the session from the web app with `fitatu-api import-session` instead "
+    "(steps: `fitatu-api import-session --help`)."
+)
+
+
+_SECRET_KEY = re.compile(r"token|secret|password|authorization", re.IGNORECASE)
+
 
 def _serialize_log_value(value: Any) -> Any:
-    """Recursively coerce a value to a JSON-safe type for structured logging."""
+    """Recursively coerce a value to a JSON-safe type for structured logging.
+
+    Values under keys that look secret are replaced; flags such as ``has_bearer_token``
+    stay readable.
+    """
     if isinstance(value, dict):
-        return {str(key): _serialize_log_value(inner) for key, inner in value.items()}
+        return {
+            str(key): (
+                "[redacted]"
+                if _SECRET_KEY.search(str(key)) and not isinstance(inner, bool | None)
+                else _serialize_log_value(inner)
+            )
+            for key, inner in value.items()
+        }
     if isinstance(value, list):
         return [_serialize_log_value(item) for item in value]
     if isinstance(value, tuple):
@@ -57,10 +91,35 @@ def _serialize_log_value(value: Any) -> Any:
     return str(value)
 
 
-def _log_event(event: str, **fields: Any) -> None:
-    """Emit a structured JSON log line at INFO level for a named lifecycle event."""
-    payload = {"event": event, **{key: _serialize_log_value(value) for key, value in fields.items()}}
-    logger.info(json.dumps(payload, ensure_ascii=True, sort_keys=True))
+def _log_event(event: str, level: int = logging.INFO, **fields: Any) -> None:
+    """Emit a structured JSON log line for a named event (secret-looking keys redacted)."""
+    if logger.isEnabledFor(level):
+        payload = _serialize_log_value({"event": event, **fields})
+        logger.log(level, json.dumps(payload, ensure_ascii=True, sort_keys=True))
+
+
+def _base_url_for_locale(storage_locale: str) -> str:
+    """The API host of a storage locale: ``pl_PL`` -> ``https://pl-pl.fitatu.com/api``."""
+    if re.fullmatch(r"[a-z]{2}_[A-Z]{2}", storage_locale):
+        return f"https://{storage_locale.lower().replace('_', '-')}.fitatu.com/api"
+    return DEFAULT_FITATU_API_BASE_URL
+
+
+def _is_fitatu_url(url: str) -> bool:
+    """True for https URLs on fitatu.com or one of its subdomains, without userinfo.
+
+    The host is read with urllib3's parser, which is what requests connects with:
+    ``urlsplit`` reads ``https://evil.example\\@pl-pl.fitatu.com`` as a Fitatu host.
+    """
+    try:
+        parts = parse_url(url)
+    except LocationParseError:
+        return False
+    return (
+        parts.scheme == "https"
+        and parts.auth is None
+        and re.fullmatch(r"(?:[a-z0-9-]+\.)*fitatu\.com", parts.host or "") is not None
+    )
 
 
 def _new_correlation_id() -> str:
@@ -68,172 +127,258 @@ def _new_correlation_id() -> str:
     return uuid.uuid4().hex
 
 
-def _parse_jwt_payload(token: str) -> dict[str, Any]:
-    """Decode the payload section of a JWT without verifying the signature."""
-    parts = token.split(".")
-    if len(parts) < 2:
-        return {}
-    padded = parts[1] + "=" * (-len(parts[1]) % 4)
+def _error_message(method: str, path: str, status_code: int, body: str) -> str:
+    """``GET /path -> 404 CODENAME: server message``, the part of an error a model gets to see."""
+    message = f"{method} {path} -> {status_code}"
+    codename = body_field(body, "codename")
+    if codename:
+        message += f" {codename}"
+    detail = body_field(body, "message") or body.strip()
+    if detail:
+        message += f": {detail[:200]}"
+    return message
+
+
+def _retry_after_seconds(header: str | None) -> float | None:
+    """Parse a numeric ``Retry-After`` header; HTTP dates and garbage count as absent."""
     try:
-        return cast(dict[str, Any], json.loads(base64.b64decode(padded).decode("utf-8")))
-    except Exception:
-        return {}
+        value = float(header) if header else None
+    except ValueError:
+        return None
+    return value if value is not None and value >= 0 else None
+
+
+def _raise_on_technical_break(response: requests.Response, method: str, path: str) -> None:
+    """Raise FitatuMaintenanceError when the response carries the ``technical-break`` header.
+
+    The header is base64 JSON (``displayFromDate``, ``displayToDate``), sometimes quoted.
+    """
+    raw = response.headers.get("technical-break")
+    if not raw:
+        return
+    value = raw.strip().strip('"')
+    info: dict[str, Any] = {}
+    try:
+        decoded = json.loads(base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_"))
+    except ValueError:
+        decoded = None
+    if isinstance(decoded, dict):
+        info = decoded
+    display_from, display_to = info.get("displayFromDate"), info.get("displayToDate")
+    window = f" from {display_from} to {display_to}" if display_from or display_to else ""
+    raise FitatuMaintenanceError(
+        f"{method} {path} -> Fitatu is in a technical break{window}; try again after it ends",
+        status_code=response.status_code,
+        body=raw,
+        display_from=display_from,
+        display_to=display_to,
+    )
 
 
 class FitatuApiClient:
-    """Main low-level API client for Fitatu."""
+    """Main low-level API client for Fitatu.
+
+    ``base_url`` defaults to the session's ``base_url``, else the host of the account's
+    storage locale (``pl_PL`` -> ``https://pl-pl.fitatu.com/api``). ``token_store_path``
+    names a JSON file that refreshed tokens are merged into; :meth:`from_session` uses
+    the session file itself.
+    """
 
     def __init__(
         self,
         auth: FitatuAuthContext,
-        base_url: str = DEFAULT_FITATU_API_BASE_URL,
+        base_url: str | None = None,
         timeout_seconds: int = 25,
         retry_max_attempts: int = 3,
         retry_base_delay_seconds: float = 0.5,
         token_store_path: str | Path | None = None,
-        operational_store_path: str | Path | None = None,
         persist_tokens: bool = True,
     ) -> None:
+        base_url = base_url or auth.base_url or _base_url_for_locale(auth.app_storage_locale)
+        if not _is_fitatu_url(base_url):
+            raise FitatuValidationError(
+                f"base_url must be an https://<region>.fitatu.com/api URL, got {base_url!r}"
+            )
         self.auth = auth
-        self.base_url = base_url.rstrip("/")
+        self.base_url = auth.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.retry_max_attempts = max(1, int(retry_max_attempts))
         self.retry_base_delay_seconds = max(0.0, float(retry_base_delay_seconds))
         self.persist_tokens = persist_tokens
         self.token_store = FitatuTokenStore(Path(token_store_path)) if token_store_path else None
-        self.operational_store = (
-            FitatuOperationalStore(Path(operational_store_path))
-            if operational_store_path
-            else None
-        )
+        self._http = requests.Session()
+        self._refresh_lock = threading.Lock()
+        # A refresh token /token/refresh rejected; no automatic refresh until it changes.
+        self._rejected_refresh_token: str | None = None
+        # The (bearer, refresh) pair the token store held when this client last read or wrote it.
+        self._stored_tokens: tuple[str | None, str | None] = (None, None)
         self._load_tokens_from_store()
-        self.lifecycle_state = self._derive_lifecycle_state()
-        self.auth_api = AuthModule(self)
         self.planner = PlannerModule(self)
         self.user_settings = UserSettingsModule(self)
         self.diet_plan = DietPlanModule(self)
         self.water = WaterModule(self)
         self.activities = ActivitiesModule(self)
         self.resources = ResourcesModule(self)
-        self.cms = CmsModule(self)
         self.measurements = MeasurementsModule(self)
         self.summary = SummaryModule(self)
         self.foods = FoodsModule(self)
+
+    @classmethod
+    def from_session(cls, path: str | Path | None = None, **kwargs: Any) -> FitatuApiClient:
+        """Load the client from a session file and keep that file up to date.
+
+        The file is ``path``, else ``$FITATU_SESSION`` (or ``$FITATU_SESSION_PATH``),
+        else ``~/.fitatu/session.json``, which is where ``fitatu-api login`` writes it.
+        It doubles as the token store, so refreshed tokens are merged back into it.
+
+        Args:
+            path: Session file to read; see above for the default.
+            **kwargs: Forwarded to :meth:`__init__` (e.g. ``timeout_seconds``).
+
+        Raises:
+            FitatuAuthError: When the file is missing or unreadable; run
+                ``fitatu-api login`` to create it.
+        """
+        session_path = resolve_session_path(path)
+        try:
+            data = json.loads(session_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise FitatuAuthError(
+                f"no Fitatu session at {session_path}; run `fitatu-api login` to create one"
+            ) from None
+        except (OSError, ValueError) as exc:
+            raise FitatuAuthError(
+                f"cannot read the Fitatu session at {session_path} ({exc}); run `fitatu-api login`"
+            ) from exc
+        if not isinstance(data, dict):
+            raise FitatuAuthError(f"{session_path} is not a Fitatu session file; run `fitatu-api login`")
+        kwargs.setdefault("token_store_path", session_path)
+        return cls(FitatuAuthContext.from_session_data(data), **kwargs)
 
     @classmethod
     def login(
         cls,
         email: str,
         password: str,
-        base_url: str = DEFAULT_FITATU_API_BASE_URL,
+        base_url: str | None = None,
         **kwargs: Any,
     ) -> FitatuApiClient:
         """Authenticate with email and password and return a ready-to-use client.
 
-        Calls ``POST /login`` with the supplied credentials, decodes the returned
-        JWT to extract the user id, and constructs a fully initialised
-        :class:`FitatuApiClient`.
+        Calls ``POST /login`` with the supplied credentials (through :meth:`request`, so
+        with the same headers and error mapping as every other call), decodes the user id
+        from the returned JWT and reads ``GET /users/{id}`` for the account's locales and
+        timezone. With a ``token_store_path`` the whole session is merged into that file.
 
         Args:
             email: Fitatu account e-mail address.
             password: Fitatu account password.
-            base_url: API base URL (defaults to the standard Polish endpoint).
+            base_url: API host. By default login goes to ``https://pl-pl.fitatu.com/api``
+                and the client then switches to the host of the account's storage
+                locale (e.g. ``de_DE`` -> ``https://de-de.fitatu.com/api``).
             **kwargs: Forwarded verbatim to :meth:`__init__` (e.g. ``timeout_seconds``).
 
         Raises:
-            FitatuAuthError: When the server rejects the credentials (401).
+            FitatuAuthError: When the server rejects the e-mail or password (422, or 401);
+                its ``hint`` points accounts without a password to ``fitatu-api import-session``.
             FitatuConnectionError: When the login request gets no HTTP response.
             FitatuApiError: For any other failure, e.g. a response without a token field.
         """
-        defaults = FitatuAuthContext()
-        url = f"{base_url.rstrip('/')}/login"
-        headers = {
-            "api-key": defaults.api_key,
-            "api-secret": defaults.api_secret,
-            "Content-Type": "application/json",
-        }
+        client = cls(auth=FitatuAuthContext(), base_url=base_url or DEFAULT_FITATU_API_BASE_URL, **kwargs)
         try:
-            resp = requests.post(
-                url,
-                json={"_username": email, "_password": password},
-                headers=headers,
-                timeout=kwargs.get("timeout_seconds", 25),
+            data = client.request(
+                "POST",
+                "/login",
+                json_data={"_username": email, "_password": password},
+                include_auth=False,
+                allow_refresh_on_401=False,
             )
-        except requests.RequestException as exc:
-            raise FitatuConnectionError(f"Fitatu login network error: {exc}", body=str(exc)) from exc
-        if not resp.ok:
-            error_type = FitatuAuthError if resp.status_code == 401 else FitatuApiError
-            raise error_type(
-                f"Login failed with status {resp.status_code}",
-                status_code=resp.status_code,
-                body=resp.text,
-            )
-        data: dict[str, Any] = resp.json()
-        token = data.get("token") or data.get("access_token")
-        refresh = data.get("refresh_token") or data.get("refreshToken")
+        except FitatuApiError as exc:
+            # Fitatu answers a wrong or unknown e-mail or password with 422, not 401 (checked live).
+            if exc.status_code not in (401, 422) or isinstance(exc, FitatuMaintenanceError):
+                raise
+            raise FitatuAuthError(
+                f"POST /login -> {exc.status_code}: the e-mail or password is wrong",
+                status_code=exc.status_code,
+                body=exc.body,
+                hint=_LOGIN_REJECTED_HINT,
+            ) from None
+        reply = as_dict(data) or {}
+        token = reply.get("token")
         if not token:
-            raise FitatuApiError(
-                "Login response did not contain a token",
-                status_code=resp.status_code,
-                body=resp.text,
-            )
-        payload = _parse_jwt_payload(str(token))
-        user_id = (
-            payload.get("user_id")
-            or payload.get("uid")
-            or payload.get("id")
-            or payload.get("sub")
-        )
-        auth = FitatuAuthContext(
-            bearer_token=str(token),
-            refresh_token=str(refresh) if refresh is not None else None,
-            fitatu_user_id=str(user_id) if user_id is not None else None,
-        )
-        logger.info("login email=%s user_id=%s", email, auth.fitatu_user_id)
-        client = cls(auth=auth, base_url=base_url, **kwargs)
-        # __init__ seeds tokens from an existing token store; the fresh pair must win.
+            raise FitatuApiError("POST /login -> the response did not contain a token")
+        refresh = reply.get("refreshToken") or reply.get("refresh_token")
+        # Set after __init__, which may have seeded older tokens from a token store.
         client.auth.bearer_token = str(token)
-        client.auth.refresh_token = str(refresh) if refresh is not None else None
-        client._persist_tokens_to_store()
+        client.auth.refresh_token = str(refresh) if refresh else None
+        client.auth.fitatu_user_id = jwt_user_id(client.auth.bearer_token)
+        _log_event("fitatu.auth.login", user_id=client.auth.fitatu_user_id)
+        if client.auth.fitatu_user_id:
+            client._read_profile(client.auth.fitatu_user_id, pick_host=base_url is None)
+        client._persist_tokens_to_store(**client.auth.to_session_data())
         return client
 
+    def _read_profile(self, user_id: str, *, pick_host: bool) -> None:
+        """Take the account's locales and timezone from ``GET /users/{id}`` and, with
+        ``pick_host``, switch to the host of its storage locale.
+
+        Shared by :meth:`login` and ``fitatu-api import-session``, so both sessions get the
+        same fields.
+        """
+        profile = self.user_settings.get_profile(user_id)
+        for attribute, key in (
+            ("app_locale", "locale"),
+            ("app_search_locale", "searchLocale"),
+            ("app_storage_locale", "storageLocale"),
+            ("app_timezone", "timezone"),
+        ):
+            if isinstance(profile.get(key), str) and profile[key]:
+                setattr(self.auth, attribute, profile[key])
+        if pick_host:
+            self.base_url = self.auth.base_url = _base_url_for_locale(self.auth.app_storage_locale)
+
     def _load_tokens_from_store(self) -> None:
-        """Seed bearer and refresh tokens from the on-disk token store into the auth context."""
+        """Seed tokens (and a missing user id) from the on-disk token store."""
         if self.token_store is None:
             return
         token_data = self.token_store.load()
         bearer = token_data.get("bearer_token")
         refresh = token_data.get("refresh_token")
+        self._stored_tokens = (bearer, refresh)
         if bearer:
             self.auth.bearer_token = bearer
         if refresh:
             self.auth.refresh_token = refresh
+        if not self.auth.fitatu_user_id:
+            self.auth.fitatu_user_id = token_data.get("fitatu_user_id")
 
-    def _persist_tokens_to_store(self) -> None:
-        """Write the current token pair to disk if token persistence is enabled."""
+    def _take_tokens_saved_elsewhere(self) -> bool:
+        """Adopt a token pair that another client (e.g. another process sharing the session
+        file) saved to the token store since this client last read or wrote it."""
+        if self.token_store is None:
+            return False
+        token_data = self.token_store.load()
+        stored = (token_data.get("bearer_token"), token_data.get("refresh_token"))
+        if not stored[0] or stored[0] == self.auth.bearer_token or stored == self._stored_tokens:
+            return False
+        self._stored_tokens = stored
+        self.auth.bearer_token, self.auth.refresh_token = stored
+        return True
+
+    def _persist_tokens_to_store(self, **fields: Any) -> None:
+        """Merge the current token pair (and other session ``fields``) into the token store."""
         if not self.persist_tokens or self.token_store is None:
             return
         self.token_store.save(
             bearer_token=self.auth.bearer_token,
             refresh_token=self.auth.refresh_token,
+            **fields,
         )
-
-    def _derive_lifecycle_state(self) -> str:
-        """Compute the lifecycle state constant from the current token availability."""
-        has_bearer = bool(self.auth.bearer_token)
-        has_refresh = bool(self.auth.refresh_token)
-        if has_bearer and has_refresh:
-            return FITATU_LIFECYCLE_HEALTHY
-        if has_bearer:
-            return FITATU_LIFECYCLE_TOKEN_ONLY
-        if has_refresh:
-            return FITATU_LIFECYCLE_REFRESH_ONLY
-        return FITATU_LIFECYCLE_RELOGIN_REQUIRED
+        self._stored_tokens = (self.auth.bearer_token, self.auth.refresh_token)
 
     def close(self) -> None:
-        """Release local resources associated with the client instance."""
-        if self.operational_store is not None:
-            self.operational_store.close()
+        """Close the pooled HTTP connections; the client is also a context manager."""
+        self._http.close()
 
     def __enter__(self) -> FitatuApiClient:
         """Use the client as a context manager for deterministic cleanup."""
@@ -243,46 +388,6 @@ class FitatuApiClient:
         """Close managed resources when leaving a context block."""
         self.close()
 
-    def __del__(self) -> None:
-        self.close()
-
-    def _set_lifecycle_state(self, state: str) -> None:
-        """Update the cached lifecycle state constant."""
-        self.lifecycle_state = state
-
-    def _record_operational_event(
-        self,
-        *,
-        event: str,
-        correlation_id: str,
-        payload: dict[str, Any],
-    ) -> None:
-        """Append a lifecycle event to the operational store, if one is configured."""
-        if self.operational_store is None:
-            return
-        self.operational_store.append_event(
-            event=event,
-            correlation_id=correlation_id,
-            lifecycle_state=self.lifecycle_state,
-            payload=payload,
-        )
-
-    def _capture_auth_checkpoint(self) -> dict[str, Any]:
-        """Snapshot the current token pair and lifecycle state for rollback purposes."""
-        return {
-            "bearer_token": self.auth.bearer_token,
-            "refresh_token": self.auth.refresh_token,
-            "lifecycle_state": self.lifecycle_state,
-        }
-
-    def _restore_auth_checkpoint(self, checkpoint: dict[str, Any]) -> None:
-        """Restore a previously captured auth checkpoint, overwriting the current token pair."""
-        self.auth.bearer_token = checkpoint.get("bearer_token")
-        self.auth.refresh_token = checkpoint.get("refresh_token")
-        self._set_lifecycle_state(self._derive_lifecycle_state())
-        if self.auth.bearer_token or self.auth.refresh_token:
-            self._persist_tokens_to_store()
-
     def describe_auth_state(self) -> dict[str, Any]:
         """Return a non-secret snapshot of the current client auth state."""
         state = self.auth.snapshot()
@@ -290,51 +395,11 @@ class FitatuApiClient:
             {
                 "base_url": self.base_url,
                 "retry_max_attempts": self.retry_max_attempts,
-                "persist_tokens": self.persist_tokens,
+                "persist_tokens": self.persist_tokens and self.token_store is not None,
                 "has_token_store": self.token_store is not None,
-                "lifecycle_state": self.lifecycle_state,
             }
         )
         return state
-
-    def management_report(self, *, include_tokens: bool = False) -> dict[str, Any]:
-        """Build an operational report describing auth, modules, and storage."""
-        return {
-            "management_report_schema_version": FITATU_MANAGEMENT_REPORT_SCHEMA_VERSION,
-            "base_url": self.base_url,
-            "timeout_seconds": self.timeout_seconds,
-            "retry_max_attempts": self.retry_max_attempts,
-            "retry_base_delay_seconds": self.retry_base_delay_seconds,
-            "persist_tokens": self.persist_tokens,
-            "has_token_store": self.token_store is not None,
-            "token_store_path": (
-                str(self.token_store.path) if self.token_store is not None else None
-            ),
-            "lifecycle_state": self.lifecycle_state,
-            "has_operational_store": self.operational_store is not None,
-            "operational_store_path": (
-                str(self.operational_store.path)
-                if self.operational_store is not None
-                else None
-            ),
-            "operational_event_count": (
-                self.operational_store.count_events()
-                if self.operational_store is not None
-                else 0
-            ),
-            "auth": self.auth.snapshot(),
-            "session_data": self.auth.to_session_data(include_tokens=include_tokens),
-            "modules": [
-                "auth_api",
-                "planner",
-                "user_settings",
-                "diet_plan",
-                "water",
-                "activities",
-                "resources",
-                "cms",
-            ],
-        }
 
     def clear_auth(self, *, clear_token_store: bool = True) -> None:
         """Clear in-memory auth and optionally the persisted token store."""
@@ -347,148 +412,25 @@ class FitatuApiClient:
         )
         self.auth.bearer_token = None
         self.auth.refresh_token = None
-        self._set_lifecycle_state(FITATU_LIFECYCLE_RELOGIN_REQUIRED)
         if clear_token_store and self.token_store is not None:
             self.token_store.clear()
-        state_after = self.describe_auth_state()
-        _log_event("fitatu.auth.cleared", correlation_id=correlation_id, state_after=state_after)
-        self._record_operational_event(
-            event="fitatu.auth.cleared",
-            correlation_id=correlation_id,
-            payload={"clear_token_store": clear_token_store, "state_after": state_after},
-        )
+        _log_event("fitatu.auth.cleared", correlation_id=correlation_id, state_after=self.describe_auth_state())
 
-    def reauthenticate(
-        self,
-        *,
-        relogin_callback: Any | None = None,
-        clear_token_store: bool = False,
-        rollback_on_failure: bool = True,
-    ) -> dict[str, Any]:
-        """Reauthenticate using refresh first and optional relogin fallback."""
-        correlation_id = _new_correlation_id()
-        checkpoint = self._capture_auth_checkpoint()
-        state_before = self.describe_auth_state()
-        _log_event(
-            "fitatu.auth.reauthenticate.start",
-            correlation_id=correlation_id,
-            state_before=state_before,
-        )
-        self._record_operational_event(
-            event="fitatu.auth.reauthenticate.start",
-            correlation_id=correlation_id,
-            payload={"state_before": state_before},
-        )
-
-        refresh_result: dict[str, Any] = {}
-        if self.auth.refresh_token:
-            refresh_result = self.refresh_access_token(correlation_id=correlation_id)
-
-        if refresh_result.get("status") == "ok":
-            self._set_lifecycle_state(self._derive_lifecycle_state())
-            refresh_ok_result = {
-                "status": "ok",
-                "mode": "refresh",
-                "refresh": refresh_result,
-                "state": self.describe_auth_state(),
-            }
-            _log_event(
-                "fitatu.auth.reauthenticate.ok",
-                correlation_id=correlation_id,
-                **refresh_ok_result,
-            )
-            self._record_operational_event(
-                event="fitatu.auth.reauthenticate.ok",
-                correlation_id=correlation_id,
-                payload=refresh_ok_result,
-            )
-            return refresh_ok_result
-
-        relogin_result: dict[str, Any] | None = None
-        relogin_applied = False
-        if relogin_callback is not None:
-            relogin_result = relogin_callback(self.auth)
-            if isinstance(relogin_result, dict):
-                refreshed_bearer = relogin_result.get("bearer_token")
-                refreshed_refresh = relogin_result.get("refresh_token")
-                if isinstance(refreshed_bearer, str) and refreshed_bearer.strip():
-                    self.auth.bearer_token = refreshed_bearer.strip()
-                    relogin_applied = True
-                if isinstance(refreshed_refresh, str) and refreshed_refresh.strip():
-                    self.auth.refresh_token = refreshed_refresh.strip()
-                self._persist_tokens_to_store()
-
-        if relogin_applied and self.auth.bearer_token:
-            self._set_lifecycle_state(self._derive_lifecycle_state())
-            relogin_ok_result: dict[str, Any] = {
-                "status": "ok",
-                "mode": "relogin",
-                "refresh": refresh_result,
-                "relogin": relogin_result,
-                "state": self.describe_auth_state(),
-            }
-            _log_event(
-                "fitatu.auth.reauthenticate.ok",
-                correlation_id=correlation_id,
-                **relogin_ok_result,
-            )
-            self._record_operational_event(
-                event="fitatu.auth.reauthenticate.ok",
-                correlation_id=correlation_id,
-                payload=relogin_ok_result,
-            )
-            return relogin_ok_result
-
-        rollback_applied = False
-        if rollback_on_failure:
-            self._restore_auth_checkpoint(checkpoint)
-            rollback_applied = True
-        elif clear_token_store:
-            self.clear_auth(clear_token_store=True)
-
-        if not rollback_applied:
-            self._set_lifecycle_state(FITATU_LIFECYCLE_REAUTH_FAILED)
-        failed_result: dict[str, Any] = {
-            "status": "error",
-            "mode": "failed",
-            "refresh": refresh_result,
-            "relogin": relogin_result,
-            "rollback_applied": rollback_applied,
-            "state": self.describe_auth_state(),
-        }
-        _log_event(
-            "fitatu.auth.reauthenticate.failed",
-            correlation_id=correlation_id,
-            **failed_result,
-        )
-        self._record_operational_event(
-            event="fitatu.auth.reauthenticate.failed",
-            correlation_id=correlation_id,
-            payload=failed_result,
-        )
-        return failed_result
-
-    @staticmethod
-    def _is_retryable_method(method: str) -> bool:
-        """Return True for idempotent HTTP methods that are safe to retry automatically."""
-        return method.upper() in {"GET", "HEAD", "OPTIONS"}
-
-    def _backoff_delay_seconds(self, attempt: int, retry_after_header: str | None = None) -> float:
-        """Compute the delay before the next retry, honouring a Retry-After header if present."""
-        if retry_after_header:
-            try:
-                parsed = float(retry_after_header)
-            except ValueError:
-                parsed = None
-            if parsed is not None and parsed >= 0:
-                return parsed
+    def _backoff_delay_seconds(self, attempt: int) -> float:
+        """Exponential delay before retry number ``attempt``."""
         return self.retry_base_delay_seconds * (2 ** max(0, attempt - 1))
 
-    def _headers(self, *, include_auth: bool) -> dict[str, str]:
-        """Build the full request header dict, optionally including the Bearer authorization."""
+    def _headers(self, *, include_auth: bool, has_json: bool) -> dict[str, str]:
+        """Build the request headers.
+
+        Only ``API-Key``, ``API-Secret`` and, on user routes, ``Authorization`` are
+        required. ``APP-SearchLocale`` (together with the ``locale`` query param) changes
+        search results, and the other locale and timezone headers describe the user. The
+        rest (``app-uuid``, ``api-cluster``, ``app-os``, ``app-version``, user agent) only
+        identify the client, always as the web app (``WEB_CLIENT_PROFILE``).
+        """
         headers = {
             "accept": "application/json, text/plain, */*",
-            "content-type": "application/json;charset=UTF-8",
             "api-key": self.auth.api_key,
             "api-secret": self.auth.api_secret,
             "app-uuid": self.auth.app_uuid,
@@ -501,13 +443,21 @@ class FitatuApiClient:
             "app-version": self.auth.app_version,
             "user-agent": self.auth.user_agent,
         }
+        if has_json:
+            headers["content-type"] = "application/json;charset=UTF-8"
         if include_auth and self.auth.bearer_token:
             headers["authorization"] = f"Bearer {self.auth.bearer_token}"
         return headers
 
     def _url(self, path: str) -> str:
-        """Resolve a relative path or absolute URL against the configured base_url."""
-        if path.startswith("http://") or path.startswith("https://"):
+        """Resolve a relative path or absolute URL against the configured base_url.
+
+        Absolute URLs must be https on a fitatu.com host; anything else raises
+        FitatuValidationError, so a URL taken from model output cannot leak the session.
+        """
+        if "://" in path:
+            if not _is_fitatu_url(path):
+                raise FitatuValidationError(f"refusing to call a non-Fitatu URL: {path!r}")
             return path
         if path.startswith("/"):
             return f"{self.base_url}{path}"
@@ -523,328 +473,236 @@ class FitatuApiClient:
         include_auth: bool = True,
         allow_refresh_on_401: bool = True,
         raw: bool = False,
+        idempotent: bool = False,
     ) -> Any:
         """Perform a Fitatu HTTP request with retries and optional auto-refresh.
 
+        A bearer token that expires within 60 seconds (JWT ``exp``) is refreshed before
+        the call; a 401 still triggers one refresh and one resend.
+
+        Network errors, 429 and 5xx are retried for GET, HEAD and OPTIONS, and for other
+        methods only with ``idempotent=True`` (a write that is safe to repeat, such as a
+        PUT of an absolute value). The server's ``Retry-After`` is honoured up to
+        30 seconds; a longer wait raises :class:`FitatuRateLimitError` with
+        ``retry_after`` set instead of blocking.
+
         With ``raw=True`` the response body is returned as ``bytes`` (``None`` when
         empty) instead of being decoded as JSON, e.g. for file downloads.
+
+        Redirects are not followed: a 3xx raises :class:`FitatuApiError`, so a request
+        body and the API headers never reach a host the URL check did not see.
         """
         correlation_id = _new_correlation_id()
         method_upper = method.upper()
-        retryable_method = self._is_retryable_method(method_upper)
+        url = self._url(path)
+        retryable = idempotent or method_upper in _SAFE_METHODS
+        # The bearer token only goes to the API itself (not e.g. the CMS on www.fitatu.com).
+        include_auth = include_auth and any(
+            url.startswith(f"{root}/") for root in (self.base_url, "https://fitatu.com/api")
+        )
+        can_refresh = include_auth and allow_refresh_on_401
         _log_event(
             "fitatu.request.start",
+            logging.DEBUG,
             correlation_id=correlation_id,
             method=method_upper,
             path=path,
             include_auth=include_auth,
-            allow_refresh_on_401=allow_refresh_on_401,
             params=params,
             has_json=json_data is not None,
         )
-        self._record_operational_event(
-            event="fitatu.request.start",
-            correlation_id=correlation_id,
-            payload={
-                "method": method_upper,
-                "path": path,
-                "include_auth": include_auth,
-                "allow_refresh_on_401": allow_refresh_on_401,
-            },
-        )
+        token = self.auth.bearer_token
+        expires_at = self.auth.bearer_expires_at
+        if can_refresh and expires_at is not None and expires_at < datetime.now(UTC) + REFRESH_MARGIN:
+            try:
+                self._auto_refresh(token, correlation_id)
+            except FitatuMaintenanceError:
+                raise
+            except FitatuApiError:
+                pass  # best effort: the token may still be valid, and a 401 refreshes again
 
         for attempt in range(1, self.retry_max_attempts + 1):
+            sent_token = self.auth.bearer_token
             try:
-                response = requests.request(
-                    method=method_upper,
-                    url=self._url(path),
-                    headers=self._headers(include_auth=include_auth),
-                    params=params,
-                    json=json_data,
-                    timeout=self.timeout_seconds,
-                )
+                response = self._send(method_upper, url, path, params, json_data, include_auth)
+                if response.status_code == 401 and can_refresh and self._auto_refresh(sent_token, correlation_id):
+                    response = self._send(method_upper, url, path, params, json_data, include_auth)
+            except requests.exceptions.InvalidHeader:
+                # Not retried, and its text is dropped: it quotes the header value, e.g. the bearer token.
+                raise FitatuValidationError(
+                    f"{method_upper} {path} -> a header value contains a line break or leading "
+                    "whitespace; check the tokens and locales in the session file"
+                ) from None
             except requests.RequestException as exc:
-                if retryable_method and attempt < self.retry_max_attempts:
+                if retryable and attempt < self.retry_max_attempts:
                     time.sleep(self._backoff_delay_seconds(attempt))
                     continue
                 raise FitatuConnectionError(
-                    message=f"Fitatu API network error: {method_upper} {path}: {exc}",
+                    message=f"{method_upper} {path} -> network error: {exc}",
                     body=str(exc),
                 ) from exc
 
-            if response.status_code == 401 and include_auth and allow_refresh_on_401 and self.auth.refresh_token:
-                refresh = self.refresh_access_token(correlation_id=correlation_id)
-                if refresh.get("status") == "ok":
-                    try:
-                        response = requests.request(
-                            method=method_upper,
-                            url=self._url(path),
-                            headers=self._headers(include_auth=True),
-                            params=params,
-                            json=json_data,
-                            timeout=self.timeout_seconds,
-                        )
-                    except requests.RequestException as exc:
-                        raise FitatuConnectionError(
-                            message=f"Fitatu API network error after refresh: {method_upper} {path}: {exc}",
-                            body=str(exc),
-                        ) from exc
-
-            if response.status_code in {429, 500, 502, 503, 504} and retryable_method and attempt < self.retry_max_attempts:
-                time.sleep(self._backoff_delay_seconds(attempt, retry_after_header=response.headers.get("retry-after")))
+            status = response.status_code
+            retry_after = _retry_after_seconds(response.headers.get("retry-after"))
+            if (
+                status in _RETRY_STATUSES
+                and retryable
+                and attempt < self.retry_max_attempts
+                and (retry_after is None or retry_after <= MAX_RETRY_AFTER_SECONDS)
+            ):
+                time.sleep(retry_after if retry_after is not None else self._backoff_delay_seconds(attempt))
                 continue
 
-            if response.status_code >= 400:
-                error_type: type[FitatuApiError] = FitatuApiError
-                # 403 is also used for premium/quota refusals, so only 401 means "log in again".
-                if response.status_code == 401:
-                    error_type = FitatuAuthError
-                elif response.status_code == 429:
-                    error_type = FitatuRateLimitError
-                error = error_type(
-                    message=f"Fitatu API request failed: {method_upper} {path}",
-                    status_code=response.status_code,
-                    body=response.text,
-                )
+            if status >= 300:  # redirects are not followed, so a 3xx is an error too
+                message = _error_message(method_upper, path, status, response.text)
                 _log_event(
                     "fitatu.request.error",
+                    logging.DEBUG,
                     correlation_id=correlation_id,
                     method=method_upper,
                     path=path,
-                    status_code=response.status_code,
-                    body=response.text,
+                    status_code=status,
+                    body=response.text[:300],
                 )
-                if response.status_code == 401:
-                    self._set_lifecycle_state(FITATU_LIFECYCLE_REAUTH_FAILED)
-                self._record_operational_event(
-                    event="fitatu.request.error",
-                    correlation_id=correlation_id,
-                    payload={
-                        "method": method_upper,
-                        "path": path,
-                        "status_code": response.status_code,
-                    },
-                )
-                raise error
-
-            if raw:
-                _log_event(
-                    "fitatu.request.ok",
-                    correlation_id=correlation_id,
-                    method=method_upper,
-                    path=path,
-                    status_code=response.status_code,
-                    result_type="bytes",
-                )
-                return response.content or None
-
-            if not response.text:
-                _log_event(
-                    "fitatu.request.ok",
-                    correlation_id=correlation_id,
-                    method=method_upper,
-                    path=path,
-                    status_code=response.status_code,
-                    result_type="None",
-                )
-                self._record_operational_event(
-                    event="fitatu.request.ok",
-                    correlation_id=correlation_id,
-                    payload={
-                        "method": method_upper,
-                        "path": path,
-                        "status_code": response.status_code,
-                        "result_type": "None",
-                    },
-                )
-                return None
-
-            try:
-                result = response.json()
-            except ValueError:
-                result = response.text
-                result_type = "str"
-            else:
-                result_type = type(result).__name__
+                if status == 429:
+                    if retry_after is not None:
+                        message += f" (retry after {retry_after:g} s)"
+                    raise FitatuRateLimitError(message, status_code=status, body=response.text, retry_after=retry_after)
+                # 403 is also used for premium/quota refusals, so only 401 means "log in again".
+                error_type = FitatuAuthError if status == 401 else FitatuApiError
+                raise error_type(message, status_code=status, body=response.text)
 
             _log_event(
                 "fitatu.request.ok",
+                logging.DEBUG,
                 correlation_id=correlation_id,
                 method=method_upper,
                 path=path,
-                status_code=response.status_code,
-                result_type=result_type,
+                status_code=status,
             )
-            self._record_operational_event(
-                event="fitatu.request.ok",
-                correlation_id=correlation_id,
-                payload={
-                    "method": method_upper,
-                    "path": path,
-                    "status_code": response.status_code,
-                    "result_type": result_type,
-                },
-            )
-            return result
+            if raw:
+                return response.content or None
+            if not response.text:
+                return None
+            try:
+                return response.json()
+            except ValueError:
+                return response.text
 
-        raise FitatuApiError(message=f"Fitatu API request failed after retries: {method_upper} {path}")
+        raise AssertionError("unreachable: the last attempt returns or raises")
 
-    def request_first_success(
+    def _send(
         self,
         method: str,
-        paths: list[str],
-        *,
-        params: dict[str, Any] | None = None,
-        json_data: Any | None = None,
-        include_auth: bool = True,
-        allow_refresh_on_401: bool = True,
-    ) -> Any:
-        """Try multiple route candidates and return the first non-404 success."""
-        last_error: FitatuApiError | None = None
-        for path in paths:
+        url: str,
+        path: str,
+        params: dict[str, Any] | None,
+        json_data: Any | None,
+        include_auth: bool,
+    ) -> requests.Response:
+        """Send one HTTP request on the pooled session."""
+        response = self._http.request(
+            method=method,
+            url=url,
+            headers=self._headers(include_auth=include_auth, has_json=json_data is not None),
+            params=params,
+            json=json_data,
+            timeout=self.timeout_seconds,
+            # A redirect would resend the body (password, refresh token) and API-Secret to any host.
+            allow_redirects=False,
+        )
+        # Checked before the status: during a break neither refresh nor retry helps.
+        _raise_on_technical_break(response, method, path)
+        return response
+
+    def _auto_refresh(self, sent_token: str | None, correlation_id: str) -> bool:
+        """Refresh a bearer token that is expiring or got a 401; True when there is a new one.
+
+        One refresh at a time: a call that waited for another one's refresh finds the
+        token already changed and just uses it. Tokens another process saved to the token
+        store (e.g. after logging in again) are used the same way. Fitatu does not rotate
+        refresh tokens (checked 2026-10-13), but none of this relies on that.
+
+        False means the session is gone: no refresh token, or /token/refresh rejected it
+        (400/401). Any other refresh failure (network, 429, 5xx) is raised as it is, so a
+        short outage does not look like a need to log in again.
+        """
+        with self._refresh_lock:
+            if self.auth.bearer_token != sent_token or self._take_tokens_saved_elsewhere():
+                return True
+            refresh_token = self.auth.refresh_token
+            if not refresh_token or refresh_token == self._rejected_refresh_token:
+                return False
             try:
-                return self.request(
-                    method,
-                    path,
-                    params=params,
-                    json_data=json_data,
-                    include_auth=include_auth,
-                    allow_refresh_on_401=allow_refresh_on_401,
-                )
+                self._refresh(correlation_id)
             except FitatuApiError as exc:
-                last_error = exc
-                if exc.status_code != 404:
-                    raise
-        if last_error is not None:
-            raise last_error
-        raise FitatuApiError(f"No paths provided for {method}")
+                if exc.status_code in {400, 401}:
+                    # Another process may have logged in again and saved a pair that still works.
+                    return self._take_tokens_saved_elsewhere()
+                raise
+            return True
 
     def refresh_access_token(self, *, correlation_id: str | None = None) -> dict[str, Any]:
-        """Refresh the bearer token using the current refresh token."""
-        request_correlation_id = correlation_id or _new_correlation_id()
-        if not self.auth.refresh_token:
-            missing_result: dict[str, Any] = {
+        """Get a new bearer token for the refresh token (``POST /token/refresh``).
+
+        Fitatu answers with the same refresh token (it does not rotate them, checked
+        2026-10-13); the client takes a different one if the reply ever carries it.
+
+        Returns ``{"status": "ok" | "error", "state": describe_auth_state()}``, plus
+        ``message`` and ``status_code`` on error. Tokens are never part of the result;
+        they are in ``client.auth`` and, with a token store, on disk.
+
+        A 400 or 401 means the refresh token is no longer valid: automatic refresh
+        stops until the client gets a different one (log in again, load a newer
+        session, or another process saves newer tokens to the token store).
+        """
+        try:
+            self._refresh(correlation_id or _new_correlation_id())
+        except FitatuMaintenanceError:
+            raise
+        except FitatuApiError as exc:
+            return {
                 "status": "error",
-                "message": "missing refresh_token",
+                "message": str(exc),
+                "status_code": exc.status_code,
+                "state": self.describe_auth_state(),
             }
-            _log_event(
-                "fitatu.auth.refresh.missing",
-                correlation_id=request_correlation_id,
-                result=missing_result,
+        return {"status": "ok", "state": self.describe_auth_state()}
+
+    def _refresh(self, correlation_id: str) -> None:
+        """``POST /token/refresh`` and take the tokens it returns; raises FitatuApiError on failure."""
+        refresh_token = self.auth.refresh_token
+        _log_event("fitatu.auth.refresh.start", correlation_id=correlation_id, state_before=self.describe_auth_state())
+        try:
+            if not refresh_token:
+                raise FitatuAuthError("POST /token/refresh -> missing refresh_token")
+            # The app sends exactly this body; the server takes no other shape.
+            data = self.request(
+                "POST",
+                "/token/refresh",
+                json_data={"refresh_token": refresh_token},
+                include_auth=False,
+                allow_refresh_on_401=False,
             )
-            self._record_operational_event(
-                event="fitatu.auth.refresh.missing",
-                correlation_id=request_correlation_id,
-                payload=missing_result,
-            )
-            return missing_result
-
-        _log_event(
-            "fitatu.auth.refresh.start",
-            correlation_id=request_correlation_id,
-            state_before=self.describe_auth_state(),
-        )
-        self._record_operational_event(
-            event="fitatu.auth.refresh.start",
-            correlation_id=request_correlation_id,
-            payload={"state_before": self.describe_auth_state()},
-        )
-
-        refresh_token_value = self.auth.refresh_token
-        refresh_payloads: list[dict[str, str]] = [
-            {"refresh_token": refresh_token_value},
-            {"refreshToken": refresh_token_value},
-            {"token": refresh_token_value},
-        ]
-        data: Any | None = None
-        last_refresh_error: FitatuApiError | None = None
-        for payload in refresh_payloads:
-            try:
-                candidate_data = self.request(
-                    "POST",
-                    "/token/refresh",
-                    json_data=payload,
-                    include_auth=False,
-                    allow_refresh_on_401=False,
-                )
-            except FitatuApiError as exc:
-                last_refresh_error = exc
-                continue
-
-            if not isinstance(candidate_data, dict):
-                data = candidate_data
-                continue
-
-            candidate_dict = cast(dict[str, Any], candidate_data)
-            candidate_token = candidate_dict.get("token") or candidate_dict.get("access_token")
-            if candidate_token:
-                data = candidate_data
-                break
-            data = candidate_data
-
-        if data is None and last_refresh_error is not None:
-            refresh_error_result: dict[str, Any] = {
-                "status": "error",
-                "message": str(last_refresh_error),
-                "status_code": last_refresh_error.status_code,
-                "body": last_refresh_error.body,
-            }
-            self._set_lifecycle_state(FITATU_LIFECYCLE_REAUTH_FAILED)
+            reply = as_dict(data) or {}
+            if not reply.get("token"):
+                raise FitatuApiError("POST /token/refresh -> token not found in refresh response")
+        except FitatuApiError as exc:
+            if exc.status_code in {400, 401}:
+                self._rejected_refresh_token = refresh_token
             _log_event(
                 "fitatu.auth.refresh.error",
-                correlation_id=request_correlation_id,
-                result=refresh_error_result,
+                correlation_id=correlation_id,
+                message=str(exc),
+                status_code=exc.status_code,
             )
-            self._record_operational_event(
-                event="fitatu.auth.refresh.error",
-                correlation_id=request_correlation_id,
-                payload=refresh_error_result,
-            )
-            return refresh_error_result
-
-        token: Any | None = None
-        refresh_token: Any | None = None
-        if isinstance(data, dict):
-            data_dict = cast(dict[str, Any], data)
-            token = data_dict.get("token") or data_dict.get("access_token")
-            refresh_token = data_dict.get("refresh_token") or data_dict.get("refreshToken")
-
-        if not token:
-            missing_token_result: dict[str, Any] = {
-                "status": "error",
-                "message": "token not found in refresh response",
-                "data": data,
-            }
-            self._set_lifecycle_state(FITATU_LIFECYCLE_REAUTH_FAILED)
-            _log_event(
-                "fitatu.auth.refresh.missing_token",
-                correlation_id=request_correlation_id,
-                result=missing_token_result,
-            )
-            self._record_operational_event(
-                event="fitatu.auth.refresh.missing_token",
-                correlation_id=request_correlation_id,
-                payload=missing_token_result,
-            )
-            return missing_token_result
-
-        self.auth.bearer_token = token
-        if refresh_token:
-            self.auth.refresh_token = str(refresh_token)
+            raise
+        self.auth.bearer_token = str(reply["token"])
+        new_refresh = reply.get("refreshToken") or reply.get("refresh_token")
+        if new_refresh:
+            self.auth.refresh_token = str(new_refresh)
         self._persist_tokens_to_store()
-        self._set_lifecycle_state(self._derive_lifecycle_state())
-        result = {"status": "ok", "token": token, "refresh_token": self.auth.refresh_token, "data": data}
-        _log_event(
-            "fitatu.auth.refresh.ok",
-            correlation_id=request_correlation_id,
-            state_after=self.describe_auth_state(),
-        )
-        self._record_operational_event(
-            event="fitatu.auth.refresh.ok",
-            correlation_id=request_correlation_id,
-            payload={"state_after": self.describe_auth_state()},
-        )
-        return result
+        _log_event("fitatu.auth.refresh.ok", correlation_id=correlation_id, state=self.describe_auth_state())
 
     @staticmethod
     def normalize_recipe_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -905,25 +763,19 @@ class FitatuApiClient:
                 "accessType[]": ["FREE", "PREMIUM"],
             },
         )
-        if isinstance(data, list):
-            return [cast(dict[str, Any], x) for x in data if isinstance(x, dict)]
         if isinstance(data, dict):
-            data_dict = cast(dict[str, Any], data)
-            nested = data_dict.get("data")
-            nested_dict = cast(dict[str, Any], nested) if isinstance(nested, dict) else {}
-            items_raw: Any = data_dict.get("items") or nested_dict.get("items") or data_dict.get("results") or []
-            if isinstance(items_raw, list):
-                return [cast(dict[str, Any], x) for x in items_raw if isinstance(x, dict)]
-        return []
+            nested = data.get("data")
+            nested_items = nested.get("items") if isinstance(nested, dict) else None
+            data = data.get("items") or nested_items or data.get("results")
+        return as_dict_list(data)
 
     def get_product_details(self, product_id: int | str) -> dict[str, Any]:
         """Fetch full product details including available measures.
 
-        The search endpoint returns both PRODUCT and RECIPE items in the same result
-        list.  RECIPE items (``type="RECIPE"`` in search results) have their details
-        under ``/recipes/{id}``, not ``/products/{id}``.  This method tries the product
-        route first and falls back to the recipe route on 404, so callers do not need
-        to distinguish item type before calling.
+        Only for ``type="PRODUCT"`` search hits; RECIPE hits are read with
+        :meth:`get_recipe`. Product and recipe ids are separate number spaces that overlap,
+        so a recipe id here is a 404 or an unrelated product with the same number: go by
+        the hit's ``type``.
 
         Measure field names in the returned dict differ by sub-key:
 
@@ -933,15 +785,12 @@ class FitatuApiClient:
         - ``result["initialMeasure"]`` — single dict with ``key``, ``weight``,
           ``unitKey``
 
-        Note: ``measures[n]["id"]`` is the correct field for ``measureId`` when
-        calling planner add/update helpers.  Do not assume ``measureId`` — that
-        field name appears only in ``simpleMeasures`` and search-result rows.
+        Note: ``measures[n]["id"]`` (or ``simpleMeasures[n]["id"]``) is the value to pass
+        as ``measureId`` to the planner add/update helpers. The ``measureId`` key itself
+        only appears in search-result rows (``measure.measureId``).
         """
-        data = self.request_first_success(
-            "GET",
-            [f"/products/{product_id}", f"/recipes/{product_id}"],
-        )
-        return cast(dict[str, Any], data) if isinstance(data, dict) else {"raw": data}
+        pid = validate_numeric_id(product_id, "product_id")
+        return read_reply(self.request("GET", f"/products/{pid}"), f"GET /products/{pid}")
 
     def create_recipe(
         self,
@@ -960,7 +809,9 @@ class FitatuApiClient:
         """Create a recipe from normalized product items."""
         normalized_items = self.normalize_recipe_items(items)
         if not normalized_items:
-            raise FitatuApiError("No valid recipe items to send")
+            raise FitatuValidationError(
+                "create_recipe needs at least one item with foodId+measureId or itemId+measureId"
+            )
         data = self.request(
             "POST",
             "/recipes",
@@ -977,7 +828,7 @@ class FitatuApiClient:
                 "tags": tags or [],
             },
         )
-        return cast(dict[str, Any], data) if isinstance(data, dict) else {"raw": data}
+        return write_reply(data)
 
     def create_product(
         self,
@@ -1024,8 +875,7 @@ class FitatuApiClient:
             payload["saturatedFat"] = saturated_fat
         if salt is not None:
             payload["salt"] = salt
-        data = self.request("POST", "/products", json_data=payload)
-        return cast(dict[str, Any], data) if isinstance(data, dict) else {"raw": data}
+        return write_reply(self.request("POST", "/products", json_data=payload))
 
     def search_user_food(
         self,
@@ -1041,12 +891,13 @@ class FitatuApiClient:
         Each result row uses ``foodId`` as the product identifier.
         Pass it to ``get_product_details(row["foodId"])`` for full details.
         """
+        uid = validate_numeric_id(user_id, "user_id")
         validate_positive_int(page, "page")
         validate_positive_int(limit, "limit")
-        day_value = day.isoformat() if isinstance(day, date) else day
+        day_value = as_date(day).isoformat()
         data = self.request(
             "GET",
-            f"/search/food/user/{user_id}",
+            f"/search/food/user/{uid}",
             params={
                 "date": day_value,
                 "phrase": phrase,
@@ -1054,19 +905,14 @@ class FitatuApiClient:
                 "limit": limit,
             },
         )
-        if isinstance(data, list):
-            return [cast(dict[str, Any], item) for item in data if isinstance(item, dict)]
         if isinstance(data, dict):
-            data_dict = cast(dict[str, Any], data)
-            items = data_dict.get("items") or data_dict.get("results") or data_dict.get("data") or []
-            if isinstance(items, list):
-                return [cast(dict[str, Any], item) for item in items if isinstance(item, dict)]
-        return []
+            data = data.get("items") or data.get("results") or data.get("data")
+        return as_dict_list(data)
 
     def delete_product(self, product_id: int | str) -> dict[str, Any]:
         """Delete a user-created product from the Fitatu catalog."""
-        data = self.request("DELETE", f"/products/{product_id}")
-        return cast(dict[str, Any], data) if isinstance(data, dict) else {"raw": data}
+        pid = validate_numeric_id(product_id, "product_id")
+        return write_reply(self.request("DELETE", f"/products/{pid}"))
 
     _PROPOSAL_SUPPORTED_PROPERTIES: frozenset[str] = frozenset({"rawIngredients"})
 
@@ -1084,20 +930,21 @@ class FitatuApiClient:
         against 22 candidates). Passing an unsupported name raises immediately
         without making a network call.
         """
+        pid = validate_numeric_id(product_id, "product_id")
         if property_name not in self._PROPOSAL_SUPPORTED_PROPERTIES:
-            raise FitatuApiError(
+            raise FitatuValidationError(
                 f"set_product_proposal: unsupported propertyName={property_name!r}. "
                 f"Supported: {sorted(self._PROPOSAL_SUPPORTED_PROPERTIES)}"
             )
         data = self.request(
             "POST",
-            f"/products/{product_id}/proposals",
+            f"/products/{pid}/proposals",
             json_data={
                 "propertyName": property_name,
                 "propertyValue": property_value,
             },
         )
-        return cast(dict[str, Any], data) if isinstance(data, dict) else {"raw": data}
+        return write_reply(data)
 
     def set_product_raw_ingredients(
         self,
@@ -1195,63 +1042,82 @@ class FitatuApiClient:
         predicate: Callable[[dict[str, Any]], bool] | None = None,
         page: int = 1,
         limit: int = 50,
+        dry_run: bool = True,
+        max_deletions: int = 10,
     ) -> dict[str, Any]:
         """Delete duplicate user-food products selected by brand or a caller-supplied predicate.
 
-        This is intentionally opt-in: pass ``brand`` or ``predicate`` so the helper does
-        not delete unrelated user products returned for the search phrase.
+        Deleting a catalog product cannot be undone, so the guards are on by default:
+
+        - Pass ``brand`` or ``predicate`` so unrelated products returned for the search
+          phrase are left alone. Only rows of ``type == "PRODUCT"`` are considered.
+        - ``dry_run=True`` (the default) only reports ``toDeleteProductIds``; pass
+          ``dry_run=False`` to delete.
+        - With more than one match, ``keep_product_id`` must name the one to keep.
+        - More than ``max_deletions`` deletions raise instead of deleting anything.
+        - Auth, rate-limit and maintenance errors stop the run and are raised; other
+          per-product failures are collected in ``errors``.
+
+        Raises:
+            FitatuValidationError: On a missing filter, an ambiguous or unknown
+                ``keep_product_id``, or too many deletions.
         """
         if brand is None and predicate is None:
-            raise FitatuApiError("cleanup requires brand or predicate filter")
+            raise FitatuValidationError("cleanup requires brand or predicate filter")
+        validate_non_negative_int(max_deletions, "max_deletions")
 
-        products = self.search_user_food(user_id, phrase, day, page=page, limit=limit)
-        matches: list[dict[str, Any]] = []
-        for product in products:
+        matched_ids: list[str] = []
+        for product in self.search_user_food(user_id, phrase, day, page=page, limit=limit):
+            product_id = product.get("foodId") or product.get("id")
+            if product.get("type") != "PRODUCT" or product_id is None:
+                continue
             if brand is not None and product.get("brand") != brand:
                 continue
             if predicate is not None and not predicate(product):
                 continue
-            matches.append(product)
+            matched_ids.append(str(product_id))
 
-        if not matches:
-            return {
-                "ok": True,
-                "phrase": phrase,
-                "matchedCount": 0,
-                "deletedCount": 0,
-                "keptProductId": None,
-                "deletedProductIds": [],
-                "errors": [],
-            }
+        if len(matched_ids) > 1 and keep_product_id is None:
+            raise FitatuValidationError(
+                f"{len(matched_ids)} products match {phrase!r} ({matched_ids}); "
+                "pass keep_product_id to say which one to keep"
+            )
+        keep_id = str(keep_product_id) if keep_product_id is not None else next(iter(matched_ids), None)
+        if matched_ids and keep_id not in matched_ids:
+            raise FitatuValidationError(f"keep_product_id {keep_id} is not one of the matches {matched_ids}")
+        to_delete = [product_id for product_id in matched_ids if product_id != keep_id]
 
-        keep_id = str(keep_product_id) if keep_product_id is not None else str(
-            matches[0].get("foodId") or matches[0].get("id")
-        )
         deleted_ids: list[str] = []
         errors: list[dict[str, Any]] = []
-        for product in matches:
-            product_id = product.get("foodId") or product.get("id")
-            if product_id is None or str(product_id) == keep_id:
-                continue
+        if not dry_run and len(to_delete) > max_deletions:
+            raise FitatuValidationError(
+                f"{len(to_delete)} products would be deleted, more than max_deletions={max_deletions}; "
+                "narrow the filter or raise max_deletions"
+            )
+        for product_id in to_delete if not dry_run else []:
             try:
                 self.delete_product(product_id)
-                deleted_ids.append(str(product_id))
+            except (FitatuAuthError, FitatuRateLimitError, FitatuMaintenanceError):
+                raise  # the rest would fail the same way
             except FitatuApiError as exc:
                 errors.append(
                     {
-                        "productId": str(product_id),
+                        "productId": product_id,
                         "message": str(exc),
                         "status_code": exc.status_code,
-                        "body": exc.body,
                     }
                 )
+            else:
+                deleted_ids.append(product_id)
 
         return {
             "ok": not errors,
+            "dryRun": dry_run,
             "phrase": phrase,
-            "matchedCount": len(matches),
-            "deletedCount": len(deleted_ids),
+            "matchedCount": len(matched_ids),
             "keptProductId": keep_id,
+            "toDeleteProductIds": to_delete,
+            "deletedCount": len(deleted_ids),
             "deletedProductIds": deleted_ids,
             "errors": errors,
         }
@@ -1266,7 +1132,7 @@ class FitatuApiClient:
 
     def get_recipes_catalog_category(self, category_id: int | str) -> Any:
         """Fetch a single recipes catalog category by id or slug."""
-        return self.request("GET", f"/recipes-catalog/category/{category_id}")
+        return self.request("GET", f"/recipes-catalog/category/{quote(str(category_id), safe='')}")
 
     def get_recipe(self, recipe_id: int | str) -> dict[str, Any]:
         """Fetch recipe details by recipe id.
@@ -1275,68 +1141,8 @@ class FitatuApiClient:
         Passing a slug causes a 500 from the backend.  Use ``get_recipes_catalog()`` to
         browse catalog categories and obtain real numeric recipe ids.
         """
-        rid = str(recipe_id).strip()
-        if rid and not rid.lstrip("-").isdigit():
-            raise FitatuApiError(
-                f"get_recipe requires a numeric recipe id, got slug-like value: {rid!r}. "
-                "Use get_recipes_catalog() to find numeric recipe ids."
-            )
-        data = self.request("GET", f"/recipes/{recipe_id}")
-        return cast(dict[str, Any], data) if isinstance(data, dict) else {"raw": data}
-
-    def get_user(self, user_id: str) -> dict[str, Any]:
-        """Fetch a user profile via the convenience client surface."""
-        return self.user_settings.get_profile(user_id)
-
-    def get_user_settings_for_day(self, user_id: str, day: date) -> dict[str, Any]:
-        """Fetch user settings resolved for a specific day."""
-        return self.user_settings.get_for_day(user_id, day)
-
-    def get_user_settings(self, user_id: str, day: date | None = None) -> dict[str, Any]:
-        """Fetch current user settings, optionally scoped by day."""
-        return self.user_settings.get(user_id, day=day)
-
-    def get_user_settings_new(self, user_id: str, day: date | None = None) -> dict[str, Any]:
-        """Fetch the `settings-new` payload (goals, targets, meal schema) for a day."""
-        return self.user_settings.get_new(user_id, day)
-
-    def get_diet_plan_settings(self, user_id: str) -> dict[str, Any]:
-        """Fetch diet plan settings for a user."""
-        return self.diet_plan.get_settings(user_id)
-
-    def get_day_plan(self, user_id: str, day: date) -> dict[str, Any]:
-        """Fetch a planner day snapshot via the convenience surface."""
-        return self.planner.get_day(user_id, day)
-
-    def get_food_tags_recipe(self) -> Any:
-        """Fetch recipe food tags from the resources module."""
-        return self.resources.get_food_tags_recipe()
-
-    def get_water(self, user_id: str, day: date) -> Any:
-        """Fetch water tracking data for a given day."""
-        return self.water.get_day(user_id, day)
-
-    def get_activities_catalog(self) -> Any:
-        """Fetch the activities catalog."""
-        return self.activities.get_catalog()
-
-    def probe_known_endpoints(self, user_id: str, day: date) -> list[dict[str, Any]]:
-        """Run a shallow health probe against the best-known stable endpoints."""
-        checks: list[tuple[str, str]] = [
-            ("GET", f"/users/{user_id}"),
-            ("GET", f"/users/{user_id}/settings/{day.isoformat()}"),
-            ("GET", f"/users/{user_id}/settings-new/{day.isoformat()}"),
-            ("GET", f"/diet-plan/{user_id}/settings"),
-            ("GET", f"/diet-and-activity-plan/{user_id}/day/{day.isoformat()}"),
-            ("GET", "/resources/food-tags/recipe"),
-            ("GET", "/activities"),
-            ("GET", f"/water/{user_id}/{day.isoformat()}"),
-        ]
-        out: list[dict[str, Any]] = []
-        for method, path in checks:
-            try:
-                self.request(method, path)
-                out.append({"method": method, "path": path, "ok": True, "status": 200})
-            except FitatuApiError as exc:
-                out.append({"method": method, "path": path, "ok": False, "status": exc.status_code, "error": str(exc)})
-        return out
+        try:
+            rid = validate_numeric_id(recipe_id, "recipe_id")
+        except FitatuValidationError as exc:
+            raise FitatuValidationError(f"{exc}. Use get_recipes_catalog() to find numeric recipe ids.") from None
+        return read_reply(self.request("GET", f"/recipes/{rid}"), f"GET /recipes/{rid}")

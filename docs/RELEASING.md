@@ -1,54 +1,45 @@
 # Releasing
 
-This project is structured as a normal Python package with `sdist` and `wheel` builds.
+## Checklist
 
-## Release Checklist
+1. Refresh the recorded fixtures if the API may have changed since the last recording
+   (what they cover: `tests/fixtures/README.md`):
 
-1. Update the version in `pyproject.toml` and `src/fitatu_api/__init__.py`.
-2. Add a new dated section to `CHANGELOG.md`.
-3. Run the full local quality gate:
+   ```bash
+   fitatu-api login -o session_data.json   # git-ignored; delete it when done
+   python scripts/record_fixtures.py --session session_data.json
+   git diff tests/fixtures/api_recording.json
+   ```
 
-```bash
-ruff check .
-mypy src
-pytest -q
-python -m build
-```
+   The script scrubs personal data and then runs a leak check that refuses to write the file
+   if a personal value from the raw recording survived. Read the diff anyway: the user id must
+   be the synthetic `1234567`, there must be no names, e-mail addresses or meal names of your
+   own, and only the changes you expect. Run the tests against the new file before committing it.
+   The scenario logs the first catalog hit for "jajko kurze", so when search ranks another product
+   first, tests that pin its recorded values (the totals in `tests/test_scripts.py`) need updating.
+2. Set the version in `pyproject.toml` and `src/fitatu_api/__init__.py`.
+3. In `CHANGELOG.md`, date the release's section: `## [X.Y.Z] - Unreleased` becomes
+   `## [X.Y.Z] - YYYY-MM-DD` (changes collected under a bare `## [Unreleased]` get that heading
+   instead).
+4. Run the checks CI runs:
 
-4. Review the built artifacts in `dist/`.
-5. Tag the release in Git once the public repository is ready.
-6. Publish the package artifacts to the chosen package index.
-7. Run a final repository hygiene pass:
-	- verify `git status` has no local credentials or generated artifacts
-	- verify `.gitignore` still covers `session_data.json`, `tmp_*`, `*_report.json`, and `apk_decompilation/`
+   ```bash
+   rm -rf dist                # python -m build adds to dist/ and never removes older builds
+   hatch run all              # ruff, mypy (src, demo.py, example.py), pytest, python -m build
+   pre-commit run --all-files
+   ```
 
-## Recommended Commands
+5. Check the artifacts in `dist/`:
 
-Build artifacts:
+   ```bash
+   python -m tarfile -l dist/fitatu_api-*.tar.gz
+   python -m pip install twine && python -m twine check dist/*
+   ```
 
-```bash
-python -m build
-```
+6. Make sure `git status` shows no session files or other local artifacts, then tag the release
+   (`git tag vX.Y.Z`), push the tag and upload with `python -m twine upload dist/*`.
 
-Check the archive metadata:
+## Versioning
 
-```bash
-python -m tarfile -l dist/fitatu_api-*.tar.gz
-```
-
-Optional upload flow with `twine`:
-
-```bash
-python -m pip install twine
-python -m twine check dist/*
-python -m twine upload dist/*
-```
-
-## Versioning Notes
-
-This package is still in an alpha phase. Prefer small, explicit version bumps with a short changelog entry that describes:
-
-- public API additions
-- behavior changes in auth/session handling
-- new tested/stable endpoint groups
-- backwards-compatibility notes when old imports or wrappers are preserved
+The package is alpha. Keep version bumps small and say in the changelog entry what changed in
+the public API, in auth and session handling, and what is not backwards compatible.

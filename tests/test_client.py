@@ -1,1070 +1,40 @@
+"""Low-level client: requests, auth, token store, validation, login."""
+
 from __future__ import annotations
 
 import base64
 import json
 import os
 import tempfile
+import time
 import unittest
-from copy import deepcopy
 from datetime import date
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 import requests
 
-from fitatu_api.api_client import (
-    ActivitiesModule,
-    AuthModule,
-    CmsModule,
-    DietPlanModule,
+from fitatu_api import (
     FitatuApiClient,
     FitatuApiError,
     FitatuAuthContext,
+    FitatuLibrary,
     FitatuTokenStore,
-    PlannerModule,
-    ResourcesModule,
-    UserSettingsModule,
     WaterModule,
 )
-from fitatu_api.exceptions import FitatuAuthError, FitatuConnectionError, FitatuRateLimitError
-from fitatu_api.fitatu_api import FitatuLibrary
+from fitatu_api.auth import jwt_user_id
+from fitatu_api.exceptions import (
+    FitatuAuthError,
+    FitatuConnectionError,
+    FitatuMaintenanceError,
+    FitatuNotFoundError,
+    FitatuRateLimitError,
+    FitatuValidationError,
+    describe_error,
+)
 
 TEST_DAY = date(2026, 4, 19)
-TEST_USER_ID = "user-123"
 
-
-class FakeClient:
-    def __init__(
-        self,
-        day_payload: dict[str, object],
-        *,
-        search_results: dict[str, list[dict[str, object]]] | None = None,
-        product_details: dict[str, dict[str, object]] | None = None,
-        recipe_details: dict[str, dict[str, object]] | None = None,
-    ) -> None:
-        self.day_payload = deepcopy(day_payload)
-        self.request_log: list[tuple[str, str]] = []
-        self.last_sync_payload: dict[str, object] | None = None
-        self.search_results = search_results or {}
-        self.product_details = product_details or {}
-        self.recipe_details = recipe_details or {}
-        self.planner = PlannerModule(self)
-
-    def request(self, method: str, path: str, **kwargs: object) -> object:
-        self.request_log.append((method, path))
-        expected_path = f"/diet-and-activity-plan/{TEST_USER_ID}/day/{TEST_DAY.isoformat()}"
-        if method == "GET" and path == expected_path:
-            return deepcopy(self.day_payload)
-        if method == "POST" and path == f"/diet-plan/{TEST_USER_ID}/days":
-            json_data = kwargs.get("json_data")
-            if not isinstance(json_data, dict):
-                raise AssertionError("sync payload missing")
-            self.last_sync_payload = deepcopy(json_data)
-            day_key = TEST_DAY.isoformat()
-            payload = json_data.get(day_key)
-            if not isinstance(payload, dict):
-                raise AssertionError("day payload missing")
-            self.day_payload = deepcopy(payload)
-            return [{"date": day_key, "revision": "rev-1", "errorMessage": None}]
-        raise AssertionError(f"Unexpected request: {method} {path} {kwargs}")
-
-    def request_first_success(
-        self,
-        method: str,
-        paths: list[str],
-        json_data: dict[str, object] | None = None,
-        **kwargs: object,
-    ) -> object:
-        self.request_log.append((method, paths[0]))
-        if method == "DELETE":
-            raise FitatuApiError("missing", status_code=404)
-        raise AssertionError(f"Unexpected method: {method}")
-
-    def search_food(self, phrase: str, **kwargs: object) -> list[dict[str, object]]:
-        return deepcopy(self.search_results.get(phrase.lower(), []))
-
-    def get_product_details(self, product_id: int | str) -> dict[str, object]:
-        details = self.product_details.get(str(product_id))
-        if details is None:
-            raise FitatuApiError(f"missing product {product_id}", status_code=404)
-        return deepcopy(details)
-
-    def get_recipe(self, recipe_id: int | str) -> dict[str, object]:
-        details = self.recipe_details.get(str(recipe_id))
-        if details is None:
-            raise FitatuApiError(f"missing recipe {recipe_id}", status_code=404)
-        return deepcopy(details)
-
-
-def _make_day_payload() -> dict[str, object]:
-    return {
-        "dietPlan": {
-            "breakfast": {
-                "items": [
-                    {
-                        "planDayDietItemId": "item-1",
-                        "productId": 1001,
-                        "measureId": 11,
-                        "measureQuantity": 1.0,
-                        "name": "Porridge",
-                        "eaten": False,
-                        "source": "API",
-                    }
-                ]
-            }
-        },
-        "toiletItems": [],
-        "note": None,
-        "tagsIds": [],
-    }
-
-
-def _make_custom_recipe_like_payload() -> dict[str, object]:
-    payload = _make_day_payload()
-    payload["dietPlan"] = {
-        "breakfast": {
-            "items": [
-                {
-                    "planDayDietItemId": "recipe-custom-1",
-                    "foodType": "CUSTOM_ITEM",
-                    "name": "Recipe-like custom",
-                    "measureId": 1,
-                    "measureQuantity": 1.0,
-                    "source": "API",
-                }
-            ]
-        }
-    }
-    return payload
-
-
-def _make_custom_add_payload() -> dict[str, object]:
-    payload = _make_day_payload()
-    payload["dietPlan"] = {
-        "breakfast": {
-            "items": [
-                {
-                    "planDayDietItemId": "custom-add-1",
-                    "foodType": "CUSTOM_ITEM",
-                    "name": "Manual custom",
-                    "measureId": 1,
-                    "measureQuantity": 100.0,
-                    "source": "API",
-                    "energy": 220,
-                    "protein": 10,
-                    "fat": 8,
-                    "carbohydrate": 20,
-                }
-            ]
-        }
-    }
-    return payload
-
-
-def _make_mixed_removal_payload() -> dict[str, object]:
-    return {
-        "dietPlan": {
-            "breakfast": {
-                "items": [
-                    {
-                        "planDayDietItemId": "prod-1",
-                        "foodType": "PRODUCT",
-                        "productId": 1001,
-                        "measureId": 1,
-                        "measureQuantity": 1.0,
-                        "name": "Milk",
-                        "source": "API",
-                    }
-                ]
-            },
-            "lunch": {
-                "items": [
-                    {
-                        "planDayDietItemId": "custom-add-1",
-                        "foodType": "CUSTOM_ITEM",
-                        "measureId": 1,
-                        "measureQuantity": 150.0,
-                        "name": "Custom add",
-                        "source": "WEB",
-                    }
-                ]
-            },
-            "snack": {
-                "items": [
-                    {
-                        "planDayDietItemId": "custom-recipe-1",
-                        "foodType": "CUSTOM_ITEM",
-                        "measureId": 1,
-                        "measureQuantity": 1.0,
-                        "name": "Custom recipe-like",
-                        "source": "API",
-                    }
-                ]
-            },
-        },
-        "toiletItems": [],
-        "note": None,
-        "tagsIds": [],
-    }
-
-
-def _make_recipe_details_payload() -> dict[str, object]:
-    return {
-        "id": 123456,
-        "name": "Protein Pancakes",
-        "photoUrl": "https://cdn.fitatu.example/recipes/123456.jpg",
-        "nutritionalValues": {
-            "energy": 410,
-            "protein": 30,
-            "fat": 12,
-            "carbohydrate": 45,
-        },
-        "ingredientsServing": 2,
-        "measureId": 39,
-        "measureQuantity": 1,
-    }
-
-
-class PlannerTests(unittest.TestCase):
-    def test_planner_helpers_read_and_find_items(self) -> None:
-        client = FakeClient(_make_day_payload())
-
-        meal = client.planner.get_meal(TEST_USER_ID, TEST_DAY, "breakfast")
-        items = client.planner.list_meal_items(TEST_USER_ID, TEST_DAY, "breakfast")
-        item = client.planner.find_meal_item(TEST_USER_ID, TEST_DAY, "breakfast", "porr")
-
-        self.assertEqual(meal["items"][0]["name"], "Porridge")
-        self.assertEqual(len(items), 1)
-        self.assertIsNotNone(item)
-        self.assertEqual(item["productId"], 1001)
-
-    def test_update_day_item_changes_portion_and_name(self) -> None:
-        client = FakeClient(_make_day_payload())
-        result = client.planner.update_day_item(
-            TEST_USER_ID,
-            TEST_DAY,
-            meal_type="breakfast",
-            item_id="item-1",
-            measure_quantity=2.5,
-            measure_id=12,
-            eaten=True,
-            name="Updated porridge",
-            source="WEB",
-        )
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["validation"]["measureQuantity"], True)
-        updated_item = client.day_payload["dietPlan"]["breakfast"]["items"][0]
-        self.assertEqual(updated_item["measureQuantity"], 2.5)
-        self.assertEqual(updated_item["name"], "Updated porridge")
-
-    def test_update_day_item_raises_when_item_missing(self) -> None:
-        client = FakeClient(_make_day_payload())
-        with self.assertRaises(FitatuApiError):
-            client.planner.update_day_item(
-                TEST_USER_ID,
-                TEST_DAY,
-                meal_type="breakfast",
-                item_id="missing-item",
-                measure_quantity=2.0,
-            )
-
-    def test_add_custom_item_to_day_meal_appends_manual_entry(self) -> None:
-        client = FakeClient(_make_day_payload())
-
-        result = client.planner.add_custom_item_to_day_meal(
-            TEST_USER_ID,
-            TEST_DAY,
-            meal_type="breakfast",
-            name="Fresh juice",
-            calories=45,
-            protein_g=1,
-            fat_g=0,
-            carbs_g=10,
-        )
-
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["addedItem"]["foodType"], "CUSTOM_ITEM")
-        self.assertEqual(result["addedItem"]["name"], "Fresh juice")
-
-    def test_add_recipe_to_day_meal_appends_recipe_entry(self) -> None:
-        client = FakeClient(_make_day_payload())
-
-        result = client.planner.add_recipe_to_day_meal(
-            TEST_USER_ID,
-            TEST_DAY,
-            meal_type="breakfast",
-            recipe_id=123456,
-            food_type="RECIPE",
-            measure_id=39,
-            measure_quantity=1,
-            ingredients_serving=1,
-        )
-
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["addedItem"]["foodType"], "RECIPE")
-        self.assertEqual(result["addedItem"]["recipeId"], 123456)
-
-        saved_item = client.day_payload["dietPlan"]["breakfast"]["items"][-1]
-        self.assertEqual(saved_item["foodType"], "RECIPE")
-        self.assertEqual(saved_item["recipeId"], 123456)
-        self.assertTrue(bool(saved_item.get("planDayDietItemId")))
-
-    def test_add_recipe_to_day_meal_hydrates_additional_fields_from_recipe_details(self) -> None:
-        client = FakeClient(
-            _make_day_payload(),
-            recipe_details={"123456": _make_recipe_details_payload()},
-        )
-
-        result = client.planner.add_recipe_to_day_meal(
-            TEST_USER_ID,
-            TEST_DAY,
-            meal_type="breakfast",
-            recipe_id=123456,
-            ingredients_serving=None,
-        )
-
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["recipeDetailsHydration"]["status"], "hydrated")
-        self.assertEqual(result["addedItem"]["name"], "Protein Pancakes")
-        self.assertEqual(result["addedItem"]["photo"], "https://cdn.fitatu.example/recipes/123456.jpg")
-        self.assertEqual(result["addedItem"]["energy"], 410)
-        self.assertEqual(result["addedItem"]["protein"], 30)
-        self.assertEqual(result["addedItem"]["fat"], 12)
-        self.assertEqual(result["addedItem"]["carbohydrate"], 45)
-        self.assertEqual(result["addedItem"]["ingredientsServing"], 2)
-
-    def test_add_recipe_to_day_meal_keeps_explicit_serving_fields_over_recipe_defaults(self) -> None:
-        details = _make_recipe_details_payload()
-        details["measureId"] = 99
-        details["measureQuantity"] = 3
-        details["ingredientsServing"] = 7
-        client = FakeClient(
-            _make_day_payload(),
-            recipe_details={"123456": details},
-        )
-
-        result = client.planner.add_recipe_to_day_meal(
-            TEST_USER_ID,
-            TEST_DAY,
-            meal_type="breakfast",
-            recipe_id=123456,
-            measure_id=39,
-            measure_quantity=1,
-            ingredients_serving=1,
-        )
-
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["addedItem"]["measureId"], 39)
-        self.assertEqual(result["addedItem"]["measureQuantity"], 1)
-        self.assertEqual(result["addedItem"]["ingredientsServing"], 1)
-
-    def test_add_recipe_to_day_meal_continues_when_recipe_details_unavailable(self) -> None:
-        client = FakeClient(_make_day_payload())
-
-        result = client.planner.add_recipe_to_day_meal(
-            TEST_USER_ID,
-            TEST_DAY,
-            meal_type="breakfast",
-            recipe_id=999999,
-        )
-
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["recipeDetailsHydration"]["status"], "unavailable")
-        self.assertEqual(result["addedItem"]["recipeId"], 999999)
-
-    def test_add_recipe_to_day_meal_hydrated_fields_are_sent_in_sync_payload(self) -> None:
-        client = FakeClient(
-            _make_day_payload(),
-            recipe_details={"123456": _make_recipe_details_payload()},
-        )
-
-        client.planner.add_recipe_to_day_meal(
-            TEST_USER_ID,
-            TEST_DAY,
-            meal_type="breakfast",
-            recipe_id=123456,
-        )
-
-        self.assertIsNotNone(client.last_sync_payload)
-        assert client.last_sync_payload is not None
-        synced_day = client.last_sync_payload[TEST_DAY.isoformat()]
-        assert isinstance(synced_day, dict)
-        synced_items = synced_day["dietPlan"]["breakfast"]["items"]
-        synced_item = synced_items[-1]
-        self.assertEqual(synced_item["name"], "Protein Pancakes")
-        self.assertEqual(synced_item["energy"], 410)
-        self.assertEqual(synced_item["protein"], 30)
-
-    def test_compact_diet_item_for_sync_keeps_recipe_id(self) -> None:
-        item = {
-            "planDayDietItemId": "recipe-1",
-            "foodType": "RECIPE",
-            "recipeId": 777,
-            "measureId": 39,
-            "measureQuantity": 1,
-            "ingredientsServing": 1,
-            "source": "API",
-            "name": "Recipe name",
-            "energy": 100,
-            "protein": 5,
-            "fat": 3,
-            "carbohydrate": 9,
-        }
-
-        compact = PlannerModule._compact_diet_item_for_sync(item)
-
-        self.assertEqual(compact["foodType"], "RECIPE")
-        self.assertEqual(compact["recipeId"], 777)
-        self.assertEqual(compact["planDayDietItemId"], "recipe-1")
-
-    def test_remove_day_item_marks_the_row_deleted(self) -> None:
-        client = FakeClient(_make_day_payload())
-
-        result = client.planner.remove_day_item(TEST_USER_ID, TEST_DAY, "breakfast", "item-1")
-
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["cleanupMode"], "deleted_at")
-        synced = client.day_payload["dietPlan"]["breakfast"]["items"]
-        self.assertEqual(synced[0]["planDayDietItemId"], "item-1")
-        self.assertTrue(synced[0]["deletedAt"])
-
-    def test_remove_day_item_delegates_to_auto_strategy(self) -> None:
-        client = FakeClient(_make_day_payload())
-
-        with patch.object(
-            client.planner,
-            "remove_day_item_with_strategy",
-            return_value={"ok": True, "cleanupMode": "removed", "resolvedKind": "normal_item"},
-        ) as remove_with_strategy:
-            result = client.planner.remove_day_item(
-                TEST_USER_ID,
-                TEST_DAY,
-                "breakfast",
-                "item-1",
-                delete_all_related_meals=True,
-                use_aggressive_soft_delete=False,
-            )
-
-        self.assertTrue(result["ok"])
-        remove_with_strategy.assert_called_once_with(
-            TEST_USER_ID,
-            TEST_DAY,
-            "breakfast",
-            "item-1",
-            item_kind="auto",
-            delete_all_related_meals=True,
-            use_aggressive_soft_delete=False,
-            max_soft_delete_retries=2,
-        )
-
-    def test_remove_day_item_via_snapshot_removes_item_from_payload(self) -> None:
-        client = FakeClient(_make_day_payload())
-
-        result = client.planner.remove_day_item_via_snapshot(TEST_USER_ID, TEST_DAY, "breakfast", "item-1")
-
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["cleanupMode"], "removed")
-        self.assertNotIn("breakfast", client.day_payload["dietPlan"])
-
-    def test_classify_day_item_for_removal_distinguishes_kinds(self) -> None:
-        product_client = FakeClient(_make_day_payload())
-        custom_add_client = FakeClient(_make_custom_add_payload())
-        custom_recipe_client = FakeClient(_make_custom_recipe_like_payload())
-
-        product_kind = product_client.planner.classify_day_item_for_removal(
-            TEST_USER_ID,
-            TEST_DAY,
-            "breakfast",
-            "item-1",
-        )
-        custom_add_kind = custom_add_client.planner.classify_day_item_for_removal(
-            TEST_USER_ID,
-            TEST_DAY,
-            "breakfast",
-            "custom-add-1",
-        )
-        custom_recipe_kind = custom_recipe_client.planner.classify_day_item_for_removal(
-            TEST_USER_ID,
-            TEST_DAY,
-            "breakfast",
-            "recipe-custom-1",
-        )
-
-        self.assertEqual(product_kind["resolvedKind"], "normal_item")
-        self.assertEqual(custom_add_kind["resolvedKind"], "custom_add_item")
-        self.assertEqual(custom_recipe_kind["resolvedKind"], "custom_recipe_item")
-
-    def test_remove_day_item_with_strategy_for_custom_recipe_prefers_soft_delete(self) -> None:
-        client = FakeClient(_make_custom_recipe_like_payload())
-
-        with patch.object(
-            client.planner,
-            "soft_remove_day_item_via_snapshot",
-            return_value={"ok": True, "cleanupMode": "deleted_at"},
-        ) as soft_remove, patch.object(
-            client.planner,
-            "remove_day_item_via_snapshot",
-            return_value={"ok": True, "cleanupMode": "removed"},
-        ) as snapshot_remove:
-            result = client.planner.remove_day_item_with_strategy(
-                TEST_USER_ID,
-                TEST_DAY,
-                "breakfast",
-                "recipe-custom-1",
-                item_kind="custom_recipe_item",
-                max_soft_delete_retries=2,
-            )
-
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["resolvedKind"], "custom_recipe_item")
-        self.assertEqual(result["attempts"][0]["step"], "soft_deleted_at_retry_1")
-        self.assertEqual(soft_remove.call_count, 1)
-        snapshot_remove.assert_not_called()
-
-    def test_remove_day_items_by_kind_filters_targets_and_uses_resolved_strategy(self) -> None:
-        client = FakeClient(_make_mixed_removal_payload())
-
-        with patch.object(
-            client.planner,
-            "remove_day_item_with_strategy",
-            side_effect=[
-                {"ok": True, "cleanupMode": "removed"},
-            ],
-        ) as remove_with_strategy:
-            result = client.planner.remove_day_items_by_kind(
-                TEST_USER_ID,
-                TEST_DAY,
-                item_kind="normal_item",
-            )
-
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["targetedCount"], 1)
-        self.assertEqual(result["removedCount"], 1)
-        remove_with_strategy.assert_called_once_with(
-            TEST_USER_ID,
-            TEST_DAY,
-            "breakfast",
-            "prod-1",
-            item_kind="normal_item",
-            delete_all_related_meals=False,
-            use_aggressive_soft_delete=True,
-            max_soft_delete_retries=2,
-        )
-
-    def test_remove_day_items_by_kind_supports_meal_scope(self) -> None:
-        client = FakeClient(_make_mixed_removal_payload())
-
-        with patch.object(
-            client.planner,
-            "remove_day_item_with_strategy",
-            return_value={"ok": True, "cleanupMode": "deleted_at"},
-        ) as remove_with_strategy:
-            result = client.planner.remove_day_items_by_kind(
-                TEST_USER_ID,
-                TEST_DAY,
-                item_kind="custom_add_item",
-                meal_key="lunch",
-            )
-
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["targetedCount"], 1)
-        self.assertEqual(result["meal"], "lunch")
-        remove_with_strategy.assert_called_once_with(
-            TEST_USER_ID,
-            TEST_DAY,
-            "lunch",
-            "custom-add-1",
-            item_kind="custom_add_item",
-            delete_all_related_meals=False,
-            use_aggressive_soft_delete=True,
-            max_soft_delete_retries=2,
-        )
-
-    def test_quick_add_form_with_fallback_uses_search_add_when_endpoint_missing(self) -> None:
-        client = FakeClient(_make_day_payload())
-        search_item = {"id": 55, "name": "Banan", "measureId": 7}
-
-        with patch.object(
-            client,
-            "search_food",
-            return_value=[search_item],
-            create=True,
-        ):
-            result = client.planner.quick_add_form_with_fallback(
-                {
-                    "name": "banan",
-                    "mealType": "breakfast",
-                    "mealDate": TEST_DAY.isoformat(),
-                    "userId": TEST_USER_ID,
-                    "measureQuantity": 2,
-                }
-            )
-
-        self.assertEqual(result["mode"], "fallback_search_add")
-        self.assertTrue(result["result"]["ok"])
-        self.assertEqual(result["result"]["searchItem"]["id"], 55)
-
-    def test_add_search_result_to_day_meal_resolves_direct_measure_unit(self) -> None:
-        client = FakeClient(
-            _make_day_payload(),
-            search_results={
-                "jogurt": [
-                    {
-                        "id": 24881725,
-                        "foodId": 24881725,
-                        "name": "Jogurt naturalny",
-                        "measure": {"defaultMeasureId": 2, "measureName": "opakowanie"},
-                    }
-                ]
-            },
-            product_details={
-                "24881725": {
-                    "id": 24881725,
-                    "measures": [
-                        {"id": 1, "name": "g", "weightPerUnit": 1},
-                        {"id": 2, "name": "opakowanie", "weightPerUnit": 150},
-                    ],
-                    "simpleMeasures": [
-                        {"id": 1, "portion": 100, "capacity": 100, "isLiquid": False},
-                        {"id": 2, "portion": 1, "capacity": 150, "isLiquid": False},
-                    ],
-                }
-            },
-        )
-
-        result = client.planner.add_search_result_to_day_meal(
-            TEST_USER_ID,
-            TEST_DAY,
-            meal_type="breakfast",
-            phrase="jogurt",
-            measure_unit="g",
-            measure_amount=200,
-        )
-
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["measureResolution"]["measureId"], 1)
-        self.assertEqual(result["measureResolution"]["measureQuantity"], 200)
-        self.assertEqual(result["measureResolution"]["strategy"], "direct_unit_match")
-
-    def test_add_search_result_to_day_meal_converts_amount_when_unit_missing(self) -> None:
-        client = FakeClient(
-            _make_day_payload(),
-            search_results={
-                "jogurt": [
-                    {
-                        "id": 24881725,
-                        "foodId": 24881725,
-                        "name": "Jogurt naturalny",
-                        "measure": {"defaultMeasureId": 2, "measureName": "opakowanie"},
-                    }
-                ]
-            },
-            product_details={
-                "24881725": {
-                    "id": 24881725,
-                    "measures": [
-                        {"id": 2, "name": "opakowanie", "weightPerUnit": 150},
-                    ],
-                    "simpleMeasures": [
-                        {"id": 2, "portion": 1, "capacity": 150, "isLiquid": False},
-                    ],
-                }
-            },
-        )
-
-        result = client.planner.add_search_result_to_day_meal(
-            TEST_USER_ID,
-            TEST_DAY,
-            meal_type="breakfast",
-            phrase="jogurt",
-            measure_unit="g",
-            measure_amount=300,
-            strict_measure=False,
-        )
-
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["measureResolution"]["measureId"], 2)
-        self.assertAlmostEqual(float(result["measureResolution"]["measureQuantity"]), 2.0)
-        self.assertEqual(result["measureResolution"]["strategy"], "converted_from_weight")
-
-    def test_add_search_result_to_day_meal_raises_when_unit_unresolvable_in_strict_mode(self) -> None:
-        client = FakeClient(
-            _make_day_payload(),
-            search_results={
-                "jogurt": [
-                    {
-                        "id": 24881725,
-                        "foodId": 24881725,
-                        "name": "Jogurt naturalny",
-                        "measure": {"defaultMeasureId": 2, "measureName": "opakowanie"},
-                    }
-                ]
-            },
-            product_details={
-                "24881725": {
-                    "id": 24881725,
-                    "measures": [
-                        {"id": 2, "name": "opakowanie", "weightPerUnit": 0},
-                    ],
-                    "simpleMeasures": [],
-                }
-            },
-        )
-
-        with self.assertRaises(FitatuApiError):
-            client.planner.add_search_result_to_day_meal(
-                TEST_USER_ID,
-                TEST_DAY,
-                meal_type="breakfast",
-                phrase="jogurt",
-                measure_unit="g",
-                measure_amount=150,
-                strict_measure=True,
-            )
-
-    def test_unsupported_route_helpers_warn_but_still_call_through(self) -> None:
-        client = Mock()
-        client.auth.fitatu_user_id = TEST_USER_ID
-        client.request_first_success.return_value = {"status": "ok"}
-        module = PlannerModule(client)
-
-        calls = (
-            lambda: module.get_product_for_meal("10", "breakfast", TEST_DAY),
-            lambda: module.quick_add_form({"name": "x"}),
-            lambda: module.send_changes({"items": []}),
-            lambda: module.add_day_items(TEST_USER_ID, TEST_DAY, [{"id": 1}]),
-            lambda: module.remove_activity_day_item(TEST_USER_ID, TEST_DAY, "act-1"),
-        )
-        for call in calls:
-            with self.assertWarns(DeprecationWarning):
-                call()
-
-        self.assertEqual(client.request_first_success.call_count, 5)
-
-    def test_quick_add_form_with_fallback_rejects_incomplete_payload(self) -> None:
-        module = PlannerModule(Mock())
-        with self.assertRaises(FitatuApiError):
-            module.quick_add_form_with_fallback({"name": "banan"})
-
-    def test_sync_single_day_posts_to_the_single_days_route(self) -> None:
-        client = Mock()
-        client.request.return_value = [{"date": TEST_DAY.isoformat(), "revision": "r", "errorMessage": None}]
-        PlannerModule(client).sync_single_day(TEST_USER_ID, TEST_DAY, {"dietPlan": {}}, synchronous=True)
-
-        client.request.assert_called_once_with(
-            "POST",
-            f"/diet-plan/{TEST_USER_ID}/days",
-            json_data={TEST_DAY.isoformat(): {"dietPlan": {}}},
-            params={"synchronous": "true"},
-        )
-        client.request_first_success.assert_not_called()
-
-
-class FacadeTests(unittest.TestCase):
-    def test_fitatu_api_wrapper_delegates_to_api_client(self) -> None:
-        class StubPlanner:
-            def add_product_to_day_meal(self, *args: object, **kwargs: object) -> dict[str, object]:
-                return {"ok": True, "args": args, "kwargs": kwargs}
-
-            def add_recipe_to_day_meal(self, *args: object, **kwargs: object) -> dict[str, object]:
-                return {"ok": True, "args": args, "kwargs": kwargs}
-
-            def add_search_result_to_day_meal(
-                self, *args: object, **kwargs: object
-            ) -> dict[str, object]:
-                return {"ok": True, "args": args, "kwargs": kwargs}
-
-            def update_day_item(self, *args: object, **kwargs: object) -> dict[str, object]:
-                return {"ok": True, "args": args, "kwargs": kwargs}
-
-        class StubClient:
-            def __init__(self, auth: object) -> None:
-                self.auth = auth
-                self.planner = StubPlanner()
-
-        class StubAuth:
-            fitatu_user_id = "user-123"
-
-        with patch(
-            "fitatu_api.facade.FitatuAuthContext.from_session_data",
-            return_value=StubAuth(),
-        ), patch(
-            "fitatu_api.facade.FitatuApiClient",
-            StubClient,
-        ):
-            lib = FitatuLibrary(session_data={}, headless=True)
-            result = lib.update_day_item_via_api(
-                target_date=TEST_DAY,
-                meal_key="breakfast",
-                item_id="item-1",
-                measure_quantity=3.0,
-            )
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["result"]["kwargs"]["measure_quantity"], 3.0)
-
-    def test_fitatu_api_add_recipe_to_day_meal_via_api_delegates_to_planner(self) -> None:
-        class StubPlanner:
-            def add_recipe_to_day_meal(self, *args: object, **kwargs: object) -> dict[str, object]:
-                return {"ok": True, "args": args, "kwargs": kwargs}
-
-        class StubClient:
-            def __init__(self, auth: object) -> None:
-                self.auth = auth
-                self.planner = StubPlanner()
-
-        class StubAuth:
-            fitatu_user_id = "user-123"
-
-        with patch(
-            "fitatu_api.facade.FitatuAuthContext.from_session_data",
-            return_value=StubAuth(),
-        ), patch(
-            "fitatu_api.facade.FitatuApiClient",
-            StubClient,
-        ):
-            lib = FitatuLibrary(session_data={}, headless=True)
-            result = lib.add_recipe_to_day_meal_via_api(
-                target_date=TEST_DAY,
-                meal_key="breakfast",
-                recipe_id=999,
-                food_type="RECIPE",
-                measure_id=39,
-                measure_quantity=1,
-                ingredients_serving=1,
-            )
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["result"]["kwargs"]["recipe_id"], 999)
-        self.assertEqual(result["result"]["kwargs"]["food_type"], "RECIPE")
-        self.assertEqual(result["result"]["kwargs"]["hydrate_from_recipe_details"], True)
-
-    def test_fitatu_api_add_recipe_to_day_meal_via_api_forwards_hydration_toggle(self) -> None:
-        class StubPlanner:
-            def add_recipe_to_day_meal(self, *args: object, **kwargs: object) -> dict[str, object]:
-                return {"ok": True, "args": args, "kwargs": kwargs}
-
-        class StubClient:
-            def __init__(self, auth: object) -> None:
-                self.auth = auth
-                self.planner = StubPlanner()
-
-        class StubAuth:
-            fitatu_user_id = "user-123"
-
-        with patch(
-            "fitatu_api.facade.FitatuAuthContext.from_session_data",
-            return_value=StubAuth(),
-        ), patch(
-            "fitatu_api.facade.FitatuApiClient",
-            StubClient,
-        ):
-            lib = FitatuLibrary(session_data={}, headless=True)
-            result = lib.add_recipe_to_day_meal_via_api(
-                target_date=TEST_DAY,
-                meal_key="breakfast",
-                recipe_id=999,
-                hydrate_from_recipe_details=False,
-            )
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["result"]["kwargs"]["hydrate_from_recipe_details"], False)
-
-    def test_fitatu_api_preserves_error_details(self) -> None:
-        class StubPlanner:
-            def update_day_item(self, *args: object, **kwargs: object) -> dict[str, object]:
-                raise FitatuApiError("boom", status_code=503, body="down")
-
-        class StubClient:
-            def __init__(self, auth: object) -> None:
-                self.auth = auth
-                self.planner = StubPlanner()
-
-        class StubAuth:
-            fitatu_user_id = "user-123"
-
-        with patch(
-            "fitatu_api.facade.FitatuAuthContext.from_session_data",
-            return_value=StubAuth(),
-        ), patch(
-            "fitatu_api.facade.FitatuApiClient",
-            StubClient,
-        ):
-            lib = FitatuLibrary(session_data={}, headless=True)
-            result = lib.update_day_item_via_api(
-                target_date=TEST_DAY,
-                meal_key="breakfast",
-                item_id="item-1",
-            )
-        self.assertEqual(result["status_code"], 503)
-        self.assertEqual(result["body"], "down")
-
-    def test_fitatu_api_remove_day_item_via_api_delegates_to_planner(self) -> None:
-        class StubPlanner:
-            def remove_day_item(self, *args: object, **kwargs: object) -> dict[str, object]:
-                return {"ok": True, "args": args, "kwargs": kwargs}
-
-        class StubClient:
-            def __init__(self, auth: object) -> None:
-                self.auth = auth
-                self.planner = StubPlanner()
-
-        class StubAuth:
-            fitatu_user_id = "user-123"
-
-        with patch(
-            "fitatu_api.facade.FitatuAuthContext.from_session_data",
-            return_value=StubAuth(),
-        ), patch(
-            "fitatu_api.facade.FitatuApiClient",
-            StubClient,
-        ):
-            lib = FitatuLibrary(session_data={}, headless=True)
-            result = lib.remove_day_item_via_api(
-                target_date=TEST_DAY,
-                meal_key="breakfast",
-                item_id="item-1",
-                delete_all_related_meals=True,
-            )
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["result"]["kwargs"]["delete_all_related_meals"], True)
-
-    def test_fitatu_api_remove_day_item_with_strategy_via_api_delegates_to_planner(self) -> None:
-        class StubPlanner:
-            def remove_day_item_with_strategy(self, *args: object, **kwargs: object) -> dict[str, object]:
-                return {"ok": True, "args": args, "kwargs": kwargs}
-
-        class StubClient:
-            def __init__(self, auth: object) -> None:
-                self.auth = auth
-                self.planner = StubPlanner()
-
-        class StubAuth:
-            fitatu_user_id = "user-123"
-
-        with patch(
-            "fitatu_api.facade.FitatuAuthContext.from_session_data",
-            return_value=StubAuth(),
-        ), patch(
-            "fitatu_api.facade.FitatuApiClient",
-            StubClient,
-        ):
-            lib = FitatuLibrary(session_data={}, headless=True)
-            result = lib.remove_day_item_with_strategy_via_api(
-                target_date=TEST_DAY,
-                meal_key="breakfast",
-                item_id="item-1",
-                item_kind="custom_recipe_item",
-                max_soft_delete_retries=3,
-            )
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["result"]["kwargs"]["item_kind"], "custom_recipe_item")
-        self.assertEqual(result["result"]["kwargs"]["max_soft_delete_retries"], 3)
-
-    def test_fitatu_api_remove_day_items_by_kind_via_api_delegates_to_planner(self) -> None:
-        class StubPlanner:
-            def remove_day_items_by_kind(self, *args: object, **kwargs: object) -> dict[str, object]:
-                return {"ok": True, "args": args, "kwargs": kwargs}
-
-        class StubClient:
-            def __init__(self, auth: object) -> None:
-                self.auth = auth
-                self.planner = StubPlanner()
-
-        class StubAuth:
-            fitatu_user_id = "user-123"
-
-        with patch(
-            "fitatu_api.facade.FitatuAuthContext.from_session_data",
-            return_value=StubAuth(),
-        ), patch(
-            "fitatu_api.facade.FitatuApiClient",
-            StubClient,
-        ):
-            lib = FitatuLibrary(session_data={}, headless=True)
-            result = lib.remove_day_items_by_kind_via_api(
-                target_date=TEST_DAY,
-                item_kind="normal_item",
-                meal_key="breakfast",
-                max_items=3,
-            )
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["result"]["kwargs"]["item_kind"], "normal_item")
-        self.assertEqual(result["result"]["kwargs"]["meal_key"], "breakfast")
-        self.assertEqual(result["result"]["kwargs"]["max_items"], 3)
-
-    def test_fitatu_api_move_day_item_via_api_delegates_to_planner(self) -> None:
-        class StubPlanner:
-            def move_day_item(self, *args: object, **kwargs: object) -> dict[str, object]:
-                return {"ok": True, "args": args, "kwargs": kwargs}
-
-        class StubClient:
-            def __init__(self, auth: object) -> None:
-                self.auth = auth
-                self.planner = StubPlanner()
-
-        class StubAuth:
-            fitatu_user_id = "user-123"
-
-        with patch(
-            "fitatu_api.facade.FitatuAuthContext.from_session_data",
-            return_value=StubAuth(),
-        ), patch(
-            "fitatu_api.facade.FitatuApiClient",
-            StubClient,
-        ):
-            lib = FitatuLibrary(session_data={}, headless=True)
-            result = lib.move_day_item_via_api(
-                from_date=TEST_DAY,
-                from_meal_key="breakfast",
-                item_id="item-1",
-                to_meal_key="lunch",
-                synchronous=True,
-            )
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["result"]["kwargs"]["from_meal_type"], "breakfast")
-        self.assertEqual(result["result"]["kwargs"]["to_meal_type"], "lunch")
-        self.assertEqual(result["result"]["kwargs"]["synchronous"], True)
-
-    def test_fitatu_api_replace_day_item_with_custom_item_via_api_delegates_to_planner(self) -> None:
-        class StubPlanner:
-            def replace_day_item_with_custom_item(self, *args: object, **kwargs: object) -> dict[str, object]:
-                return {"ok": True, "args": args, "kwargs": kwargs}
-
-        class StubClient:
-            def __init__(self, auth: object) -> None:
-                self.auth = auth
-                self.planner = StubPlanner()
-
-        class StubAuth:
-            fitatu_user_id = "user-123"
-
-        with patch(
-            "fitatu_api.facade.FitatuAuthContext.from_session_data",
-            return_value=StubAuth(),
-        ), patch(
-            "fitatu_api.facade.FitatuApiClient",
-            StubClient,
-        ):
-            lib = FitatuLibrary(session_data={}, headless=True)
-            result = lib.replace_day_item_with_custom_item_via_api(
-                target_date=TEST_DAY,
-                meal_key="breakfast",
-                item_id="item-1",
-                name="Updated",
-                calories=100,
-                protein_g=10,
-                fat_g=2,
-                carbs_g=12,
-            )
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["result"]["kwargs"]["meal_type"], "breakfast")
-        self.assertEqual(result["result"]["kwargs"]["name"], "Updated")
-        self.assertEqual(result["result"]["kwargs"]["synchronous"], True)
 
 
 class ApiClientTests(unittest.TestCase):
@@ -1129,12 +99,12 @@ class ApiClientTests(unittest.TestCase):
     def test_search_user_food_calls_user_food_endpoint(self) -> None:
         client = self._make_client()
         with patch.object(client, "request", return_value=[{"foodId": 1, "name": "Meal"}]) as req:
-            result = client.search_user_food("user-123", "Meal", TEST_DAY, page=2, limit=10)
+            result = client.search_user_food("123", "Meal", TEST_DAY, page=2, limit=10)
 
         self.assertEqual(result[0]["foodId"], 1)
         req.assert_called_once_with(
             "GET",
-            "/search/food/user/user-123",
+            "/search/food/user/123",
             params={
                 "date": TEST_DAY.isoformat(),
                 "phrase": "Meal",
@@ -1239,9 +209,9 @@ class ApiClientTests(unittest.TestCase):
     def test_cleanup_duplicate_user_products_deletes_filtered_duplicates(self) -> None:
         client = self._make_client()
         products = [
-            {"foodId": 1, "name": "Meal", "brand": "Provider", "energy": 100},
-            {"foodId": 2, "name": "Meal", "brand": "Provider", "energy": 100},
-            {"foodId": 3, "name": "Meal", "brand": "Other", "energy": 100},
+            {"foodId": 1, "type": "PRODUCT", "name": "Meal", "brand": "Provider", "energy": 100},
+            {"foodId": 2, "type": "PRODUCT", "name": "Meal", "brand": "Provider", "energy": 100},
+            {"foodId": 3, "type": "PRODUCT", "name": "Meal", "brand": "Other", "energy": 100},
         ]
         with patch.object(client, "search_user_food", return_value=products), patch.object(
             client,
@@ -1254,18 +224,19 @@ class ApiClientTests(unittest.TestCase):
                 TEST_DAY,
                 brand="Provider",
                 keep_product_id=1,
+                dry_run=False,
             )
 
         self.assertEqual(result["ok"], True)
         self.assertEqual(result["matchedCount"], 2)
         self.assertEqual(result["deletedProductIds"], ["2"])
-        delete_product.assert_called_once_with(2)
+        delete_product.assert_called_once_with("2")
 
     def test_cleanup_duplicate_user_products_accepts_custom_predicate(self) -> None:
         client = self._make_client()
         products = [
-            {"foodId": 1, "name": "Meal", "brand": "A", "energy": 100},
-            {"foodId": 2, "name": "Meal", "brand": "B", "energy": 200},
+            {"foodId": 1, "type": "PRODUCT", "name": "Meal", "brand": "A", "energy": 100},
+            {"foodId": 2, "type": "PRODUCT", "name": "Meal", "brand": "B", "energy": 200},
         ]
         with patch.object(client, "search_user_food", return_value=products), patch.object(
             client,
@@ -1277,16 +248,78 @@ class ApiClientTests(unittest.TestCase):
                 "Meal",
                 TEST_DAY,
                 predicate=lambda product: product.get("energy") == 200,
+                dry_run=False,
             )
 
         self.assertEqual(result["matchedCount"], 1)
         self.assertEqual(result["deletedCount"], 0)
         delete_product.assert_not_called()
 
+    def _cleanup(self, products: list[dict], **kwargs: object) -> tuple[dict, Mock]:
+        client = self._make_client()
+        delete = kwargs.pop("delete", None) or Mock(return_value={})
+        with patch.object(client, "search_user_food", return_value=products), patch.object(
+            client, "delete_product", delete
+        ):
+            result = client.cleanup_duplicate_user_products("123", "Meal", TEST_DAY, brand="P", **kwargs)
+        return result, delete
+
+    def test_cleanup_is_a_dry_run_by_default_and_skips_recipes(self) -> None:
+        rows = [
+            {"foodId": 1, "type": "PRODUCT", "brand": "P"},
+            {"foodId": 2, "type": "PRODUCT", "brand": "P"},
+            {"foodId": 3, "type": "RECIPE", "brand": "P"},
+            {"foodId": 4, "brand": "P"},
+        ]
+        result, delete = self._cleanup(rows, keep_product_id=1)
+
+        delete.assert_not_called()
+        self.assertEqual((result["dryRun"], result["matchedCount"]), (True, 2))
+        self.assertEqual((result["toDeleteProductIds"], result["deletedProductIds"]), (["2"], []))
+
+    def test_cleanup_needs_a_known_keep_id_when_several_match(self) -> None:
+        rows = [{"foodId": n, "type": "PRODUCT", "brand": "P"} for n in (1, 2)]
+        with self.assertRaisesRegex(FitatuValidationError, "keep_product_id"):
+            self._cleanup(rows, dry_run=False)
+        with self.assertRaisesRegex(FitatuValidationError, "not one of the matches"):
+            self._cleanup(rows, keep_product_id=99, dry_run=False)
+
+    def test_cleanup_refuses_more_than_max_deletions(self) -> None:
+        rows = [{"foodId": n, "type": "PRODUCT", "brand": "P"} for n in range(1, 13)]
+        delete = Mock(return_value={})
+        with self.assertRaisesRegex(FitatuValidationError, "max_deletions=10"):
+            self._cleanup(rows, keep_product_id=1, dry_run=False, delete=delete)
+        delete.assert_not_called()
+
+        result, _ = self._cleanup(rows, keep_product_id=1, dry_run=False, max_deletions=11)
+        self.assertEqual(result["deletedCount"], 11)
+
+    def test_cleanup_stops_on_auth_and_rate_limit_errors(self) -> None:
+        rows = [{"foodId": n, "type": "PRODUCT", "brand": "P"} for n in (1, 2, 3, 4)]
+        for error in (FitatuAuthError("gone", status_code=401), FitatuRateLimitError("slow", status_code=429)):
+            with self.subTest(error=type(error).__name__):
+                delete = Mock(side_effect=error)
+                with self.assertRaises(type(error)):
+                    self._cleanup(rows, keep_product_id=1, dry_run=False, delete=delete)
+                delete.assert_called_once()
+
+        delete = Mock(side_effect=[FitatuApiError("x", status_code=500), {}, {}])
+        result, _ = self._cleanup(rows, keep_product_id=1, dry_run=False, delete=delete)
+        self.assertEqual((result["ok"], result["deletedProductIds"]), (False, ["3", "4"]))
+        self.assertEqual(result["errors"][0]["productId"], "2")
+
+    def test_search_user_food_accepts_iso_date_strings(self) -> None:
+        client = self._make_client()
+        with patch.object(client, "request", return_value=[]) as req:
+            client.search_user_food("123", "Meal", "2026-04-19")
+        self.assertEqual(req.call_args.kwargs["params"]["date"], "2026-04-19")
+        with self.assertRaisesRegex(FitatuValidationError, "YYYY-MM-DD"):
+            client.search_user_food("123", "Meal", "19.04.2026")
+
     def test_request_maps_network_errors_to_fitatu_api_error(self) -> None:
         client = self._make_client()
         with patch(
-            "fitatu_api.client.requests.request",
+            "fitatu_api.client.requests.Session.request",
             side_effect=requests.RequestException("boom"),
         ):
             with self.assertRaises(FitatuConnectionError):
@@ -1299,7 +332,7 @@ class ApiClientTests(unittest.TestCase):
             client.auth.refresh_token = None
             response = Mock(status_code=status, text="{}", headers={})
             with self.subTest(status=status), patch(
-                "fitatu_api.client.requests.request", return_value=response
+                "fitatu_api.client.requests.Session.request", return_value=response
             ), patch("fitatu_api.client.time.sleep", return_value=None):
                 with self.assertRaises(expected) as ctx:
                     client.request("GET", "/ping")
@@ -1318,7 +351,7 @@ class ApiClientTests(unittest.TestCase):
         second = Mock(status_code=200, text='{"ok": true}', headers={})
         second.json.return_value = {"ok": True}
         with patch(
-            "fitatu_api.client.requests.request",
+            "fitatu_api.client.requests.Session.request",
             side_effect=[first, second],
         ) as req, patch(
             "fitatu_api.client.time.sleep",
@@ -1336,13 +369,9 @@ class ApiClientTests(unittest.TestCase):
         second.json.return_value = {"ok": True}
 
         with patch(
-            "fitatu_api.client.requests.request",
+            "fitatu_api.client.requests.Session.request",
             side_effect=[first, second],
-        ) as req, patch.object(
-            client,
-            "refresh_access_token",
-            return_value={"status": "ok", "token": "fresh-token"},
-        ) as refresh:
+        ) as req, patch.object(client, "_refresh") as refresh:
             result = client.request("GET", "/ping")
 
         self.assertEqual(result["ok"], True)
@@ -1354,7 +383,7 @@ class ApiClientTests(unittest.TestCase):
         response = Mock(status_code=200, text="plain-text-response", headers={})
         response.json.side_effect = ValueError("not-json")
 
-        with patch("fitatu_api.client.requests.request", return_value=response):
+        with patch("fitatu_api.client.requests.Session.request", return_value=response):
             result = client.request("GET", "/ping")
 
         self.assertEqual(result, "plain-text-response")
@@ -1363,26 +392,10 @@ class ApiClientTests(unittest.TestCase):
         client = self._make_client()
         response = Mock(status_code=204, text="", headers={})
 
-        with patch("fitatu_api.client.requests.request", return_value=response):
+        with patch("fitatu_api.client.requests.Session.request", return_value=response):
             result = client.request("DELETE", "/ping")
 
         self.assertIsNone(result)
-
-    def test_request_first_success_falls_back_from_404(self) -> None:
-        client = self._make_client()
-
-        with patch.object(
-            client,
-            "request",
-            side_effect=[
-                FitatuApiError("missing", status_code=404),
-                {"ok": True},
-            ],
-        ) as req:
-            result = client.request_first_success("GET", ["/missing", "/working"])
-
-        self.assertEqual(result["ok"], True)
-        self.assertEqual(req.call_count, 2)
 
     def test_search_food_supports_nested_dict_shape(self) -> None:
         client = self._make_client()
@@ -1399,22 +412,16 @@ class ApiClientTests(unittest.TestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0]["name"], "Banan")
 
-    def test_get_product_details_falls_back_to_route_variant(self) -> None:
+    def test_get_product_details_does_not_try_the_recipe_route(self) -> None:
+        # Product and recipe ids overlap: a 404 must not turn into some unrelated recipe.
         client = self._make_client()
 
-        with patch.object(
-            client,
-            "request",
-            side_effect=[
-                FitatuApiError("missing", status_code=404),
-                {"id": 321, "name": "Product"},
-            ],
-        ) as req:
-            result = client.get_product_details(321)
+        with patch.object(client, "request", side_effect=FitatuApiError("missing", status_code=404)) as req:
+            with self.assertRaises(FitatuApiError) as caught:
+                client.get_product_details(321)
 
-        self.assertEqual(result["id"], 321)
-        self.assertEqual(req.call_count, 2)
-        self.assertEqual(req.call_args_list[1].args, ("GET", "/recipes/321"))
+        self.assertEqual(caught.exception.status_code, 404)
+        req.assert_called_once_with("GET", "/products/321")
 
     def test_search_food_sends_access_type_as_list_param(self) -> None:
         client = self._make_client()
@@ -1432,7 +439,7 @@ class ApiClientTests(unittest.TestCase):
             with patch.object(
                 client,
                 "request",
-                return_value={"access_token": "new-token", "refresh_token": "new-refresh"},
+                return_value={"token": "new-token", "refreshToken": "new-refresh"},
             ):
                 result = client.refresh_access_token()
             self.assertEqual(result["status"], "ok")
@@ -1440,24 +447,43 @@ class ApiClientTests(unittest.TestCase):
             self.assertIn("new-token", store_path.read_text(encoding="utf-8"))
             self.assertIn("new-refresh", store_path.read_text(encoding="utf-8"))
 
-    def test_refresh_falls_back_to_alternate_payload_keys(self) -> None:
+    def test_refresh_sends_only_the_refresh_token_and_returns_no_tokens(self) -> None:
         client = self._make_client()
-        with patch.object(
-            client,
-            "request",
-            side_effect=[
-                FitatuApiError("bad refresh payload", status_code=400, body="bad"),
-                {"token": "new-token", "refreshToken": "new-refresh"},
-            ],
-        ) as request:
+        with patch.object(client, "request", return_value={"token": "new-token", "refreshToken": "new-refresh"}) as request:
             result = client.refresh_access_token()
 
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(client.auth.bearer_token, "new-token")
-        self.assertEqual(client.auth.refresh_token, "new-refresh")
-        self.assertEqual(request.call_count, 2)
-        self.assertEqual(request.call_args_list[0].kwargs["json_data"], {"refresh_token": "refresh-token"})
-        self.assertEqual(request.call_args_list[1].kwargs["json_data"], {"refreshToken": "refresh-token"})
+        request.assert_called_once_with(
+            "POST",
+            "/token/refresh",
+            json_data={"refresh_token": "refresh-token"},
+            include_auth=False,
+            allow_refresh_on_401=False,
+        )
+        self.assertEqual((client.auth.bearer_token, client.auth.refresh_token), ("new-token", "new-refresh"))
+        self.assertEqual(set(result), {"status", "state"})
+        self.assertNotIn("new-token", json.dumps(result))
+        self.assertNotIn("new-refresh", json.dumps(result))
+
+    def test_rejected_refresh_token_stops_auto_refresh_until_a_new_one_arrives(self) -> None:
+        client = self._make_client()
+        expired = Mock(status_code=401, text="", headers={})
+        rejected = Mock(status_code=401, text='{"message": "Invalid refresh token"}', headers={})
+        with patch("fitatu_api.client.requests.Session.request", side_effect=[expired, rejected, expired]) as http:
+            with self.assertRaises(FitatuAuthError):
+                client.request("GET", "/ping")
+            with self.assertRaises(FitatuAuthError):
+                client.request("GET", "/ping")
+
+        # call 1: 401, refresh rejected; call 2: 401 and no second refresh attempt
+        self.assertEqual([c.kwargs["url"].rsplit("/", 1)[-1] for c in http.call_args_list], ["ping", "refresh", "ping"])
+
+        client.auth.refresh_token = "a-new-refresh-token"
+        ok = Mock(status_code=200, text='{"token": "fresh"}', headers={})
+        ok.json.return_value = {"token": "fresh"}
+        with patch("fitatu_api.client.requests.Session.request", side_effect=[expired, ok, ok]) as http:
+            client.request("GET", "/ping")
+        self.assertEqual(http.call_count, 3)
+        self.assertEqual(client.auth.bearer_token, "fresh")
 
     def test_refresh_returns_error_when_refresh_token_missing(self) -> None:
         client = self._make_client()
@@ -1487,66 +513,20 @@ class ApiClientTests(unittest.TestCase):
 
             self.assertIsNone(client.auth.bearer_token)
             self.assertIsNone(client.auth.refresh_token)
-            self.assertEqual(client.lifecycle_state, "relogin_required")
             self.assertFalse(store_path.exists())
 
-    def test_reauthenticate_returns_refresh_success(self) -> None:
-        client = self._make_client()
-
-        with patch.object(client, "refresh_access_token", return_value={"status": "ok", "token": "fresh"}):
-            result = client.reauthenticate()
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["mode"], "refresh")
-
-    def test_reauthenticate_uses_relogin_callback_after_refresh_failure(self) -> None:
-        client = self._make_client()
-
-        with patch.object(
-            client,
-            "refresh_access_token",
-            return_value={"status": "error", "message": "expired"},
-        ):
-            result = client.reauthenticate(
-                relogin_callback=lambda auth: {
-                    "bearer_token": "new-bearer",
-                    "refresh_token": "new-refresh",
-                }
-            )
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["mode"], "relogin")
-        self.assertEqual(client.auth.bearer_token, "new-bearer")
-
-    def test_reauthenticate_rolls_back_on_failure(self) -> None:
-        client = self._make_client()
-        original_bearer = client.auth.bearer_token
-        original_refresh = client.auth.refresh_token
-
-        with patch.object(
-            client,
-            "refresh_access_token",
-            return_value={"status": "error", "message": "expired"},
-        ):
-            result = client.reauthenticate(
-                relogin_callback=lambda auth: {"note": "no tokens here"},
-                rollback_on_failure=True,
-            )
-
-        self.assertEqual(result["status"], "error")
-        self.assertTrue(result["rollback_applied"])
-        self.assertEqual(client.auth.bearer_token, original_bearer)
-        self.assertEqual(client.auth.refresh_token, original_refresh)
-
     def test_headers_and_url_helpers_include_expected_values(self) -> None:
-        client = self._make_client(base_url="https://example.com/api")
+        client = self._make_client(base_url="https://de-de.fitatu.com/api/")
 
-        headers = client._headers(include_auth=True)
+        headers = client._headers(include_auth=True, has_json=False)
 
         self.assertIn("authorization", headers)
-        self.assertEqual(client._url("/ping"), "https://example.com/api/ping")
-        self.assertEqual(client._url("ping"), "https://example.com/api/ping")
-        self.assertEqual(client._url("https://other.test/x"), "https://other.test/x")
+        self.assertNotIn("content-type", headers)
+        self.assertIn("content-type", client._headers(include_auth=True, has_json=True))
+        self.assertEqual(client._url("/ping"), "https://de-de.fitatu.com/api/ping")
+        self.assertEqual(client._url("ping"), "https://de-de.fitatu.com/api/ping")
+        cms = "https://www.fitatu.com/cms/api/graphql"
+        self.assertEqual(client._url(cms), cms)
 
     def test_auth_context_roundtrips_to_session_data(self) -> None:
         auth = FitatuAuthContext(
@@ -1569,15 +549,14 @@ class ApiClientTests(unittest.TestCase):
         restored = FitatuAuthContext.from_session_data(exported)
         self.assertEqual(restored.bearer_token, "bearer")
         self.assertEqual(restored.refresh_token, "refresh")
-        self.assertEqual(restored.api_cluster, "cluster")
         self.assertEqual(restored.fitatu_user_id, "user-123")
-
-    def test_management_report_includes_session_and_modules(self) -> None:
-        client = self._make_client()
-        report = client.management_report()
-        self.assertEqual(report["management_report_schema_version"], "1.0")
-        self.assertIn("planner", report["modules"])
-        self.assertNotIn("bearer_token", report["session_data"])
+        # The client identity is a library constant, not part of the session.
+        self.assertNotIn("api_key", exported)
+        self.assertNotIn("api_cluster", exported)
+        self.assertEqual(restored.api_cluster, "pl-pl0")
+        # Older session files carry the identity too; it must not pin an outdated client profile.
+        old_file = {"api_cluster": "pl-pl2", "app_version": "4.0.0", "api_secret": "old", "user_agent": "x"}
+        self.assertEqual(FitatuAuthContext.from_session_data(old_file), FitatuAuthContext())
 
     def test_recipe_catalog_helpers_call_expected_routes(self) -> None:
         client = self._make_client()
@@ -1612,59 +591,200 @@ class ApiClientTests(unittest.TestCase):
             ],
         )
 
-    def test_probe_known_endpoints_collects_statuses(self) -> None:
-        client = self._make_client()
-        side_effect = [
-            {"ok": True},
-            {"ok": True},
-            FitatuApiError("forbidden", status_code=403),
-            {"ok": True},
-            {"ok": True},
-            {"ok": True},
-            {"ok": True},
-            {"ok": True},
-        ]
-        with patch.object(client, "request", side_effect=side_effect):
-            result = client.probe_known_endpoints("user-123", TEST_DAY)
-        self.assertEqual(len(result), 8)
-        self.assertEqual(result[2]["ok"], False)
-        self.assertEqual(result[2]["status"], 403)
-
     def test_package_root_exports_main_symbols(self) -> None:
         import fitatu_api
 
         self.assertIs(fitatu_api.FitatuApiClient, FitatuApiClient)
         self.assertIs(fitatu_api.FitatuLibrary, FitatuLibrary)
+        self.assertIs(fitatu_api.FitatuValidationError, FitatuValidationError)
+        self.assertIs(fitatu_api.FitatuNotFoundError, FitatuNotFoundError)
+        self.assertIs(fitatu_api.FitatuMaintenanceError, FitatuMaintenanceError)
         self.assertIsInstance(fitatu_api.__version__, str)
 
-    def test_operational_store_records_and_reads_events(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store_path = Path(tmpdir) / "ops.sqlite"
-            client = self._make_client(operational_store_path=store_path)
 
-            with patch(
-                "fitatu_api.client.requests.request",
-                side_effect=requests.RequestException("boom"),
+class CredentialSafetyTests(unittest.TestCase):
+    def _client(self) -> FitatuApiClient:
+        auth = FitatuAuthContext(bearer_token="secret-bearer", refresh_token="secret-refresh")
+        return FitatuApiClient(auth=auth, retry_max_attempts=1, retry_base_delay_seconds=0.0)
+
+    def test_urls_off_fitatu_or_without_https_are_refused(self) -> None:
+        client = self._client()
+        # requests connects to evil.example for the backslash ones; urlsplit sees a Fitatu host.
+        tricky = ("https://evil.example\\.fitatu.com/api", "https://evil.example\\@pl-pl.fitatu.com/api")
+        for url in (
+            "https://evil.example/api/x",
+            "http://pl-pl.fitatu.com/api/x",
+            "https://fitatu.com.evil.example/x",
+            "https://user@pl-pl.fitatu.com/api/x",
+            *(f"{base}/x" for base in tricky),
+        ):
+            with self.subTest(url=url), patch("fitatu_api.client.requests.Session.request") as http:
+                with self.assertRaises(FitatuValidationError):
+                    client.request("GET", url)
+                http.assert_not_called()
+        for base_url in ("https://example.com/api", *tricky):
+            with self.subTest(base_url=base_url), self.assertRaises(ValueError):
+                FitatuApiClient(auth=FitatuAuthContext(bearer_token="b"), base_url=base_url)
+
+    def test_bearer_goes_only_to_the_api_root(self) -> None:
+        client = self._client()
+        response = Mock(status_code=200, text="", headers={})
+        with patch("fitatu_api.client.requests.Session.request", return_value=response) as http:
+            client.request("POST", "https://www.fitatu.com/cms/api/graphql", json_data={"query": "{ x }"})
+            client.request("GET", "/users/1")
+
+        cms_headers, api_headers = (call.kwargs["headers"] for call in http.call_args_list)
+        self.assertNotIn("authorization", cms_headers)
+        self.assertEqual(cms_headers["api-key"], "FITATU-MOBILE-APP")
+        self.assertEqual(api_headers["authorization"], "Bearer secret-bearer")
+
+    def test_redirects_are_not_followed(self) -> None:
+        # requests would resend a 307's POST body (password, refresh token) to the Location host.
+        def redirect(request: requests.PreparedRequest, **kwargs: object) -> requests.Response:
+            response = requests.Response()
+            response.status_code, response.url, response.request = 307, request.url, request
+            response.headers["Location"] = "http://evil.example/steal"
+            response._content = b""
+            return response
+
+        with patch("requests.adapters.HTTPAdapter.send", side_effect=redirect) as send:
+            with self.assertRaises(FitatuApiError) as login:
+                FitatuApiClient.login("me@example.com", "hunter2-password")
+            refresh = self._client().refresh_access_token()
+
+        self.assertEqual(
+            [call.args[0].url for call in send.call_args_list],
+            ["https://pl-pl.fitatu.com/api/login", "https://pl-pl.fitatu.com/api/token/refresh"],
+        )
+        self.assertEqual(login.exception.status_code, 307)
+        self.assertEqual((refresh["status"], refresh["status_code"]), ("error", 307))
+
+    def test_path_ids_must_be_numeric(self) -> None:
+        client = self._client()
+        with patch.object(client, "request") as request:
+            for call in (
+                lambda: client.delete_product("../users/123/measurements/2020-01-01"),
+                lambda: client.get_product_details("12/../../users/1"),
+                lambda: client.set_product_raw_ingredients("x1", "rice"),
+                lambda: client.get_recipe("recipe-of-the-day"),
+                lambda: client.search_user_food("1/../2", "rice", TEST_DAY),
             ):
-                with self.assertRaises(FitatuApiError):
-                    client.request("GET", "/ping")
+                with self.assertRaises(FitatuValidationError):
+                    call()
+            request.assert_not_called()
 
-            self.assertGreater(client.management_report()["operational_event_count"], 0)
-            assert client.operational_store is not None
-            events = client.operational_store.list_recent_events()
-            self.assertGreaterEqual(len(events), 1)
-            # Close explicitly so SQLite releases the file before TemporaryDirectory cleanup (Windows)
-            client.close()
+            client.delete_product(" 42 ")
+            client.get_recipes_catalog_category("../users/1")
+        self.assertEqual(request.call_args_list[0].args, ("DELETE", "/products/42"))
+        self.assertEqual(request.call_args_list[1].args, ("GET", "/recipes-catalog/category/..%2Fusers%2F1"))
 
-    def test_close_closes_operational_store(self) -> None:
+    def test_secrets_stay_out_of_repr_logs_and_results(self) -> None:
+        client = self._client()
+        self.assertNotIn("secret", repr(client.auth))
+
+        replies = [
+            Mock(status_code=401, text="", headers={}),
+            _json_response(200, {"token": "secret-new-bearer", "refreshToken": "secret-new-refresh"}),
+            Mock(status_code=500, text='{"message": "boom"}' + "x" * 1000, headers={}),
+            _json_response(200, {"token": "secret-new-bearer"}),
+        ]
+        with self.assertLogs("fitatu_api", level="DEBUG") as logs, patch(
+            "fitatu_api.client.requests.Session.request", side_effect=replies
+        ):
+            with self.assertRaises(FitatuApiError):
+                client.request("GET", "/users/1")
+            result = client.refresh_access_token()
+
+        output = "\n".join(logs.output)
+        for secret in ("secret-bearer", "secret-refresh", "secret-new-bearer", "secret-new-refresh"):
+            self.assertNotIn(secret, output)
+            self.assertNotIn(secret, json.dumps(result, default=str))
+        self.assertNotIn("x" * 301, output)
+        info_lines = [line for line in logs.output if line.startswith("INFO")]
+        self.assertFalse(any("fitatu.request." in line for line in info_lines))
+
+    def test_token_with_a_line_break_is_not_quoted_in_the_error(self) -> None:
+        client = FitatuApiClient(auth=FitatuAuthContext(bearer_token="eyJSECRET\n"), retry_base_delay_seconds=0.0)
+        with patch("requests.adapters.HTTPAdapter.send") as send, patch("fitatu_api.client.time.sleep") as sleep:
+            with self.assertRaises(FitatuValidationError) as ctx:
+                client.request("GET", "/users/1")
+        send.assert_not_called()
+        sleep.assert_not_called()
+        self.assertNotIn("eyJSECRET", f"{ctx.exception} {ctx.exception.body} {ctx.exception.__cause__}")
+
+        session = {"bearer_token": "eyJSECRET\n", "refresh_token": " r\n", "app_locale": "en_GB\n"}
+        auth = FitatuAuthContext.from_session_data(session)
+        self.assertEqual((auth.bearer_token, auth.refresh_token, auth.app_locale), ("eyJSECRET", "r", "en_GB"))
         with tempfile.TemporaryDirectory() as tmpdir:
-            store_path = Path(tmpdir) / "ops.sqlite"
-            client = self._make_client(operational_store_path=store_path)
-            assert client.operational_store is not None
+            path = Path(tmpdir) / "session.json"
+            path.write_text(json.dumps(session), encoding="utf-8")
+            self.assertEqual(FitatuTokenStore(path).load(), {"bearer_token": "eyJSECRET", "refresh_token": "r"})
 
-            client.close()
+    def test_log_redaction_keeps_flags_and_hides_values(self) -> None:
+        from fitatu_api.client import _serialize_log_value
 
-            self.assertIsNone(client.operational_store._connection)
+        self.assertEqual(
+            _serialize_log_value({"refresh_token": "abc", "has_refresh_token": True, "nested": {"Authorization": "Bearer x"}}),
+            {"refresh_token": "[redacted]", "has_refresh_token": True, "nested": {"Authorization": "[redacted]"}},
+        )
+
+
+class ErrorModelTests(unittest.TestCase):
+    def _client(self) -> FitatuApiClient:
+        auth = FitatuAuthContext(bearer_token="token", refresh_token="refresh-token")
+        return FitatuApiClient(auth=auth, retry_max_attempts=1, retry_base_delay_seconds=0.0)
+
+    def test_http_error_message_names_route_status_codename_and_server_message(self) -> None:
+        body = json.dumps({"codename": "NUMBER_OF_USES_EXCEEDED", "message": "x" * 300})
+        response = Mock(status_code=403, text=body, headers={})
+        with patch("fitatu_api.client.requests.Session.request", return_value=response):
+            with self.assertRaises(FitatuApiError) as ctx:
+                self._client().request("POST", "/ai/meal")
+
+        self.assertEqual(str(ctx.exception), "POST /ai/meal -> 403 NUMBER_OF_USES_EXCEEDED: " + "x" * 200)
+
+    def test_http_error_message_without_codename_uses_the_body_message(self) -> None:
+        response = Mock(status_code=404, text='{"message": "Measurement not found"}', headers={})
+        with patch("fitatu_api.client.requests.Session.request", return_value=response):
+            with self.assertRaises(FitatuApiError) as ctx:
+                self._client().request("GET", "/users/1/measurements/2020-01-01")
+
+        self.assertEqual(str(ctx.exception), "GET /users/1/measurements/2020-01-01 -> 404: Measurement not found")
+
+    def test_validation_errors_are_api_errors_and_value_errors(self) -> None:
+        for error_type in (FitatuValidationError, FitatuNotFoundError):
+            with self.subTest(error_type=error_type.__name__):
+                error = error_type("bad")
+                self.assertIsInstance(error, FitatuApiError)
+                self.assertIsInstance(error, ValueError)
+        with self.assertRaises(FitatuValidationError):
+            self._client().search_food("banan", limit=0)
+
+    def test_technical_break_header_raises_maintenance_error_without_refreshing(self) -> None:
+        window = {"displayFromDate": "2026-10-13T22:00:00+02:00", "displayToDate": "2026-10-14T02:00:00+02:00"}
+        header = '"' + base64.b64encode(json.dumps(window).encode()).decode().rstrip("=") + '"'
+        response = Mock(status_code=401, text="", headers={"technical-break": header})
+        client = self._client()
+        with patch("fitatu_api.client.requests.Session.request", return_value=response), patch.object(
+            client, "_refresh"
+        ) as refresh:
+            with self.assertRaises(FitatuMaintenanceError) as ctx:
+                client.request("GET", "/users/1")
+
+        refresh.assert_not_called()
+        self.assertEqual(ctx.exception.display_from, window["displayFromDate"])
+        self.assertEqual(ctx.exception.display_to, window["displayToDate"])
+        self.assertIn("technical break", str(ctx.exception))
+
+    def test_get_with_unexpected_shape_raises_and_empty_write_reply_is_a_dict(self) -> None:
+        client = self._client()
+        with patch.object(client, "request", return_value=["not", "an", "object"]):
+            with self.assertRaises(FitatuApiError) as ctx:
+                client.get_recipe(7)
+        self.assertIn("unexpected response shape", str(ctx.exception))
+
+        with patch.object(client, "request", return_value=None):
+            self.assertEqual(client.delete_product(7), {})
 
 
 class AuthStoreTests(unittest.TestCase):
@@ -1689,7 +809,7 @@ class AuthStoreTests(unittest.TestCase):
         self.assertEqual(auth.bearer_token, "bearer-from-storage")
         self.assertEqual(auth.refresh_token, "refresh-from-storage")
         self.assertEqual(auth.fitatu_user_id, "321")
-        self.assertEqual(auth.api_cluster, "pl-pl2")
+        self.assertEqual(auth.api_cluster, "pl-pl0")
 
     def test_token_store_roundtrip_and_clear(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1702,6 +822,18 @@ class AuthStoreTests(unittest.TestCase):
 
             store.clear()
             self.assertEqual(store.load(), {})
+
+    def test_token_store_expands_home_for_reads_too(self) -> None:
+        with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {"HOME": home}):
+            session = Path(home) / ".fitatu" / "session.json"
+            session.parent.mkdir()
+            session.write_text('{"fitatu_user_id": "1", "base_url": "https://de-de.fitatu.com/api"}', encoding="utf-8")
+            store = FitatuTokenStore(Path("~/.fitatu/session.json"))
+
+            store.save(bearer_token="b", refresh_token="r")
+
+            self.assertEqual(store.load(), {"bearer_token": "b", "refresh_token": "r", "fitatu_user_id": "1"})
+            self.assertEqual(json.loads(session.read_text(encoding="utf-8"))["base_url"], "https://de-de.fitatu.com/api")
 
     @unittest.skipIf(os.name == "nt", "POSIX permissions")
     def test_token_store_file_is_owner_only(self) -> None:
@@ -1723,449 +855,7 @@ class AuthStoreTests(unittest.TestCase):
             self.assertEqual(store.load(), {})
 
 
-class ServiceModuleTests(unittest.TestCase):
-    def test_resources_module_calls_expected_route(self) -> None:
-        client = Mock()
-        client.request.return_value = {"tags": []}
-        module = ResourcesModule(client)
-
-        result = module.get_food_tags_recipe()
-
-        self.assertEqual(result, {"tags": []})
-        client.request.assert_called_once_with("GET", "/resources/food-tags/recipe")
-
-    def test_cms_module_builds_graphql_payload(self) -> None:
-        client = Mock()
-        client.request.return_value = {"data": {"ok": True}}
-        module = CmsModule(client)
-
-        result = module.graphql(
-            "query Example { ping }",
-            variables={"foo": "bar"},
-            operation_name="Example",
-        )
-
-        self.assertEqual(result["data"]["ok"], True)
-        client.request.assert_called_once()
-        args, kwargs = client.request.call_args
-        self.assertEqual(args[0], "POST")
-        self.assertEqual(args[1], "https://www.fitatu.com/cms/api/graphql")
-        self.assertEqual(kwargs["json_data"]["operationName"], "Example")
-
-    def test_auth_module_delegates_refresh(self) -> None:
-        client = Mock()
-        client.refresh_access_token.return_value = {"status": "ok"}
-        module = AuthModule(client)
-
-        result = module.refresh()
-
-        self.assertEqual(result["status"], "ok")
-        client.refresh_access_token.assert_called_once_with()
-
-    def test_user_settings_module_get_uses_optional_date_param(self) -> None:
-        client = Mock()
-        client.request.return_value = {"ok": True}
-        module = UserSettingsModule(client)
-
-        result = module.get("user-123", day=TEST_DAY)
-
-        self.assertEqual(result["ok"], True)
-        client.request.assert_called_once_with(
-            "GET",
-            "/users/user-123/settings",
-            params={"date": TEST_DAY.isoformat()},
-        )
-
-    def test_user_settings_module_write_helpers_call_expected_routes(self) -> None:
-        client = Mock()
-        client.request.side_effect = [
-            {"ok": True},
-            {"ok": True},
-            {"ok": True},
-            {"token": "abc"},
-        ]
-        module = UserSettingsModule(client)
-
-        module.update_profile("user-123", {"name": "Adam"})
-        module.update_new("user-123", {"dietType": "balanced"})
-        module.update_water_settings("user-123", unit_capacity=300)
-        token = module.get_firebase_token("user-123")
-
-        self.assertEqual(token["token"], "abc")
-        self.assertEqual(client.request.call_args_list[0].args, ("PATCH", "/users/user-123"))
-        self.assertEqual(client.request.call_args_list[1].args, ("PATCH", "/users/user-123/settings-new"))
-        self.assertEqual(client.request.call_args_list[2].args, ("PATCH", "/users/user-123/settings-new"))
-        self.assertEqual(client.request.call_args_list[3].args, ("GET", "/users/user-123/firebaseToken"))
-
-    def test_user_settings_update_system_info_calls_expected_route(self) -> None:
-        client = Mock()
-        client.request.return_value = {"ok": True}
-        module = UserSettingsModule(client)
-
-        result = module.update_system_info("user-123", app_version="5.0.0", system_info="FITATU-IOS")
-
-        self.assertEqual(result["ok"], True)
-        client.request.assert_called_once_with(
-            "PATCH",
-            "/users/user-123",
-            json_data={"systemInfo": "FITATU-IOS", "appVersion": "5.0.0"},
-        )
-
-    def test_diet_plan_module_get_default_meal_schema(self) -> None:
-        client = Mock()
-        client.request.return_value = {"schema": []}
-        module = DietPlanModule(client)
-
-        result = module.get_default_meal_schema("user-123")
-
-        self.assertEqual(result["schema"], [])
-        client.request.assert_called_once_with(
-            "GET",
-            "/diet-plan/user-123/settings/preferences/meal-schema/default",
-        )
-
-    def test_diet_plan_module_get_settings_and_meal_schema(self) -> None:
-        client = Mock()
-        client.request.side_effect = [{"kcal": 2100}, {"schemas": []}]
-        module = DietPlanModule(client)
-
-        settings = module.get_settings("user-123")
-        schema = module.get_meal_schema("user-123")
-
-        self.assertEqual(settings["kcal"], 2100)
-        self.assertEqual(schema["schemas"], [])
-        self.assertEqual(client.request.call_args_list[0].args, ("GET", "/diet-plan/user-123/settings"))
-        self.assertEqual(
-            client.request.call_args_list[1].args,
-            ("GET", "/diet-plan/user-123/settings/preferences/meal-schema"),
-        )
-
-    def test_water_module_get_day_calls_expected_route(self) -> None:
-        client = Mock()
-        client.request.return_value = {"water": 123}
-        module = WaterModule(client)
-
-        result = module.get_day("user-123", TEST_DAY)
-
-        self.assertEqual(result["water"], 123)
-        client.request.assert_called_once_with("GET", f"/water/user-123/{TEST_DAY.isoformat()}")
-
-    def test_activities_module_get_catalog_calls_expected_route(self) -> None:
-        client = Mock()
-        client.request.return_value = [{"id": 1}]
-        module = ActivitiesModule(client)
-
-        result = module.get_catalog()
-
-        self.assertEqual(result[0]["id"], 1)
-        client.request.assert_called_once_with("GET", "/activities", params=None)
-
-    def test_activities_module_get_catalog_sends_only_given_params(self) -> None:
-        client = Mock()
-        ActivitiesModule(client).get_catalog(locale="pl_PL", bmr=1800.0, sex=1)
-
-        client.request.assert_called_once_with(
-            "GET", "/activities", params={"locale": "pl_PL", "bmr": 1800.0, "sex": 1}
-        )
-
-    def test_user_settings_get_new_requests_the_dated_route(self) -> None:
-        client = Mock()
-        client.request.return_value = {"userId": 1}
-
-        UserSettingsModule(client).get_new("user-123", TEST_DAY)
-
-        client.request.assert_called_once_with("GET", f"/users/user-123/settings-new/{TEST_DAY.isoformat()}")
-
-
-class FacadeConvenienceTests(unittest.TestCase):
-    def test_describe_session_and_management_report_delegate_to_client(self) -> None:
-        stub_client = Mock()
-        stub_client.describe_auth_state.return_value = {"lifecycle_state": "healthy"}
-        stub_client.management_report.return_value = {"management_report_schema_version": "1.0"}
-
-        lib = FitatuLibrary(session_data={})
-        with patch.object(lib, "_build_client", return_value=stub_client):
-            session = lib.describe_session(base_url="https://example.com")
-            report = lib.management_report(include_tokens=True)
-
-        self.assertEqual(session["lifecycle_state"], "healthy")
-        self.assertEqual(report["management_report_schema_version"], "1.0")
-        stub_client.describe_auth_state.assert_called_once_with()
-        stub_client.management_report.assert_called_once_with(include_tokens=True)
-
-    def test_clear_session_returns_ok_payload(self) -> None:
-        stub_client = Mock()
-        stub_client.describe_auth_state.return_value = {"has_bearer_token": False}
-
-        lib = FitatuLibrary(session_data={})
-        with patch.object(lib, "_build_client", return_value=stub_client):
-            result = lib.clear_session(clear_token_store=False)
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["session"]["has_bearer_token"], False)
-        stub_client.clear_auth.assert_called_once_with(clear_token_store=False)
-
-    def test_reauthenticate_session_passes_through_result(self) -> None:
-        stub_client = Mock()
-        stub_client.reauthenticate.return_value = {"status": "ok", "mode": "refresh"}
-
-        lib = FitatuLibrary(session_data={})
-        callback = Mock()
-        with patch.object(lib, "_build_client", return_value=stub_client):
-            result = lib.reauthenticate_session(
-                relogin_callback=callback,
-                clear_token_store=True,
-                rollback_on_failure=False,
-            )
-
-        self.assertEqual(result["mode"], "refresh")
-        stub_client.reauthenticate.assert_called_once_with(
-            relogin_callback=callback,
-            clear_token_store=True,
-            rollback_on_failure=False,
-        )
-
-    def test_export_session_context_uses_auth_export(self) -> None:
-        class StubAuth:
-            def to_session_data(self, *, include_tokens: bool = False) -> dict[str, object]:
-                return {"include_tokens": include_tokens}
-
-        class StubClient:
-            def __init__(self) -> None:
-                self.auth = StubAuth()
-
-        lib = FitatuLibrary(session_data={})
-        with patch.object(lib, "_build_client", return_value=StubClient()):
-            result = lib.export_session_context(include_tokens=True)
-
-        self.assertEqual(result["include_tokens"], True)
-
-    def test_search_food_returns_empty_list_on_api_error(self) -> None:
-        lib = FitatuLibrary(session_data={})
-        with patch("fitatu_api.facade.FitatuApiClient.search_food", side_effect=FitatuApiError("boom")):
-            result = lib.search_food("banan")
-        self.assertEqual(result, [])
-
-    def test_get_recipe_and_catalog_facade_wrap_success_payloads(self) -> None:
-        stub_client = Mock()
-        stub_client.get_recipes_catalog.return_value = {"items": []}
-        stub_client.get_recipes_catalog_category.return_value = {"category": "breakfast"}
-        stub_client.get_recipe.return_value = {"id": 42}
-
-        lib = FitatuLibrary(session_data={})
-        with patch.object(lib, "_build_client", return_value=stub_client):
-            catalog = lib.get_recipes_catalog_via_api()
-            category = lib.get_recipes_catalog_via_api(category_id="breakfast")
-            recipe = lib.get_recipe_via_api(recipe_id=42)
-
-        self.assertEqual(catalog["status"], "ok")
-        self.assertEqual(category["result"]["category"], "breakfast")
-        self.assertEqual(recipe["result"]["id"], 42)
-        # No params — /recipes-catalog returns 400 when any params are sent
-        stub_client.get_recipes_catalog.assert_called_once_with()
-        stub_client.get_recipes_catalog_category.assert_called_once_with("breakfast")
-        stub_client.get_recipe.assert_called_once_with(42)
-
-    def test_create_product_and_add_user_dish_wrap_api_errors(self) -> None:
-        stub_client = Mock()
-        stub_client.create_product.side_effect = FitatuApiError("product boom", status_code=422, body="bad product")
-        stub_client.create_recipe.side_effect = FitatuApiError("recipe boom", status_code=400, body="bad recipe")
-
-        lib = FitatuLibrary(session_data={})
-        with patch.object(lib, "_build_client", return_value=stub_client):
-            product = lib.create_product_via_api(
-                name="Jogurt",
-                brand="Demo",
-                energy=100,
-                protein=10,
-                fat=2,
-                carbohydrate=8,
-            )
-            dish = lib.add_user_dish_via_api(
-                name="Miska",
-                items=[{"itemId": 1, "measureId": 2}],
-            )
-
-        self.assertEqual(product["status"], "error")
-        self.assertEqual(product["status_code"], 422)
-        self.assertEqual(dish["status"], "error")
-        self.assertEqual(dish["body"], "bad recipe")
-
-    def test_planner_facade_methods_return_missing_user_error(self) -> None:
-        lib = FitatuLibrary(session_data={})
-
-        custom = lib.add_custom_item_to_day_meal_via_api(
-            target_date=TEST_DAY,
-            meal_key="breakfast",
-            name="Juice",
-            calories=50,
-            protein_g=1,
-            fat_g=0,
-            carbs_g=12,
-        )
-        product = lib.add_product_to_day_meal_via_api(
-            target_date=TEST_DAY,
-            meal_key="breakfast",
-            product_id=1,
-            measure_id=2,
-        )
-        search = lib.add_search_result_to_day_meal_via_api(
-            target_date=TEST_DAY,
-            meal_key="breakfast",
-            phrase="banan",
-        )
-        update = lib.update_day_item_via_api(
-            target_date=TEST_DAY,
-            meal_key="breakfast",
-            item_id="item-1",
-        )
-
-        for result in (custom, product, search, update):
-            self.assertEqual(result["status"], "error")
-            self.assertIn("Missing fitatu user id", result["message"])
-
-    def test_planner_facade_methods_wrap_success_payloads(self) -> None:
-        planner = Mock()
-        planner.add_custom_item_to_day_meal.return_value = {"ok": True, "kind": "custom"}
-        planner.add_product_to_day_meal.return_value = {"ok": True, "kind": "product"}
-        planner.add_product_to_day_meal_with_unit.return_value = {"ok": True, "kind": "product-unit"}
-        planner.add_search_result_to_day_meal.return_value = {"ok": True, "kind": "search"}
-        planner.update_day_item.return_value = {"ok": True, "kind": "update"}
-        stub_client = Mock()
-        stub_client.planner = planner
-
-        lib = FitatuLibrary(session_data={"fitatu_user_id": TEST_USER_ID})
-        with patch.object(lib, "_planner_result", return_value=(stub_client, TEST_USER_ID, None)):
-            custom = lib.add_custom_item_to_day_meal_via_api(
-                target_date=TEST_DAY,
-                meal_key="breakfast",
-                name="Juice",
-                calories=50,
-                protein_g=1,
-                fat_g=0,
-                carbs_g=12,
-            )
-            product = lib.add_product_to_day_meal_via_api(
-                target_date=TEST_DAY,
-                meal_key="breakfast",
-                product_id=1,
-                measure_id=2,
-            )
-            search = lib.add_search_result_to_day_meal_via_api(
-                target_date=TEST_DAY,
-                meal_key="breakfast",
-                phrase="banan",
-            )
-            update = lib.update_day_item_via_api(
-                target_date=TEST_DAY,
-                meal_key="breakfast",
-                item_id="item-1",
-            )
-
-        self.assertEqual(custom["result"]["kind"], "custom")
-        self.assertEqual(product["result"]["kind"], "product")
-        self.assertEqual(search["result"]["kind"], "search")
-        self.assertEqual(update["result"]["kind"], "update")
-
-    def test_planner_facade_methods_forward_unit_aware_add_parameters(self) -> None:
-        planner = Mock()
-        planner.add_product_to_day_meal_with_unit.return_value = {"ok": True, "kind": "product-unit"}
-        planner.add_search_result_to_day_meal.return_value = {"ok": True, "kind": "search"}
-        stub_client = Mock()
-        stub_client.planner = planner
-
-        lib = FitatuLibrary(session_data={"fitatu_user_id": TEST_USER_ID})
-        with patch.object(lib, "_planner_result", return_value=(stub_client, TEST_USER_ID, None)):
-            product = lib.add_product_to_day_meal_via_api(
-                target_date=TEST_DAY,
-                meal_key="breakfast",
-                product_id=1,
-                measure_unit="g",
-                measure_amount=180,
-            )
-            search = lib.add_search_result_to_day_meal_via_api(
-                target_date=TEST_DAY,
-                meal_key="breakfast",
-                phrase="banan",
-                measure_unit="g",
-                measure_amount=200,
-                strict_measure=False,
-            )
-
-        self.assertEqual(product["result"]["kind"], "product-unit")
-        self.assertEqual(search["result"]["kind"], "search")
-        planner.add_product_to_day_meal_with_unit.assert_called_once()
-        planner.add_search_result_to_day_meal.assert_called_once_with(
-            TEST_USER_ID,
-            TEST_DAY,
-            meal_type="breakfast",
-            phrase="banan",
-            index=0,
-            measure_quantity=1,
-            measure_amount=200,
-            measure_unit="g",
-            strict_measure=False,
-            eaten=False,
-        )
-
-    def test_planner_facade_methods_wrap_api_errors(self) -> None:
-        planner = Mock()
-        planner.add_custom_item_to_day_meal.side_effect = FitatuApiError("custom boom", status_code=400, body="bad custom")
-        planner.add_product_to_day_meal.side_effect = FitatuApiError("product boom", status_code=401, body="bad product")
-        planner.add_search_result_to_day_meal.side_effect = FitatuApiError("search boom", status_code=402, body="bad search")
-        planner.update_day_item.side_effect = FitatuApiError("update boom", status_code=403, body="bad update")
-        stub_client = Mock()
-        stub_client.planner = planner
-
-        lib = FitatuLibrary(session_data={"fitatu_user_id": TEST_USER_ID})
-        with patch.object(lib, "_planner_result", return_value=(stub_client, TEST_USER_ID, None)):
-            custom = lib.add_custom_item_to_day_meal_via_api(
-                target_date=TEST_DAY,
-                meal_key="breakfast",
-                name="Juice",
-                calories=50,
-                protein_g=1,
-                fat_g=0,
-                carbs_g=12,
-            )
-            product = lib.add_product_to_day_meal_via_api(
-                target_date=TEST_DAY,
-                meal_key="breakfast",
-                product_id=1,
-                measure_id=2,
-            )
-            search = lib.add_search_result_to_day_meal_via_api(
-                target_date=TEST_DAY,
-                meal_key="breakfast",
-                phrase="banan",
-            )
-            update = lib.update_day_item_via_api(
-                target_date=TEST_DAY,
-                meal_key="breakfast",
-                item_id="item-1",
-            )
-
-        self.assertEqual(custom["status_code"], 400)
-        self.assertEqual(product["status_code"], 401)
-        self.assertEqual(search["status_code"], 402)
-        self.assertEqual(update["status_code"], 403)
-
-
 class ValidationTests(unittest.TestCase):
-    def test_validate_user_id_accepts_valid_string(self) -> None:
-        from fitatu_api._validation import validate_user_id
-        validate_user_id("user-123")  # should not raise
-
-    def test_validate_user_id_rejects_empty_string(self) -> None:
-        from fitatu_api._validation import validate_user_id
-        with self.assertRaises(ValueError):
-            validate_user_id("")
-
-    def test_validate_user_id_rejects_whitespace_only(self) -> None:
-        from fitatu_api._validation import validate_user_id
-        with self.assertRaises(ValueError):
-            validate_user_id("   ")
-
     def test_validate_positive_int_accepts_positive(self) -> None:
         from fitatu_api._validation import validate_positive_int
         validate_positive_int(1, "limit")  # should not raise
@@ -2184,6 +874,18 @@ class ValidationTests(unittest.TestCase):
         from fitatu_api._validation import validate_non_negative_int
         validate_non_negative_int(0, "amount_ml")  # should not raise
 
+    def test_as_date_accepts_dates_datetimes_and_iso_strings(self) -> None:
+        from datetime import datetime
+
+        from fitatu_api._validation import as_date
+
+        self.assertEqual(as_date(TEST_DAY), TEST_DAY)
+        self.assertEqual(as_date(datetime(2026, 4, 19, 23, 59)), TEST_DAY)
+        self.assertEqual(as_date(" 2026-04-19 "), TEST_DAY)
+        for bad in ("2026-13-01", "tomorrow", 20260419, None):
+            with self.subTest(value=bad), self.assertRaisesRegex(FitatuValidationError, "target_date must be"):
+                as_date(bad, "target_date")  # type: ignore[arg-type]
+
     def test_validate_non_negative_int_rejects_negative(self) -> None:
         from fitatu_api._validation import validate_non_negative_int
         with self.assertRaises(ValueError):
@@ -2196,31 +898,30 @@ class ValidationTests(unittest.TestCase):
             client.search_food("banan", limit=0)
 
     def test_water_set_day_raises_on_negative_ml(self) -> None:
-        from fitatu_api.api_client import WaterModule
         mock_client = Mock()
         module = WaterModule(mock_client)
         with self.assertRaises(ValueError):
             module.set_day("user-123", TEST_DAY, -1)
 
 
+def _json_response(status: int, body: object) -> Mock:
+    response = Mock(status_code=status, text=json.dumps(body), headers={})
+    response.json.return_value = body
+    return response
+
+
 class LoginTests(unittest.TestCase):
     """Tests for FitatuApiClient.login() classmethod."""
 
     def _make_jwt(self, payload: dict) -> str:
-        import base64
-        import json
-        header = base64.b64encode(b'{"alg":"HS256"}').rstrip(b"=").decode()
-        body = base64.b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
-        return f"{header}.{body}.sig"
+        body = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+        return f"h.{body}.sig"
 
     def test_login_success_returns_client_with_auth(self) -> None:
         token = self._make_jwt({"user_id": "42"})
-        mock_resp = Mock()
-        mock_resp.ok = True
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"token": token, "refresh_token": "ref-tok"}
+        response = _json_response(200, {"token": token, "refresh_token": "ref-tok"})
 
-        with patch("fitatu_api.client.requests.post", return_value=mock_resp):
+        with patch("fitatu_api.client.requests.Session.request", return_value=response):
             client = FitatuApiClient.login("user@example.com", "secret")
 
         self.assertEqual(client.auth.bearer_token, token)
@@ -2228,39 +929,64 @@ class LoginTests(unittest.TestCase):
         self.assertEqual(client.auth.fitatu_user_id, "42")
 
     def test_login_extracts_user_id_from_uid_field(self) -> None:
-        token = self._make_jwt({"uid": "99"})
-        mock_resp = Mock()
-        mock_resp.ok = True
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"token": token}
+        response = _json_response(200, {"token": self._make_jwt({"uid": "99"})})
 
-        with patch("fitatu_api.client.requests.post", return_value=mock_resp):
+        with patch("fitatu_api.client.requests.Session.request", return_value=response):
             client = FitatuApiClient.login("u@e.com", "pw")
 
         self.assertEqual(client.auth.fitatu_user_id, "99")
 
     def test_login_raises_on_non_ok_response(self) -> None:
-        mock_resp = Mock()
-        mock_resp.ok = False
-        mock_resp.status_code = 401
-        mock_resp.text = "Unauthorized"
+        response = Mock(status_code=401, text="Unauthorized", headers={})
 
-        with patch("fitatu_api.client.requests.post", return_value=mock_resp):
+        with patch("fitatu_api.client.requests.Session.request", return_value=response) as http:
             with self.assertRaises(FitatuAuthError) as ctx:
                 FitatuApiClient.login("bad@example.com", "wrong")
 
         self.assertEqual(ctx.exception.status_code, 401)
+        self.assertEqual(str(ctx.exception), "POST /login -> 401: the e-mail or password is wrong")
+        http.assert_called_once()  # no refresh attempt
+
+    def test_login_rejected_credentials_are_an_auth_error_that_points_to_import_session(self) -> None:
+        # Recorded live (2026-10-13): a wrong or unknown e-mail or password, e.g. an Apple relay
+        # address of an account that has no password.
+        body = {"code": 422, "message": "Username or password are invalid"}
+
+        with patch("fitatu_api.client.requests.Session.request", return_value=_json_response(422, body)):
+            with self.assertRaises(FitatuAuthError) as ctx:
+                FitatuApiClient.login("x@privaterelay.appleid.com", "guess")
+
+        self.assertEqual((ctx.exception.status_code, json.loads(ctx.exception.body or "")), (422, body))
+        self.assertIn("e-mail or password is wrong", str(ctx.exception))
+        info = describe_error(ctx.exception)
+        self.assertEqual(info["error_type"], "auth")
+        self.assertIn("fitatu-api import-session", str(info["hint"]))
+        self.assertNotIn("fitatu-api login", str(info["hint"]))
+
+    def test_login_other_refusals_keep_their_error_type(self) -> None:
+        # Recorded live (2026-10-13): an empty body, and a request without API-Key/API-Secret.
+        cases = [
+            (400, {"code": 400, "message": "Bad Request"}, "validation"),
+            (403, {"code": 0, "message": "Invalid API-Key/API-Secret"}, "forbidden"),
+        ]
+        for status, body, error_type in cases:
+            with self.subTest(status=status):
+                with patch("fitatu_api.client.requests.Session.request", return_value=_json_response(status, body)):
+                    with self.assertRaises(FitatuApiError) as ctx:
+                        FitatuApiClient.login("me@example.com", "secret")
+                self.assertNotIsInstance(ctx.exception, FitatuAuthError)
+                self.assertEqual(ctx.exception.status_code, status)
+                self.assertEqual(str(ctx.exception), f"POST /login -> {status}: {body['message']}")
+                self.assertEqual(describe_error(ctx.exception)["error_type"], error_type)
 
     def test_login_keeps_fresh_tokens_over_an_existing_token_store(self) -> None:
-        payload = base64.urlsafe_b64encode(json.dumps({"id": 42}).encode()).decode().rstrip("=")
-        fresh = f"h.{payload}.s"
-        response = Mock(ok=True, status_code=200, text="{}")
-        response.json.return_value = {"token": fresh, "refresh_token": "fresh-refresh"}
+        fresh = self._make_jwt({"id": 42})
+        response = _json_response(200, {"token": fresh, "refresh_token": "fresh-refresh"})
         with tempfile.TemporaryDirectory() as tmpdir:
             store = Path(tmpdir) / "tokens.json"
             FitatuTokenStore(store).save(bearer_token="stale", refresh_token="stale-refresh")
 
-            with patch("fitatu_api.client.requests.post", return_value=response):
+            with patch("fitatu_api.client.requests.Session.request", return_value=response):
                 client = FitatuApiClient.login("me@example.com", "secret", token_store_path=store)
 
             self.assertEqual(client.auth.bearer_token, fresh)
@@ -2268,33 +994,155 @@ class LoginTests(unittest.TestCase):
             self.assertEqual(FitatuTokenStore(store).load()["refresh_token"], "fresh-refresh")
 
     def test_login_wraps_network_errors(self) -> None:
-        with patch("fitatu_api.client.requests.post", side_effect=requests.ConnectionError("dns")):
+        with patch("fitatu_api.client.requests.Session.request", side_effect=requests.ConnectionError("dns")) as http:
             with self.assertRaises(FitatuConnectionError):
                 FitatuApiClient.login("me@example.com", "secret")
+        http.assert_called_once()  # POST /login is not retried
 
     def test_login_raises_when_token_missing_from_response(self) -> None:
-        mock_resp = Mock()
-        mock_resp.ok = True
-        mock_resp.status_code = 200
-        mock_resp.text = "{}"
-        mock_resp.json.return_value = {}
-
-        with patch("fitatu_api.client.requests.post", return_value=mock_resp):
+        with patch("fitatu_api.client.requests.Session.request", return_value=_json_response(200, {})):
             with self.assertRaises(FitatuApiError):
                 FitatuApiClient.login("u@e.com", "pw")
 
-    def test_login_posts_to_correct_endpoint(self) -> None:
-        token = self._make_jwt({"user_id": "1"})
-        mock_resp = Mock()
-        mock_resp.ok = True
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"token": token}
+    def test_login_posts_credentials_with_the_client_headers(self) -> None:
+        response = _json_response(200, {"token": self._make_jwt({"user_id": "1"})})
 
-        with patch("fitatu_api.client.requests.post", return_value=mock_resp) as mock_post:
+        with patch("fitatu_api.client.requests.Session.request", return_value=response) as http:
             FitatuApiClient.login("u@e.com", "pw")
 
-        call_url = mock_post.call_args[0][0]
-        self.assertTrue(call_url.endswith("/login"))
-        call_body = mock_post.call_args[1]["json"]
-        self.assertEqual(call_body["_username"], "u@e.com")
-        self.assertEqual(call_body["_password"], "pw")
+        call = http.call_args_list[0].kwargs
+        self.assertEqual((call["method"], call["url"]), ("POST", "https://pl-pl.fitatu.com/api/login"))
+        self.assertEqual(call["json"], {"_username": "u@e.com", "_password": "pw"})
+        self.assertEqual(call["headers"]["api-key"], "FITATU-MOBILE-APP")
+        self.assertEqual(call["headers"]["user-agent"], "Mozilla/5.0")
+        self.assertNotIn("authorization", call["headers"])
+
+
+def _jwt(payload: dict) -> str:
+    body = base64.urlsafe_b64encode(json.dumps(payload, ensure_ascii=False).encode()).rstrip(b"=").decode()
+    return f"h.{body}.sig"
+
+
+class TokenLifetimeTests(unittest.TestCase):
+    def test_jwt_payload_is_decoded_as_base64url(self) -> None:
+        # Non-ASCII text and "~?>" put "-" and "_" into the payload, which plain base64 drops.
+        token = _jwt({"id": 42, "name": "Zażółć gęślą jaźń ~?>"})
+        self.assertRegex(token.split(".")[1], "[-_]")
+
+        self.assertEqual(jwt_user_id(token), "42")
+
+    def test_session_without_user_id_takes_it_from_the_token(self) -> None:
+        auth = FitatuAuthContext.from_session_data({"bearer_token": _jwt({"id": 7}), "refresh_token": "r"})
+        self.assertEqual(auth.fitatu_user_id, "7")
+        explicit = FitatuAuthContext.from_session_data({"bearer_token": _jwt({"id": 7}), "fitatu_user_id": "9"})
+        self.assertEqual(explicit.fitatu_user_id, "9")
+
+    def test_snapshot_reports_when_the_bearer_expires(self) -> None:
+        auth = FitatuAuthContext(bearer_token=_jwt({"id": 1, "exp": 1_800_000_000}))
+        self.assertEqual(auth.snapshot()["bearer_expires_at"], "2027-01-15T08:00:00+00:00")
+        self.assertIsNone(FitatuAuthContext(bearer_token="opaque").snapshot()["bearer_expires_at"])
+
+    def test_unusable_exp_counts_as_unknown_expiry(self) -> None:
+        for exp in (int(time.time() * 1000), float("inf"), float("nan")):
+            with self.subTest(exp=exp):
+                client = FitatuApiClient(auth=FitatuAuthContext(bearer_token=_jwt({"id": 1, "exp": exp})))
+                self.assertIsNone(client.describe_auth_state()["bearer_expires_at"])
+                with patch("fitatu_api.client.requests.Session.request", return_value=_json_response(200, {})) as http:
+                    client.request("GET", "/ping")
+                http.assert_called_once()
+
+    def test_expiring_bearer_is_refreshed_before_the_call(self) -> None:
+        expiring = _jwt({"id": 1, "exp": int(time.time()) + 30})
+        fresh = _jwt({"id": 1, "exp": int(time.time()) + 3600})
+        client = FitatuApiClient(auth=FitatuAuthContext(bearer_token=expiring, refresh_token="r"))
+        replies = [_json_response(200, {"token": fresh, "refreshToken": "r2"}), _json_response(200, {"ok": True})]
+
+        with patch("fitatu_api.client.requests.Session.request", side_effect=replies) as http:
+            self.assertEqual(client.request("GET", "/ping"), {"ok": True})
+
+        refresh_call, ping_call = http.call_args_list
+        self.assertTrue(refresh_call.kwargs["url"].endswith("/token/refresh"))
+        self.assertEqual(ping_call.kwargs["headers"]["authorization"], f"Bearer {fresh}")
+
+    def test_a_refresh_that_fails_for_a_temporary_reason_is_not_reported_as_logged_out(self) -> None:
+        cases = [
+            (requests.ConnectionError("down"), FitatuConnectionError),
+            (Mock(status_code=503, text="", headers={}), FitatuApiError),
+            (Mock(status_code=429, text="", headers={}), FitatuRateLimitError),
+        ]
+        for refresh_reply, error_type in cases:
+            with self.subTest(error=error_type.__name__):
+                client = FitatuApiClient(auth=FitatuAuthContext(bearer_token="b", refresh_token="r"))
+                expired = Mock(status_code=401, text='{"message": "Expired JWT Token"}', headers={})
+                with patch("fitatu_api.client.requests.Session.request", side_effect=[expired, refresh_reply]):
+                    with self.assertRaises(error_type) as ctx:
+                        client.request("GET", "/x")
+                self.assertNotIsInstance(ctx.exception, FitatuAuthError)
+                self.assertIn("/token/refresh", str(ctx.exception))
+                # The refresh token was not rejected, so the next call refreshes again.
+                self.assertIsNone(client._rejected_refresh_token)
+
+    def test_expiring_bearer_is_still_sent_when_the_early_refresh_fails(self) -> None:
+        expiring = _jwt({"id": 1, "exp": int(time.time()) + 30})
+        client = FitatuApiClient(auth=FitatuAuthContext(bearer_token=expiring, refresh_token="r"))
+        replies = [Mock(status_code=503, text="", headers={}), _json_response(200, {"ok": True})]
+
+        with patch("fitatu_api.client.requests.Session.request", side_effect=replies) as http:
+            self.assertEqual(client.request("GET", "/ping"), {"ok": True})
+        self.assertEqual(http.call_args.kwargs["headers"]["authorization"], f"Bearer {expiring}")
+
+    def test_no_second_refresh_when_another_call_already_refreshed(self) -> None:
+        client = FitatuApiClient(auth=FitatuAuthContext(bearer_token="new", refresh_token="r"))
+        with patch.object(client, "_refresh") as refresh:
+            self.assertTrue(client._auto_refresh("old", "cid"))
+        refresh.assert_not_called()
+
+
+class RetryTests(unittest.TestCase):
+    def _client(self) -> FitatuApiClient:
+        auth = FitatuAuthContext(bearer_token="token", refresh_token="refresh-token")
+        return FitatuApiClient(auth=auth, retry_max_attempts=3, retry_base_delay_seconds=0.0)
+
+    def test_writes_are_retried_only_when_marked_idempotent(self) -> None:
+        unavailable = Mock(status_code=503, text="", headers={})
+        ok = _json_response(200, {"ok": True})
+        client = self._client()
+        with patch("fitatu_api.client.requests.Session.request", side_effect=[unavailable]) as http:
+            with self.assertRaises(FitatuApiError):
+                client.request("POST", "/diet-plan/1/days", json_data={})
+        self.assertEqual(http.call_count, 1)
+
+        with patch("fitatu_api.client.requests.Session.request", side_effect=[unavailable, ok]) as http:
+            self.assertEqual(client.request("PUT", "/water/1/2026-10-13", json_data={}, idempotent=True), {"ok": True})
+        self.assertEqual(http.call_count, 2)
+
+    def test_long_retry_after_raises_instead_of_sleeping(self) -> None:
+        limited = Mock(status_code=429, text="", headers={"retry-after": "120"})
+        with patch("fitatu_api.client.requests.Session.request", return_value=limited) as http, patch(
+            "fitatu_api.client.time.sleep"
+        ) as sleep:
+            with self.assertRaises(FitatuRateLimitError) as ctx:
+                self._client().request("GET", "/ping")
+
+        sleep.assert_not_called()
+        self.assertEqual(http.call_count, 1)
+        self.assertEqual(ctx.exception.retry_after, 120.0)
+        self.assertIn("retry after 120 s", str(ctx.exception))
+
+    def test_short_retry_after_is_honoured(self) -> None:
+        limited = Mock(status_code=429, text="", headers={"retry-after": "2"})
+        with patch(
+            "fitatu_api.client.requests.Session.request", side_effect=[limited, _json_response(200, [])]
+        ), patch("fitatu_api.client.time.sleep") as sleep:
+            self.assertEqual(self._client().request("GET", "/ping"), [])
+        sleep.assert_called_once_with(2.0)
+
+    def test_one_session_is_reused_and_closed(self) -> None:
+        client = self._client()
+        with patch.object(client._http, "request", return_value=_json_response(200, {})) as http:
+            client.request("GET", "/a")
+            client.request("GET", "/b")
+        self.assertEqual(http.call_count, 2)
+        with patch.object(client._http, "close") as close, client:
+            pass
+        close.assert_called_once()
