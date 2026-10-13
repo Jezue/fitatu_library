@@ -15,8 +15,7 @@ def _load_session() -> dict:
     if not session_path.exists():
         raise SystemExit(
             "Missing session_data.json in the current directory. "
-            "Create it with python fitatu_login.py --email <email> --password <password> "
-            "or copy a reusable session payload there before running the demo."
+            "Create it with: python -m fitatu_api login"
         )
     return json.loads(session_path.read_text(encoding="utf-8"))
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import os
 import tempfile
 import unittest
@@ -2248,6 +2250,22 @@ class LoginTests(unittest.TestCase):
                 FitatuApiClient.login("bad@example.com", "wrong")
 
         self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_login_keeps_fresh_tokens_over_an_existing_token_store(self) -> None:
+        payload = base64.urlsafe_b64encode(json.dumps({"id": 42}).encode()).decode().rstrip("=")
+        fresh = f"h.{payload}.s"
+        response = Mock(ok=True, status_code=200, text="{}")
+        response.json.return_value = {"token": fresh, "refresh_token": "fresh-refresh"}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = Path(tmpdir) / "tokens.json"
+            FitatuTokenStore(store).save(bearer_token="stale", refresh_token="stale-refresh")
+
+            with patch("fitatu_api.client.requests.post", return_value=response):
+                client = FitatuApiClient.login("me@example.com", "secret", token_store_path=store)
+
+            self.assertEqual(client.auth.bearer_token, fresh)
+            self.assertEqual(client.auth.refresh_token, "fresh-refresh")
+            self.assertEqual(FitatuTokenStore(store).load()["refresh_token"], "fresh-refresh")
 
     def test_login_wraps_network_errors(self) -> None:
         with patch("fitatu_api.client.requests.post", side_effect=requests.ConnectionError("dns")):

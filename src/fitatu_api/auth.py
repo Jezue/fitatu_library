@@ -184,6 +184,15 @@ class FitatuAuthContext:
         return data
 
 
+def write_private_json(path: Path, data: dict[str, Any]) -> None:
+    """Write ``data`` as JSON readable only by the owner (0600); it holds live tokens."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(data, indent=2, ensure_ascii=True))
+    path.chmod(0o600)  # O_CREAT's mode does not apply to an existing file
+
+
 @dataclass
 class FitatuTokenStore:
     """Small JSON-backed token store."""
@@ -213,17 +222,14 @@ class FitatuTokenStore:
 
     def save(self, *, bearer_token: str | None, refresh_token: str | None) -> None:
         """Persist the current token pair in a simple JSON document."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "bearer_token": bearer_token or "",
-            "refresh_token": refresh_token or "",
-            "updated_at": datetime.now(UTC).isoformat(),
-        }
-        # Owner-only: the file holds a refresh token that is as good as the password.
-        fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, indent=2, ensure_ascii=True))
-        self.path.chmod(0o600)  # O_CREAT's mode does not apply to an existing file
+        write_private_json(
+            self.path,
+            {
+                "bearer_token": bearer_token or "",
+                "refresh_token": refresh_token or "",
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
+        )
 
     def clear(self) -> None:
         """Remove the token file when it exists."""

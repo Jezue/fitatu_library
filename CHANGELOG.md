@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is inspired by Keep a Changelog, with practical notes for a small Python library.
 
+## [Unreleased]
+
+Added:
+
+- `python -m fitatu_api login` / `fitatu-api login`: log in with e-mail and password and save
+  `session_data.json` (0600) for `FitatuLibrary`, `example.py` and `demo.py`
+- docs on getting a session, including copying it from the web app for Apple/Facebook accounts
+
+Fixed:
+
+- `FitatuApiClient.login(..., token_store_path=...)` returned a client with the old tokens from
+  the token store instead of the fresh ones, and did not save the fresh pair
+- `demo.py` pointed at a `fitatu_login.py` script that does not exist
+
 ## [0.4.0] - 2026-09-21
 
 Based on a decompile of the Fitatu Android app 4.17.1 (Flutter, Dart AOT) and live checks of
