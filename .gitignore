@@ -72,7 +72,9 @@ docs/LIVE_VALIDATION_WORKFLOW.md
 docs/REFOCUS_PLAN.md
 
 # Operational / analysis scripts (not part of the public library)
-scripts/
+scripts/*
+# ...except the tool that refreshes the recorded test fixtures
+!scripts/record_fixtures.py
 fitatu_login.py
 session_data.template.json
 live_validation_payloads.template.json
