@@ -12,15 +12,22 @@ every changed request. The full list of routes the app uses is in
 
 Fixed:
 
-- planner writes no longer untick "eaten" on every item of the day; the sync endpoint replaces
-  whole rows and the compacted payload dropped the flag (the `eaten=` arguments of the add and
-  update helpers never reached the server for the same reason)
+- planner writes no longer untick "eaten" on every item of the day; a row synced without the
+  flag gets `eaten=false` and the compacted payload dropped it (the `eaten=` arguments of the add
+  and update helpers never reached the server for the same reason)
 - `sync_days()` raises `FitatuPlannerSyncError` when the server rejects a day. The endpoint
   answers 202 in that case and only reports `errorMessage` per day, so failed writes used to be
   reported as successes
 - `remove_day_item_via_snapshot()` no longer reports `ok=True` when the row is still there
   (whole-day "before" count was compared with a single-meal "after" count)
 - removal tries `deletedAt` first: leaving a row out of the payload never deletes it
+- `soft_remove_day_item_via_snapshot()` checks the whole day after the reload; a row living in
+  another meal used to come back as "removed"
+- `rollback_added_item()` deletes with a `deletedAt` marker instead of re-syncing the day
+  without the row (which never deletes), so it no longer always falls back to "neutralised"
+- `FitatuLibrary` planner helpers now honour client kwargs such as `base_url`; non-Polish
+  accounts were silently sent to `pl-pl`
+- the token store file is written with owner-only permissions (0600)
 - `user_settings.get_new()` calls `/settings-new/{day}`; the dateless GET was the cause of the
   405, not the account type
 - live test suite: the default test day was yesterday, and its fixture clears the test meal,
@@ -31,7 +38,8 @@ Fixed:
 Added:
 
 - `client.measurements`: weight and body sizes per day, weight history and chart, body-part
-  history, size summary
+  history, size summary. `set_day()` merges with the stored record and refuses to relabel stored
+  values with a different unit
 - `client.summary`: range nutrition and activity totals, per-nutrient day series, top products,
   diary export (csv/xls/pdf/txt); `request(..., raw=True)` for binary responses
 - `client.foods`: favourite foods (read/toggle) and recently used foods
@@ -39,8 +47,10 @@ Added:
 - facade: `get_daily_targets_via_api`, `log_weight_via_api`, `get_weight_history_via_api`,
   `get_range_summary_via_api`, `export_diary_via_api`, `get_favorite_foods_via_api`,
   `get_recent_foods_via_api`
-- typed errors: `FitatuAuthError`, `FitatuRateLimitError`, `FitatuConnectionError`,
-  `FitatuPlannerSyncError`, all subclassing `FitatuApiError`; `FitatuApiError.codename`
+- typed errors: `FitatuAuthError` (401), `FitatuRateLimitError` (429), `FitatuConnectionError`
+  (no HTTP response), `FitatuPlannerSyncError` (rejected day), all subclassing `FitatuApiError`;
+  `FitatuApiError.codename`. `login()` raises them too, so a network failure during login is
+  now `FitatuConnectionError` instead of a raw `requests` exception
 - README section on which headers are required and how the API host is chosen
 - `docs/APP_4_17_1_API_CATALOG.md` with every route of the 4.17.1 app
 

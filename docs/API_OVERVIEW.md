@@ -55,7 +55,8 @@ This layer is useful for:
 Login note:
 
 - the live login contract is `POST /login` with `_username` and `_password`
-- the facade persists a reusable `session_data` payload
+- `FitatuApiClient.login()` performs the login; `FitatuLibrary.export_session_context()`
+  returns a reusable `session_data` payload
 - `fitatu_user_id` can be recovered from the JWT if it is not present as a dedicated field in the response
 
 ## Endpoint and Helper Map
@@ -63,7 +64,7 @@ Login note:
 | Area | Methods | Endpoint/source | Status |
 |---|---|---|---|
 | Auth refresh | `client.refresh_access_token()`, `client.auth_api.refresh()` | `POST /token/refresh` | Stable. Tries known payload variants and stores rotated refresh tokens. |
-| Food search | `client.search_food()`, `FitatuLibrary.search_food()` | `GET /search/food/` | Stable. |
+| Food search | `client.search_food()`, `FitatuLibrary.search_food()` | `GET /search/new/food` | Stable. |
 | User-food search | `client.search_user_food()`, `FitatuLibrary.search_user_food_via_api()` | `GET /search/food/user/{id}` | Unit-tested, integration-derived. |
 | Product create | `client.create_product()`, `FitatuLibrary.create_product_via_api()` | `POST /products` | Stable with caution. Supports extended nutrition fields. The `measures` param is not supported (causes 404). |
 | Product delete | `client.delete_product()`, `FitatuLibrary.delete_product_via_api()` | `DELETE /products/{id}` | Unit-tested, integration-derived. |

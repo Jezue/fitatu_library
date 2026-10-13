@@ -186,33 +186,30 @@ print(result.get("cleanupMode"))  # "soft_deleted" or "removed"
 
 ### How it works - The Current Delete Chain
 
-The library uses a snapshot/soft-delete deletion strategy on the current cluster:
+There is no DELETE route for planner rows. The library re-syncs the day with a marker, the
+same way the mobile app does:
 
-1. Try snapshot-based removal of the item from the day payload.
-2. If the backend keeps the item, try `deletedAt`-style soft-delete semantics.
-3. If needed, try more aggressive soft-delete semantics.
+1. Sync the row with `deletedAt` set. The day GET stops returning it.
+2. Fallback: sync the day without the row. The endpoint upserts by `planDayDietItemId`, so
+   this alone does not delete anything; it is kept for odd payload shapes.
+3. Optional aggressive fallback: quantity `0.0` and `visible: false`.
 
-### Why soft-delete instead of full removal?
+Recipe-like rows retry step 1 before falling back.
 
-The Fitatu backend cluster treats items with `measureQuantity=0.01` as effectively
-deleted for calorie/macro calculations, even though the item record persists. This
-is the only viable deletion family on the current live cluster, because there is no
-working planner hard-delete route in practice.
-
-### Example output from soft-delete
+### Example output
 
 ```python
 {
     "ok": True,
-    "cleanupMode": "soft_deleted",
+    "cleanupMode": "removed",        # the row is gone from the reloaded day
     "beforeCount": 5,
-    "afterCount": 5,  # Count unchanged, but items have qty=0.01
+    "afterCount": 4,
     "removedId": "6c164eda-3b76-11f1-b495-e36dcdcf7b7b",
-    "removedIdAbsentAfterSync": False,  # Item still in snapshot
-    "countDecreased": False,
-    "softDeleteQuantity": 0.01,
-    "markInvisible": True,
-    "removed": {...}  # Original item object before soft-delete
+    "removedIdAbsentAfterSync": True,
+    "countDecreased": True,
+    "useDeletedAt": True,
+    "deletedAt": "2026-10-13 11:20:31",
+    "removed": {...}  # the row as it was before deletion
 }
 ```
 
@@ -242,88 +239,19 @@ for meal_key in ["breakfast", "second_breakfast", "lunch", "dinner", "snack", "s
 
 ## Deleting CUSTOM_ITEM vs PRODUCT items
 
-**Important:** Some items cannot be deleted. Learn the differences:
+Both kinds are deleted the same way (`deletedAt`). Earlier versions of this guide said that
+`CUSTOM_ITEM` rows with `source="API"` could not be deleted; that was observed with
+quantity-only soft deletes (the server normalises custom rows to quantity 1, which looked like a
+"reconstruction"). With `deletedAt` they are removed like any other row (checked live on
+2026-10-13).
 
 ```python
-from datetime import date
-from fitatu_api import FitatuApiClient, FitatuAuthContext
-
-auth = FitatuAuthContext.from_session_data(session_data)
-client = FitatuApiClient(auth=auth)
-user_id = "your-user-id"
-target_date = date(2026, 4, 19)
-
-# Get all items
-day = client.planner.get_day(user_id, target_date)
-diet_plan = day.get("dietPlan", {})
-
-deleted_count = 0
-skipped_count = 0
-failed_count = 0
-
 for meal_key in ["breakfast", "second_breakfast", "lunch", "dinner", "snack", "supper"]:
-    items = diet_plan.get(meal_key, {}).get("items", [])
-
-    for item in items:
-        item_id = item.get("planDayDietItemId")
-        item_name = item.get("name")
-        item_type = item.get("foodType")  # "PRODUCT" or "CUSTOM_ITEM"
-        source = item.get("source")  # "API", "USER", etc.
-
-        # Skip API-sourced CUSTOM_ITEMs (backend-protected)
-        if item_type == "CUSTOM_ITEM" and source == "API":
-            print(f"⏭️  SKIPPED (API-protected): {item_name}")
-            skipped_count += 1
-            continue
-
-        # Try to delete
-        result = client.planner.remove_day_item(user_id, target_date, meal_key, item_id)
-
-        if result.get("ok"):
-            print(f"✅ DELETED: {item_name}")
-            deleted_count += 1
-        else:
-            # Check cleanup mode to understand why it failed
-            cleanup = result.get("cleanupMode")
-            print(f"❌ FAILED: {item_name} (cleanup mode: {cleanup})")
-            failed_count += 1
-
-print(f"\nSummary: {deleted_count} deleted, {skipped_count} skipped, {failed_count} failed")
+    for item in client.planner.list_meal_items(user_id, target_date, meal_key):
+        result = client.planner.remove_day_item(user_id, target_date, meal_key, item["planDayDietItemId"])
+        status = "deleted" if result.get("ok") else f"not confirmed ({result.get('cleanupMode')})"
+        print(f"{item.get('foodType')} {item.get('name')}: {status}")
 ```
-
-### Understanding the response
-
-**For PRODUCT items or user-created CUSTOM_ITEMs (successful):**
-```python
-{
-    "ok": True,
-    "cleanupMode": "soft_deleted",  # Item's quantity reduced to 0.01
-    "countDecreased": False,  # Item still in list, but functionally gone
-    "removed": {...}  # Original item before deletion
-}
-```
-
-**For API-sourced CUSTOM_ITEMs (backend-protected):**
-```python
-{
-    "ok": False,  # Deletion failed
-    "cleanupMode": "none",  # No cleanup applied
-    "removed": {
-        "foodType": "CUSTOM_ITEM",
-        "source": "API",  # This is why it's protected
-        ...
-    }
-}
-```
-
-### Why are some CUSTOM_ITEMs undeletable?
-
-CUSTOM_ITEMs with `source="API"` are **intentionally protected** because they are managed by
-external systems (integrations with fitness apps, wearables, etc.). The backend prevents deletion
-to maintain sync state with those systems.
-
-**Solution:** These items must be managed through the system that created them, not directly
-via the Fitatu API.
 
 ## Delete an item added from search (quick recipe)
 

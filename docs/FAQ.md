@@ -68,22 +68,15 @@ client.describe_auth_state()
 client.management_report()
 ```
 
-## Why does item removal return `cleanupMode=soft_deleted` instead of removing the item completely?
+## How does item removal work if there is no DELETE endpoint?
 
-Because there is currently no working planner hard-delete path on the live cluster.
+The planner has no DELETE route. A row is removed by syncing it with `deletedAt` set, which is
+exactly what the mobile app does; the day GET stops returning it and `remove_day_item()`
+reports `cleanupMode="removed"`.
 
-The historical `DELETE /diet-plan/{uid}/day/{date}/{meal}/{itemId}` route is not a
-practical deletion method on the current cluster, so the library uses snapshot and
-soft-delete style cleanup instead:
-
-- Reduces the item's `measureQuantity` to `0.01` (minimal quantity)
-- Optionally sets `deletedAt` and/or `visible=false`
-- Item may remain in the payload, but become **functionally deleted** from the library's perspective
-
-Live verification on `2026-04-19` confirmed that hard delete did not succeed, while
-snapshot/soft-delete flows were the only working planner cleanup mechanisms.
-
-If you need **complete physical deletion**, this is currently not possible via the API.
+Leaving a row out of the sync payload does not delete it (the endpoint upserts by
+`planDayDietItemId`). You may still see `cleanupMode="soft_deleted"` when only the
+quantity/visibility fallback took effect.
 
 ## Can I delete multiple items at once?
 
