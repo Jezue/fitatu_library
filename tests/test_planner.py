@@ -1304,3 +1304,15 @@ class TestResolveProductMeasure:
 # ---------------------------------------------------------------------------
 # TestHydrateRecipeItemFromDetails
 # ---------------------------------------------------------------------------
+
+
+def test_row_ids_are_uuid_v1_without_the_machine_mac() -> None:
+    import uuid
+
+    from fitatu_api.planner import _new_row_id
+
+    ids = {uuid.UUID(_new_row_id()) for _ in range(20)}
+    assert len(ids) == 20
+    assert all(row_id.version == 1 for row_id in ids)
+    assert all(row_id.node & (1 << 40) for row_id in ids)  # multicast bit = random node
+    assert uuid.getnode() not in {row_id.node for row_id in ids}

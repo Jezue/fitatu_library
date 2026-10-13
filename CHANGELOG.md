@@ -48,6 +48,8 @@ responses in the test suite.
 
 ### Fixed
 
+- new planner rows got their `planDayDietItemId` from `uuid.uuid1()`, which embeds the machine's
+  MAC address, so every row sent to Fitatu carried it. Row ids now use a random node
 - `FitatuApiClient.login(..., token_store_path=...)` returned a client with the old tokens from
   the token store instead of the fresh ones, and did not save the fresh pair
 - `demo.py` pointed at a `fitatu_login.py` script that does not exist

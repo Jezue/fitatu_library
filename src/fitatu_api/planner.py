@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import secrets
 import uuid
 import warnings
 from datetime import date, datetime
@@ -15,6 +16,15 @@ logger = logging.getLogger(__name__)
 
 if False:  # pragma: no cover
     from .client import FitatuApiClient
+
+
+def _new_row_id() -> str:
+    """A UUID v1 for ``planDayDietItemId`` (the only version the day sync accepts).
+
+    ``uuid.uuid1()`` would put this machine's MAC address into every row sent to Fitatu;
+    a random node with the multicast bit set (RFC 4122, section 4.5) avoids that.
+    """
+    return str(uuid.uuid1(node=secrets.randbits(48) | 1 << 40))
 
 
 def _warn_unsupported_route(name: str, replacement: str) -> None:
@@ -626,7 +636,7 @@ class PlannerModule:
         meal_key = self._require_meal(user_id, day, meal_type)
         logger.debug("add_product user=%s day=%s meal=%s product=%s qty=%s", user_id, day, meal_key, product_id, measure_quantity)
         new_item: dict[str, Any] = {
-            "planDayDietItemId": str(uuid.uuid1()),
+            "planDayDietItemId": _new_row_id(),
             "foodType": "PRODUCT",
             "measureId": measure_id,
             "measureQuantity": measure_quantity,
@@ -676,7 +686,7 @@ class PlannerModule:
         meal_key = self._require_meal(user_id, day, meal_type)
         logger.debug("add_recipe user=%s day=%s meal=%s recipe=%s", user_id, day, meal_key, recipe_id)
         new_item: dict[str, Any] = {
-            "planDayDietItemId": str(uuid.uuid1()),
+            "planDayDietItemId": _new_row_id(),
             "foodType": normalized_food_type,
             "recipeId": recipe_id,
             "measureId": measure_id,
@@ -799,7 +809,7 @@ class PlannerModule:
         if not item_name:
             raise FitatuApiError("Custom item name is required")
         return {
-            "planDayDietItemId": str(uuid.uuid1()),
+            "planDayDietItemId": _new_row_id(),
             "foodType": "CUSTOM_ITEM",
             "name": item_name,
             "energy": max(float(calories), 0.0),
@@ -1136,7 +1146,7 @@ class PlannerModule:
         source_meal_key, source_item = found
 
         moved_item = {key: value for key, value in source_item.items() if key != "deletedAt"}
-        moved_item["planDayDietItemId"] = str(uuid.uuid1())
+        moved_item["planDayDietItemId"] = _new_row_id()
         delete_marker = self._mark_deleted(source_item)
 
         days_payload: dict[str, Any] = {from_day.isoformat(): {"dietPlan": {source_meal_key: {"items": [delete_marker]}}}}
