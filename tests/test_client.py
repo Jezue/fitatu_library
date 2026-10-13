@@ -51,6 +51,17 @@ class FakeClient:
         expected_path = f"/diet-and-activity-plan/{TEST_USER_ID}/day/{TEST_DAY.isoformat()}"
         if method == "GET" and path == expected_path:
             return deepcopy(self.day_payload)
+        if method == "POST" and path == f"/diet-plan/{TEST_USER_ID}/days":
+            json_data = kwargs.get("json_data")
+            if not isinstance(json_data, dict):
+                raise AssertionError("sync payload missing")
+            self.last_sync_payload = deepcopy(json_data)
+            day_key = TEST_DAY.isoformat()
+            payload = json_data.get(day_key)
+            if not isinstance(payload, dict):
+                raise AssertionError("day payload missing")
+            self.day_payload = deepcopy(payload)
+            return [{"date": day_key, "revision": "rev-1", "errorMessage": None}]
         raise AssertionError(f"Unexpected request: {method} {path} {kwargs}")
 
     def request_first_success(
@@ -63,17 +74,7 @@ class FakeClient:
         self.request_log.append((method, paths[0]))
         if method == "DELETE":
             raise FitatuApiError("missing", status_code=404)
-        if method != "POST":
-            raise AssertionError(f"Unexpected method: {method}")
-        if json_data is None:
-            raise AssertionError("sync payload missing")
-        self.last_sync_payload = deepcopy(json_data)
-        day_key = TEST_DAY.isoformat()
-        payload = json_data.get(day_key)
-        if not isinstance(payload, dict):
-            raise AssertionError("day payload missing")
-        self.day_payload = deepcopy(payload)
-        return {"status": "ok", "savedDay": day_key, "path": paths[0]}
+        raise AssertionError(f"Unexpected method: {method}")
 
     def search_food(self, phrase: str, **kwargs: object) -> list[dict[str, object]]:
         return deepcopy(self.search_results.get(phrase.lower(), []))
@@ -728,10 +729,22 @@ class PlannerTests(unittest.TestCase):
         module.get_product_for_meal("10", "breakfast", TEST_DAY)
         module.send_changes({"items": []})
         module.add_day_items(TEST_USER_ID, TEST_DAY, [{"id": 1}])
-        module.sync_single_day(TEST_USER_ID, TEST_DAY, {"dietPlan": {}})
         module.remove_activity_day_item(TEST_USER_ID, TEST_DAY, "act-1")
 
-        self.assertEqual(client.request_first_success.call_count, 5)
+        self.assertEqual(client.request_first_success.call_count, 4)
+
+    def test_sync_single_day_posts_to_the_single_days_route(self) -> None:
+        client = Mock()
+        client.request.return_value = [{"date": TEST_DAY.isoformat(), "revision": "r", "errorMessage": None}]
+        PlannerModule(client).sync_single_day(TEST_USER_ID, TEST_DAY, {"dietPlan": {}}, synchronous=True)
+
+        client.request.assert_called_once_with(
+            "POST",
+            f"/diet-plan/{TEST_USER_ID}/days",
+            json_data={TEST_DAY.isoformat(): {"dietPlan": {}}},
+            params={"synchronous": "true"},
+        )
+        client.request_first_success.assert_not_called()
 
 
 class FacadeTests(unittest.TestCase):

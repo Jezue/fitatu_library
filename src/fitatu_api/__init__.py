@@ -23,6 +23,7 @@ from .constants import (
     FITATU_LIFECYCLE_RELOGIN_REQUIRED,
     FITATU_LIFECYCLE_TOKEN_ONLY,
 )
+from .exceptions import FitatuPlannerSyncError
 from .facade import FitatuLibrary
 from .operational_store import FitatuOperationalEvent, FitatuOperationalStore
 
@@ -31,6 +32,7 @@ __all__ = [
     "FitatuApiClient",
     "FitatuAuthContext",
     "FitatuApiError",
+    "FitatuPlannerSyncError",
     "FitatuTokenStore",
     "AuthModule",
     "ActivitiesModule",

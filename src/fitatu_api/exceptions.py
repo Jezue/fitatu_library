@@ -17,3 +17,18 @@ class FitatuApiError(RuntimeError):
 
     def __repr__(self) -> str:
         return f"FitatuApiError(status_code={self.status_code!r}, message={str(self)!r})"
+
+
+class FitatuPlannerSyncError(FitatuApiError):
+    """Raised when the day sync endpoint accepts a request but rejects one or more days.
+
+    ``POST /diet-plan/{user_id}/days`` answers ``202`` even when nothing was saved;
+    the reason is only reported per day in the response body.
+
+    Attributes:
+        results: The parsed ``[{"date", "revision", "errorMessage"}, ...]`` response.
+    """
+
+    def __init__(self, message: str, results: list[dict[str, object]]):
+        super().__init__(message, status_code=202)
+        self.results = results
