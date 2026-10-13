@@ -351,6 +351,16 @@ class TestStaticHelpers:
         assert result["energy"] == 150
         assert "productId" not in result
 
+    def test_compact_diet_item_for_sync_keeps_eaten_flag(self) -> None:
+        eaten = {"planDayDietItemId": "e1", "foodType": "PRODUCT", "productId": 1, "eaten": True}
+        not_eaten = {**eaten, "eaten": False}
+        assert PlannerModule._compact_diet_item_for_sync(eaten)["eaten"] is True
+        assert PlannerModule._compact_diet_item_for_sync(not_eaten)["eaten"] is False
+
+    def test_compact_diet_item_for_sync_omits_eaten_when_unknown(self) -> None:
+        item = {"planDayDietItemId": "e2", "foodType": "PRODUCT", "productId": 1}
+        assert "eaten" not in PlannerModule._compact_diet_item_for_sync(item)
+
     def test_compact_diet_item_for_sync_recipe_preserves_recipe_id(self) -> None:
         item = {
             "planDayDietItemId": "r1",
