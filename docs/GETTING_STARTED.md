@@ -12,10 +12,9 @@ For local development:
 pip install -e ".[dev]"
 ```
 
-## 2. Prepare session data
+## 2. Get a session
 
-The library expects a session payload that contains enough information to build
-`FitatuAuthContext`. The most common fields are:
+The library works with a small session file:
 
 ```json
 {
@@ -25,8 +24,44 @@ The library expects a session payload that contains enough information to build
 }
 ```
 
-It can also consume storage-state-like payloads that include `origins` and
-`localStorage`.
+### Option A: log in from the command line (e-mail + password)
+
+```bash
+python -m fitatu_api login            # or: fitatu-api login
+```
+
+It asks for your e-mail and password (or reads `FITATU_EMAIL` / `FITATU_PASSWORD`) and writes
+`session_data.json` with owner-only permissions. Use `-o path` for another location and
+`--base-url https://de-de.fitatu.com/api` (etc.) if your account is not Polish.
+
+### Option B: log in from Python
+
+```python
+from fitatu_api import FitatuApiClient
+
+client = FitatuApiClient.login("you@example.com", "password", token_store_path="~/.fitatu/tokens.json")
+session_data = client.auth.to_session_data(include_tokens=True)  # save it for later runs
+```
+
+`login()` raises `FitatuAuthError` on wrong credentials and `FitatuConnectionError` when the
+server cannot be reached.
+
+### Option C: copy it from the web app (Apple / Facebook accounts)
+
+Accounts created with "Continue with Apple" or "Continue with Facebook" have no password, so
+options A and B do not work for them. Log in at <https://www.fitatu.com/app/>, open the browser
+developer console on that page and run:
+
+```js
+const u = JSON.parse(localStorage.user);
+copy(JSON.stringify({bearer_token: u.token, refresh_token: u.refresh_token, fitatu_user_id: u.id}, null, 2));
+```
+
+Paste the clipboard into `session_data.json`. Treat the file like a password: the refresh token
+keeps the session alive, and the library refreshes the bearer token on its own.
+
+`FitatuAuthContext.from_session_data()` also accepts Playwright storage-state payloads
+(`origins` / `localStorage`), so a saved browser state works as is.
 
 ## 3. Create a client
 

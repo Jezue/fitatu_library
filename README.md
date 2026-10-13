@@ -229,6 +229,15 @@ pytest
 
 ## 🚀 Quick Start
 
+Get a session first:
+
+```bash
+python -m fitatu_api login      # prompts for e-mail and password, writes session_data.json
+```
+
+Accounts created with Apple or Facebook have no password; copy the session from the web app
+instead, see [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md#2-get-a-session).
+
 ```python
 from fitatu_api import FitatuApiClient, FitatuAuthContext
 

@@ -12,7 +12,9 @@ def main() -> None:
     """Run the smallest useful fitatu-api example."""
     session_path = Path("session_data.json")
     if not session_path.exists():
-        raise SystemExit("Missing session_data.json in the current directory.")
+        raise SystemExit(
+            "Missing session_data.json in the current directory. Create it with: python -m fitatu_api login"
+        )
 
     session_data = json.loads(session_path.read_text(encoding="utf-8"))
     auth = FitatuAuthContext.from_session_data(session_data)

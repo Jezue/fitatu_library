@@ -28,6 +28,9 @@ dependencies = [
   "requests>=2.31.0",
 ]
 
+[project.scripts]
+fitatu-api = "fitatu_api.__main__:main"
+
 [project.urls]
 Homepage = "https://github.com/Jezue/fitatu_library"
 Issues = "https://github.com/Jezue/fitatu_library/issues"
