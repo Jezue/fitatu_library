@@ -25,7 +25,7 @@ from .constants import (
     FITATU_LIFECYCLE_TOKEN_ONLY,
     FITATU_MANAGEMENT_REPORT_SCHEMA_VERSION,
 )
-from .exceptions import FitatuApiError
+from .exceptions import FitatuApiError, FitatuAuthError, FitatuConnectionError, FitatuRateLimitError
 from .operational_store import FitatuOperationalStore
 from .planner import PlannerModule
 from .service_modules import (
@@ -546,7 +546,7 @@ class FitatuApiClient:
                 if retryable_method and attempt < self.retry_max_attempts:
                     time.sleep(self._backoff_delay_seconds(attempt))
                     continue
-                raise FitatuApiError(
+                raise FitatuConnectionError(
                     message=f"Fitatu API network error: {method_upper} {path}: {exc}",
                     body=str(exc),
                 ) from exc
@@ -564,7 +564,7 @@ class FitatuApiClient:
                             timeout=self.timeout_seconds,
                         )
                     except requests.RequestException as exc:
-                        raise FitatuApiError(
+                        raise FitatuConnectionError(
                             message=f"Fitatu API network error after refresh: {method_upper} {path}: {exc}",
                             body=str(exc),
                         ) from exc
@@ -574,7 +574,12 @@ class FitatuApiClient:
                 continue
 
             if response.status_code >= 400:
-                error = FitatuApiError(
+                error_type: type[FitatuApiError] = FitatuApiError
+                if response.status_code in {401, 403}:
+                    error_type = FitatuAuthError
+                elif response.status_code == 429:
+                    error_type = FitatuRateLimitError
+                error = error_type(
                     message=f"Fitatu API request failed: {method_upper} {path}",
                     status_code=response.status_code,
                     body=response.text,
