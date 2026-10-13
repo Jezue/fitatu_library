@@ -303,8 +303,8 @@ class PlannerModule:
         if isinstance(recipe_ai, dict):
             compact["recipeAI"] = recipe_ai
 
-        # The sync endpoint replaces the whole row, so a missing "eaten" key resets the
-        # flag to false on the server. Carry it over or every write unticks the day.
+        # A row synced without "eaten" gets eaten=false on the server (checked live), so
+        # carry it over or every write unticks the day.
         if isinstance(item.get("eaten"), bool):
             compact["eaten"] = item["eaten"]
 
@@ -1190,18 +1190,12 @@ class PlannerModule:
         removed_item: dict[str, Any] | None = None
 
         if plan_day_diet_item_id:
-            for idx in range(len(items) - 1, -1, -1):
-                item = items[idx]
-                if str(item.get("planDayDietItemId")) == str(plan_day_diet_item_id):
-                    removed_item = items.pop(idx)
-                    break
-
+            removed_item = next(
+                (i for i in reversed(items) if str(i.get("planDayDietItemId")) == str(plan_day_diet_item_id)),
+                None,
+            )
         if removed_item is None and product_id is not None:
-            for idx in range(len(items) - 1, -1, -1):
-                item = items[idx]
-                if str(item.get("productId")) == str(product_id):
-                    removed_item = items.pop(idx)
-                    break
+            removed_item = next((i for i in reversed(items) if str(i.get("productId")) == str(product_id)), None)
 
         if removed_item is None:
             return {
@@ -1213,33 +1207,38 @@ class PlannerModule:
                 "message": "No matching item found to rollback",
             }
 
-        day_payload["dietPlan"] = self._compact_diet_plan_for_sync(diet_plan)
-        sync_response = self.sync_single_day(user_id, day, day_payload)
+        # Leaving the row out of a sync never deletes it (the endpoint upserts), so send
+        # just a deletedAt marker for it, the same way move_day_item does.
+        sync_response = self.sync_single_day(
+            user_id,
+            day,
+            {"dietPlan": {meal_key: {"items": [self._deleted_item_marker(removed_item)]}}},
+        )
 
         reloaded_day = self.get_day(user_id, day)
-        reloaded_diet = self._as_dict(reloaded_day.get("dietPlan"))
-        reloaded_meal = self._as_dict(reloaded_diet.get(meal_key) if reloaded_diet else None)
-        reloaded_items = self._as_dict_list(reloaded_meal.get("items") if reloaded_meal else None)
-        after_count = len(reloaded_items)
+        reloaded_diet = self._as_dict(reloaded_day.get("dietPlan")) or {}
+        reloaded_meal = self._as_dict(reloaded_diet.get(meal_key))
+        after_count = len(self._as_dict_list(reloaded_meal.get("items") if reloaded_meal else None))
 
         removed_id = str(removed_item.get("planDayDietItemId"))
         reloaded_ids = {
             str(i.get("planDayDietItemId"))
-            for i in reloaded_items
+            for bucket in reloaded_diet.values()
+            for i in self._as_dict_list((self._as_dict(bucket) or {}).get("items"))
             if i.get("planDayDietItemId") is not None
         }
         removed_id_absent = bool(removed_id and removed_id not in reloaded_ids)
         count_decreased = after_count < before_count
 
-        ok = removed_id_absent or count_decreased
+        ok = removed_id_absent
         cleanup_mode = "removed" if ok else "none"
         neutralize_sync_response: Any | None = None
 
         if not ok and neutralize_on_failure:
             reloaded_day_for_neutralize = self.get_day(user_id, day)
-            reloaded_diet = self._as_dict(reloaded_day_for_neutralize.get("dietPlan"))
-            if reloaded_diet is not None:
-                reloaded_meal_bucket = self._as_dict(reloaded_diet.get(meal_key))
+            neutralize_diet = self._as_dict(reloaded_day_for_neutralize.get("dietPlan"))
+            if neutralize_diet is not None:
+                reloaded_meal_bucket = self._as_dict(neutralize_diet.get(meal_key))
                 reloaded_items2 = self._as_dict_list(
                     reloaded_meal_bucket.get("items") if reloaded_meal_bucket else None
                 )
@@ -1250,10 +1249,7 @@ class PlannerModule:
                     if mark_invisible:
                         item["visible"] = False
                     neutralize_payload: dict[str, Any] = {
-                        "dietPlan": reloaded_diet,
-                        "toiletItems": reloaded_day_for_neutralize.get("toiletItems")
-                        or reloaded_day_for_neutralize.get("toilet")
-                        or [],
+                        "dietPlan": neutralize_diet,
                         "note": reloaded_day_for_neutralize.get("note"),
                         "tagsIds": reloaded_day_for_neutralize.get("tagsIds") or [],
                     }
@@ -1810,10 +1806,17 @@ class PlannerModule:
 
         sync_response = self.sync_single_day(user_id, day, day_payload)
 
+        # The target may live in another meal (any_meal=True), so look at the whole day.
+        before_count = sum(
+            len(self._as_dict_list((self._as_dict(bucket) or {}).get("items"))) for bucket in diet_plan.values()
+        )
         reloaded_day = self.get_day(user_id, day)
-        reloaded_diet = self._as_dict(reloaded_day.get("dietPlan"))
-        reloaded_meal = self._as_dict(reloaded_diet.get(meal_key) if reloaded_diet else None)
-        reloaded_items = self._as_dict_list(reloaded_meal.get("items") if reloaded_meal else None)
+        reloaded_diet = self._as_dict(reloaded_day.get("dietPlan")) or {}
+        reloaded_items = [
+            item
+            for bucket in reloaded_diet.values()
+            for item in self._as_dict_list((self._as_dict(bucket) or {}).get("items"))
+        ]
         after_count = len(reloaded_items)
 
         removed_id = str(target_item.get("planDayDietItemId"))
