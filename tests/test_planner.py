@@ -113,6 +113,22 @@ def _empty_day() -> dict[str, Any]:
     }
 
 
+class UpsertFakeClient(FakeClient):
+    """Behaves like the real sync endpoint: rows left out of a payload are kept."""
+
+    def _store_sync_payload(self, json_data: Any) -> list[dict[str, Any]]:
+        stored = deepcopy(self.day_payload)
+        result = super()._store_sync_payload(json_data)
+        for meal_key, bucket in (stored.get("dietPlan") or {}).items():
+            target = self.day_payload["dietPlan"].setdefault(meal_key, {"items": []})
+            target_items = target.setdefault("items", [])
+            synced_ids = {row.get("planDayDietItemId") for row in target_items}
+            target_items.extend(
+                row for row in bucket.get("items", []) if row.get("planDayDietItemId") not in synced_ids
+            )
+        return result
+
+
 def _day_with_product(
     meal: str = "breakfast",
     item_id: str = "item-1",
@@ -1097,13 +1113,26 @@ class TestSoftRemoveDayItemViaSnapshot:
 
 
 class TestRemoveDayItemWithStrategy:
-    def test_normal_item_attempts_snapshot_first(self) -> None:
+    def test_normal_item_attempts_soft_delete_first(self) -> None:
         client = FakeClient(_day_with_product())
         result = client.planner.remove_day_item_with_strategy(
             TEST_USER, TEST_DAY, "breakfast", "item-1", item_kind="normal_item"
         )
         steps = [a["step"] for a in result["attempts"] if not a.get("skipped")]
-        assert "snapshot_remove" in steps
+        assert steps[0] == "soft_deleted_at"
+
+    def test_snapshot_remove_is_not_ok_when_the_server_keeps_the_row(self) -> None:
+        day = _day_with_product()
+        day["dietPlan"]["lunch"]["items"] = [
+            {"planDayDietItemId": "other", "foodType": "PRODUCT", "productId": 2, "measureId": 1, "measureQuantity": 1}
+        ]
+        client = UpsertFakeClient(day)
+
+        result = client.planner.remove_day_item_via_snapshot(TEST_USER, TEST_DAY, "breakfast", "item-1")
+
+        assert result["ok"] is False
+        assert result["removedIdAbsentAfterSync"] is False
+        assert result["countDecreased"] is False
 
     def test_custom_add_item_attempts_soft_delete_first(self) -> None:
         client = FakeClient(_day_with_custom_item(source="WEB", quantity=100.0))
