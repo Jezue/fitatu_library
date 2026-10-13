@@ -6,15 +6,27 @@ import logging
 import re
 import time
 import uuid
+import warnings
 from datetime import date, datetime
 from typing import Any, cast
 
-from .exceptions import FitatuApiError
+from .exceptions import FitatuApiError, FitatuPlannerSyncError
 
 logger = logging.getLogger(__name__)
 
 if False:  # pragma: no cover
     from .client import FitatuApiClient
+
+
+def _warn_unsupported_route(name: str, replacement: str) -> None:
+    """Emit a DeprecationWarning for helpers built on routes the API does not serve."""
+    warnings.warn(
+        f"{name}() calls a route that does not exist in the Fitatu API (it was a mobile app "
+        f"screen path or a guessed variant) and always fails with 404. Use {replacement} instead. "
+        "It will be removed in a future release.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
 
 class PlannerModule:
@@ -260,10 +272,14 @@ class PlannerModule:
 
     @staticmethod
     def _build_day_sync_payload(day_data: dict[str, Any]) -> dict[str, Any]:
-        """Extract the fields required by the day-sync POST endpoint from a full day snapshot."""
+        """Extract the fields required by the day-sync POST endpoint from a full day snapshot.
+
+        Water, toilet entries and activities are left out on purpose: the server keeps
+        whatever is stored for keys missing from the payload, so a diet-only write cannot
+        clobber them.
+        """
         return {
             "dietPlan": day_data.get("dietPlan") or {},
-            "toiletItems": day_data.get("toiletItems") or [],
             "note": day_data.get("note"),
             "tagsIds": day_data.get("tagsIds") or [],
         }
@@ -286,6 +302,11 @@ class PlannerModule:
         recipe_ai = item.get("recipeAI")
         if isinstance(recipe_ai, dict):
             compact["recipeAI"] = recipe_ai
+
+        # A row synced without "eaten" gets eaten=false on the server (checked live), so
+        # carry it over or every write unticks the day.
+        if isinstance(item.get("eaten"), bool):
+            compact["eaten"] = item["eaten"]
 
         has_product_id = item.get("productId") is not None
         if has_product_id:
@@ -1169,18 +1190,12 @@ class PlannerModule:
         removed_item: dict[str, Any] | None = None
 
         if plan_day_diet_item_id:
-            for idx in range(len(items) - 1, -1, -1):
-                item = items[idx]
-                if str(item.get("planDayDietItemId")) == str(plan_day_diet_item_id):
-                    removed_item = items.pop(idx)
-                    break
-
+            removed_item = next(
+                (i for i in reversed(items) if str(i.get("planDayDietItemId")) == str(plan_day_diet_item_id)),
+                None,
+            )
         if removed_item is None and product_id is not None:
-            for idx in range(len(items) - 1, -1, -1):
-                item = items[idx]
-                if str(item.get("productId")) == str(product_id):
-                    removed_item = items.pop(idx)
-                    break
+            removed_item = next((i for i in reversed(items) if str(i.get("productId")) == str(product_id)), None)
 
         if removed_item is None:
             return {
@@ -1192,33 +1207,38 @@ class PlannerModule:
                 "message": "No matching item found to rollback",
             }
 
-        day_payload["dietPlan"] = self._compact_diet_plan_for_sync(diet_plan)
-        sync_response = self.sync_single_day(user_id, day, day_payload)
+        # Leaving the row out of a sync never deletes it (the endpoint upserts), so send
+        # just a deletedAt marker for it, the same way move_day_item does.
+        sync_response = self.sync_single_day(
+            user_id,
+            day,
+            {"dietPlan": {meal_key: {"items": [self._deleted_item_marker(removed_item)]}}},
+        )
 
         reloaded_day = self.get_day(user_id, day)
-        reloaded_diet = self._as_dict(reloaded_day.get("dietPlan"))
-        reloaded_meal = self._as_dict(reloaded_diet.get(meal_key) if reloaded_diet else None)
-        reloaded_items = self._as_dict_list(reloaded_meal.get("items") if reloaded_meal else None)
-        after_count = len(reloaded_items)
+        reloaded_diet = self._as_dict(reloaded_day.get("dietPlan")) or {}
+        reloaded_meal = self._as_dict(reloaded_diet.get(meal_key))
+        after_count = len(self._as_dict_list(reloaded_meal.get("items") if reloaded_meal else None))
 
         removed_id = str(removed_item.get("planDayDietItemId"))
         reloaded_ids = {
             str(i.get("planDayDietItemId"))
-            for i in reloaded_items
+            for bucket in reloaded_diet.values()
+            for i in self._as_dict_list((self._as_dict(bucket) or {}).get("items"))
             if i.get("planDayDietItemId") is not None
         }
         removed_id_absent = bool(removed_id and removed_id not in reloaded_ids)
         count_decreased = after_count < before_count
 
-        ok = removed_id_absent or count_decreased
+        ok = removed_id_absent
         cleanup_mode = "removed" if ok else "none"
         neutralize_sync_response: Any | None = None
 
         if not ok and neutralize_on_failure:
             reloaded_day_for_neutralize = self.get_day(user_id, day)
-            reloaded_diet = self._as_dict(reloaded_day_for_neutralize.get("dietPlan"))
-            if reloaded_diet is not None:
-                reloaded_meal_bucket = self._as_dict(reloaded_diet.get(meal_key))
+            neutralize_diet = self._as_dict(reloaded_day_for_neutralize.get("dietPlan"))
+            if neutralize_diet is not None:
+                reloaded_meal_bucket = self._as_dict(neutralize_diet.get(meal_key))
                 reloaded_items2 = self._as_dict_list(
                     reloaded_meal_bucket.get("items") if reloaded_meal_bucket else None
                 )
@@ -1229,10 +1249,7 @@ class PlannerModule:
                     if mark_invisible:
                         item["visible"] = False
                     neutralize_payload: dict[str, Any] = {
-                        "dietPlan": reloaded_diet,
-                        "toiletItems": reloaded_day_for_neutralize.get("toiletItems")
-                        or reloaded_day_for_neutralize.get("toilet")
-                        or [],
+                        "dietPlan": neutralize_diet,
                         "note": reloaded_day_for_neutralize.get("note"),
                         "tagsIds": reloaded_day_for_neutralize.get("tagsIds") or [],
                     }
@@ -1348,7 +1365,8 @@ class PlannerModule:
         return result
 
     def get_product_for_meal(self, product_id: str, meal_type: str, day: date) -> Any:
-        """Try known route variants for planner product lookup."""
+        """Deprecated: ``/product/{id}/{meal}/{day}`` is an app screen route, not an API path."""
+        _warn_unsupported_route("get_product_for_meal", "client.get_product_details()")
         return self._client.request_first_success(
             "GET",
             [
@@ -1358,7 +1376,8 @@ class PlannerModule:
         )
 
     def quick_add_form(self, payload: dict[str, Any]) -> Any:
-        """Call the quick-add endpoint directly."""
+        """Deprecated: ``/food/quick-add/form`` is an app screen route, not an API path."""
+        _warn_unsupported_route("quick_add_form", "add_custom_item_to_day_meal()")
         return self._client.request_first_success(
             "POST",
             ["/food/quick-add/form", "/v2/food/quick-add/form"],
@@ -1366,16 +1385,15 @@ class PlannerModule:
         )
 
     def quick_add_form_with_fallback(self, payload: dict[str, Any]) -> Any:
-        """Attempt quick-add and fall back to search+add behavior on 404."""
-        try:
-            return self.quick_add_form(payload)
-        except FitatuApiError as exc:
-            if exc.status_code != 404:
-                raise
-            fallback = self._quick_add_form_fallback(payload)
-            if fallback is not None:
-                return fallback
-            raise
+        """Add a quick-add style payload through search + planner sync.
+
+        There is no quick-add endpoint (the app's quick add is a ``CUSTOM_ITEM`` row
+        in the day sync), so this goes straight to the search-based add.
+        """
+        fallback = self._quick_add_form_fallback(payload)
+        if fallback is None:
+            raise FitatuApiError("quick add payload needs name, mealType, mealDate and userId")
+        return fallback
 
     def _quick_add_form_fallback(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         """Fall back to a search-based add when the quick-add endpoint is unavailable."""
@@ -1443,7 +1461,8 @@ class PlannerModule:
         return mapping.get(number, "snack")
 
     def send_changes(self, payload: dict[str, Any], method: str = "POST") -> Any:
-        """Send a planner changes payload to the first route variant that works."""
+        """Deprecated: there is no planner changes endpoint; changes go through day sync."""
+        _warn_unsupported_route("send_changes", "sync_days()")
         return self._client.request_first_success(
             method.upper(),
             ["/planner/changes", "/v2/planner/changes", "/v2/diet-plan/planner/changes"],
@@ -1451,7 +1470,8 @@ class PlannerModule:
         )
 
     def add_day_items(self, user_id: str, day: date, items: list[dict[str, Any]]) -> Any:
-        """Try known route variants for adding day items directly."""
+        """Deprecated: there is no day-items endpoint; rows are added through day sync."""
+        _warn_unsupported_route("add_day_items", "sync_single_day()")
         return self._client.request_first_success(
             "POST",
             [
@@ -1475,17 +1495,37 @@ class PlannerModule:
         not ``date`` objects — the payload is serialised directly to JSON::
 
             planner.sync_days(user_id, {date.today().isoformat(): day_snapshot})
+
+        Returns the server's per-day result list, e.g.
+        ``[{"date": "2026-10-13", "revision": "...", "errorMessage": None}]``.
+
+        Raises:
+            FitatuPlannerSyncError: When any day comes back with an ``errorMessage``.
+                The endpoint still answers 202 in that case and nothing is saved for
+                the rejected day (e.g. a ``planDayDietItemId`` that is not a UUID v1).
         """
-        return self._client.request_first_success(
+        response = self._client.request(
             "POST",
-            [
-                f"/diet-plan/{user_id}/days",
-                f"/v2/diet-plan/{user_id}/days",
-                f"/v3/diet-plan/{user_id}/days",
-            ],
+            f"/diet-plan/{user_id}/days",
             json_data=days_payload,
             params={"synchronous": "true"} if synchronous else None,
         )
+        if isinstance(response, list):
+            rejected = [row for row in response if isinstance(row, dict) and row.get("errorMessage")]
+            if rejected:
+                details = "; ".join(f"{row.get('date')}: {row.get('errorMessage')}" for row in rejected)
+                raise FitatuPlannerSyncError(f"Planner sync rejected: {details}", results=response)
+        return response
+
+    def get_day_revisions(self, user_id: str, day: date) -> list[str]:
+        """Return the day's revision ids, newest first.
+
+        Every accepted sync adds one, so comparing this list with a previously seen
+        one is a cheap way to notice changes made elsewhere (e.g. on the phone)
+        without downloading the whole day.
+        """
+        data = self._client.request("GET", f"/diet-plan/{user_id}/days/{day.isoformat()}/revisions")
+        return [str(rev) for rev in data] if isinstance(data, list) else []
 
     def sync_single_day(
         self,
@@ -1672,10 +1712,15 @@ class PlannerModule:
         day_payload["dietPlan"] = self._compact_diet_plan_for_sync(diet_plan)
         sync_response = self.sync_single_day(user_id, day, day_payload)
 
+        # Compare the whole day on both sides: the item may sit in another meal
+        # (any_meal=True above) and before_count already spans every bucket.
         reloaded_day = self.get_day(user_id, day)
-        reloaded_diet = self._as_dict(reloaded_day.get("dietPlan"))
-        reloaded_meal = self._as_dict(reloaded_diet.get(meal_key) if reloaded_diet else None)
-        reloaded_items = self._as_dict_list(reloaded_meal.get("items") if reloaded_meal else None)
+        reloaded_diet = self._as_dict(reloaded_day.get("dietPlan")) or {}
+        reloaded_items = [
+            item
+            for bucket in reloaded_diet.values()
+            for item in self._as_dict_list((self._as_dict(bucket) or {}).get("items"))
+        ]
         after_count = len(reloaded_items)
 
         removed_id = str(removed_item.get("planDayDietItemId"))
@@ -1761,10 +1806,17 @@ class PlannerModule:
 
         sync_response = self.sync_single_day(user_id, day, day_payload)
 
+        # The target may live in another meal (any_meal=True), so look at the whole day.
+        before_count = sum(
+            len(self._as_dict_list((self._as_dict(bucket) or {}).get("items"))) for bucket in diet_plan.values()
+        )
         reloaded_day = self.get_day(user_id, day)
-        reloaded_diet = self._as_dict(reloaded_day.get("dietPlan"))
-        reloaded_meal = self._as_dict(reloaded_diet.get(meal_key) if reloaded_diet else None)
-        reloaded_items = self._as_dict_list(reloaded_meal.get("items") if reloaded_meal else None)
+        reloaded_diet = self._as_dict(reloaded_day.get("dietPlan")) or {}
+        reloaded_items = [
+            item
+            for bucket in reloaded_diet.values()
+            for item in self._as_dict_list((self._as_dict(bucket) or {}).get("items"))
+        ]
         after_count = len(reloaded_items)
 
         removed_id = str(target_item.get("planDayDietItemId"))
@@ -2006,53 +2058,6 @@ class PlannerModule:
             "attempts": attempts,
         }
 
-    def _hard_delete_day_item(
-        self,
-        user_id: str,
-        day: date,
-        meal_key: str,
-        item_id: str | int,
-        *,
-        delete_all_related_meals: bool,
-    ) -> dict[str, Any]:
-        """Issue a DELETE request across known route variants for a single diet item."""
-        suffix = "true" if delete_all_related_meals else "false"
-        response = self._client.request_first_success(
-            "DELETE",
-            [
-                (
-                    f"/diet-plan/{user_id}/day/{day.isoformat()}/{meal_key}/{item_id}"
-                    f"?deleteAllRelatedMeals={suffix}"
-                ),
-                (
-                    f"/v2/diet-plan/{user_id}/day/{day.isoformat()}/{meal_key}/{item_id}"
-                    f"?deleteAllRelatedMeals={suffix}"
-                ),
-                (
-                    f"/v3/diet-plan/{user_id}/day/{day.isoformat()}/{meal_key}/{item_id}"
-                    f"?deleteAllRelatedMeals={suffix}"
-                ),
-            ],
-        )
-        return {
-            "ok": True,
-            "meal": meal_key,
-            "removedId": str(item_id),
-            "cleanupMode": "hard_deleted",
-            "hardDeleteResponse": response,
-        }
-
-    @staticmethod
-    def _hard_delete_unavailable_attempt() -> dict[str, Any]:
-        """Return a sentinel attempt record indicating hard-delete is not available on this cluster."""
-        return {
-            "step": "hard_delete",
-            "ok": False,
-            "cleanupMode": "not_supported",
-            "skipped": True,
-            "reason": "hard delete route is not functional on the current live cluster",
-        }
-
     @staticmethod
     def _is_cleanup_ok(result: dict[str, Any] | Any) -> bool:
         """Return True when a cleanup attempt result dict indicates success."""
@@ -2118,11 +2123,6 @@ class PlannerModule:
 
         last_result: dict[str, Any] | None = None
 
-        def attempt_hard_delete() -> tuple[bool, dict[str, Any]]:
-            """Record a hard-delete as unavailable on the current cluster."""
-            attempts.append(self._hard_delete_unavailable_attempt())
-            return False, {}
-
         def attempt_snapshot_remove() -> tuple[bool, dict[str, Any]]:
             """Try removing the item by resyncing the day snapshot without it."""
             return run_attempt(
@@ -2169,10 +2169,12 @@ class PlannerModule:
                 ),
             )
 
+        # deletedAt is how the app itself deletes; the server hides such rows from the
+        # day GET. Leaving a row out of the payload never deletes it (upsert by id).
         if resolved_kind == "normal_item":
             for runner in (
-                attempt_snapshot_remove,
                 attempt_soft_deleted_at,
+                attempt_snapshot_remove,
                 attempt_soft_aggressive,
             ):
                 ok, result = runner()
@@ -2248,7 +2250,12 @@ class PlannerModule:
         )
 
     def remove_activity_day_item(self, user_id: str, day: date, item_id: str | int) -> Any:
-        """Try known route variants for deleting an activity item."""
+        """Deprecated: activities have no DELETE route.
+
+        The app removes an activity by re-sending it in the day sync ``activities`` list
+        with ``deletedAt`` set.
+        """
+        _warn_unsupported_route("remove_activity_day_item", "a day sync with deletedAt on the activity")
         return self._client.request_first_success(
             "DELETE",
             [

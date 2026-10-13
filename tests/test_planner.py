@@ -5,9 +5,11 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import date
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
+from fitatu_api import FitatuPlannerSyncError
 from fitatu_api.api_client import FitatuApiError, PlannerModule
 
 TEST_DAY = date(2026, 1, 15)
@@ -46,7 +48,21 @@ class FakeClient:
         expected = f"/diet-and-activity-plan/{TEST_USER}/day/{TEST_DAY.isoformat()}"
         if method == "GET" and path == expected:
             return deepcopy(self.day_payload)
-        raise AssertionError(f"Unexpected GET: {method} {path}")
+        if method == "POST" and path == f"/diet-plan/{TEST_USER}/days":
+            self.last_request_kwargs = deepcopy({k: v for k, v in kwargs.items() if k != "json_data"})
+            return self._store_sync_payload(kwargs.get("json_data"))
+        raise AssertionError(f"Unexpected request: {method} {path}")
+
+    def _store_sync_payload(self, json_data: Any) -> list[dict[str, Any]]:
+        if not isinstance(json_data, dict):
+            raise AssertionError("missing sync payload")
+        self.last_sync_payload = deepcopy(json_data)
+        day_iso = TEST_DAY.isoformat()
+        payload = json_data.get(day_iso)
+        if not isinstance(payload, dict):
+            raise AssertionError(f"day key {day_iso!r} missing from payload")
+        self.day_payload = deepcopy(payload)
+        return [{"date": day_iso, "revision": "rev-1", "errorMessage": None}]
 
     def request_first_success(
         self,
@@ -61,17 +77,7 @@ class FakeClient:
             if self.delete_ok:
                 return {"status": "ok", "deleted": True}
             raise FitatuApiError("not found", status_code=404)
-        if method != "POST":
-            raise AssertionError(f"Unexpected method: {method}")
-        if json_data is None:
-            raise AssertionError("missing sync payload")
-        self.last_sync_payload = deepcopy(json_data)
-        day_iso = TEST_DAY.isoformat()
-        payload = json_data.get(day_iso)
-        if not isinstance(payload, dict):
-            raise AssertionError(f"day key {day_iso!r} missing from payload")
-        self.day_payload = deepcopy(payload)
-        return {"status": "ok", "savedDay": day_iso, "path": paths[0]}
+        raise AssertionError(f"Unexpected method: {method}")
 
     def get_product_details(self, product_id: int | str) -> dict[str, Any]:
         details = self.product_details.get(str(product_id))
@@ -105,6 +111,51 @@ def _empty_day() -> dict[str, Any]:
         "note": None,
         "tagsIds": [],
     }
+
+
+class UpsertFakeClient(FakeClient):
+    """Behaves like the real sync endpoint: rows left out of a payload are kept."""
+
+    def _store_sync_payload(self, json_data: Any) -> list[dict[str, Any]]:
+        stored = deepcopy(self.day_payload)
+        result = super()._store_sync_payload(json_data)
+        for meal_key, bucket in (stored.get("dietPlan") or {}).items():
+            target = self.day_payload["dietPlan"].setdefault(meal_key, {"items": []})
+            target_items = target.setdefault("items", [])
+            synced_ids = {row.get("planDayDietItemId") for row in target_items}
+            target_items.extend(
+                row for row in bucket.get("items", []) if row.get("planDayDietItemId") not in synced_ids
+            )
+        return result
+
+
+class IgnoringFakeClient(FakeClient):
+    """Accepts every sync (202, no errorMessage) but never changes the stored day."""
+
+    def _store_sync_payload(self, json_data: Any) -> list[dict[str, Any]]:
+        self.last_sync_payload = deepcopy(json_data)
+        return [{"date": TEST_DAY.isoformat(), "revision": "rev-x", "errorMessage": None}]
+
+
+class DeletedAtHidingFakeClient(UpsertFakeClient):
+    """Upserts like the real endpoint and, like the day GET, hides rows with deletedAt."""
+
+    def _store_sync_payload(self, json_data: Any) -> list[dict[str, Any]]:
+        merged: dict[str, dict[str, Any]] = {}
+        for meal_key, bucket in (self.day_payload.get("dietPlan") or {}).items():
+            for row in bucket.get("items", []):
+                merged[row["planDayDietItemId"]] = (meal_key, row)
+        payload = json_data[TEST_DAY.isoformat()]
+        for meal_key, bucket in payload.get("dietPlan", {}).items():
+            for row in bucket.get("items", []):
+                merged[row["planDayDietItemId"]] = (meal_key, row)
+        self.last_sync_payload = deepcopy(json_data)
+        diet: dict[str, Any] = {key: {"items": []} for key in (self.day_payload.get("dietPlan") or {})}
+        for meal_key, row in merged.values():
+            if not row.get("deletedAt"):
+                diet.setdefault(meal_key, {"items": []})["items"].append(row)
+        self.day_payload["dietPlan"] = diet
+        return [{"date": TEST_DAY.isoformat(), "revision": "rev-2", "errorMessage": None}]
 
 
 def _day_with_product(
@@ -305,17 +356,38 @@ class TestStaticHelpers:
         assert PlannerModule.normalize_meal_key("LUNCH") == "lunch"
 
     def test_build_day_sync_payload(self) -> None:
-        day = {"dietPlan": {"b": {}}, "toiletItems": [1], "note": "hi", "tagsIds": [2]}
+        day = {"dietPlan": {"b": {}}, "toilet": [1], "water": {"waterConsumption": 500}, "note": "hi", "tagsIds": [2]}
         result = PlannerModule._build_day_sync_payload(day)
-        assert result["dietPlan"] == {"b": {}}
-        assert result["toiletItems"] == [1]
-        assert result["note"] == "hi"
+        assert result == {"dietPlan": {"b": {}}, "note": "hi", "tagsIds": [2]}
 
     def test_build_day_sync_payload_defaults(self) -> None:
         result = PlannerModule._build_day_sync_payload({})
         assert result["dietPlan"] == {}
-        assert result["toiletItems"] == []
         assert result["tagsIds"] == []
+
+    def test_sync_days_returns_per_day_results(self) -> None:
+        client = FakeClient(_empty_day())
+        result = client.planner.sync_days(TEST_USER, {TEST_DAY.isoformat(): {"dietPlan": {}}})
+        assert result == [{"date": TEST_DAY.isoformat(), "revision": "rev-1", "errorMessage": None}]
+
+    def test_sync_days_raises_when_a_later_day_is_rejected(self) -> None:
+        client = Mock()
+        client.request.return_value = [
+            {"date": "2026-10-12", "revision": "r1", "errorMessage": None},
+            {"date": "2026-10-13", "revision": None, "errorMessage": "nope"},
+        ]
+        with pytest.raises(FitatuPlannerSyncError, match="2026-10-13: nope"):
+            PlannerModule(client).sync_days(TEST_USER, {"2026-10-12": {}, "2026-10-13": {}})
+
+    def test_sync_days_raises_when_a_day_is_rejected(self) -> None:
+        client = Mock()
+        rejected = [{"date": "2026-10-13", "revision": None, "errorMessage": "Invalid pddiId UUID version"}]
+        client.request.return_value = rejected
+        planner = PlannerModule(client)
+        with pytest.raises(FitatuPlannerSyncError) as excinfo:
+            planner.sync_days(TEST_USER, {"2026-10-13": {"dietPlan": {}}})
+        assert excinfo.value.results == rejected
+        assert "Invalid pddiId UUID version" in str(excinfo.value)
 
     def test_sync_days_supports_synchronous_param(self) -> None:
         client = FakeClient(_empty_day())
@@ -350,6 +422,16 @@ class TestStaticHelpers:
         assert result["name"] == "Salad"
         assert result["energy"] == 150
         assert "productId" not in result
+
+    def test_compact_diet_item_for_sync_keeps_eaten_flag(self) -> None:
+        eaten = {"planDayDietItemId": "e1", "foodType": "PRODUCT", "productId": 1, "eaten": True}
+        not_eaten = {**eaten, "eaten": False}
+        assert PlannerModule._compact_diet_item_for_sync(eaten)["eaten"] is True
+        assert PlannerModule._compact_diet_item_for_sync(not_eaten)["eaten"] is False
+
+    def test_compact_diet_item_for_sync_omits_eaten_when_unknown(self) -> None:
+        item = {"planDayDietItemId": "e2", "foodType": "PRODUCT", "productId": 1}
+        assert "eaten" not in PlannerModule._compact_diet_item_for_sync(item)
 
     def test_compact_diet_item_for_sync_recipe_preserves_recipe_id(self) -> None:
         item = {
@@ -1069,13 +1151,55 @@ class TestSoftRemoveDayItemViaSnapshot:
 
 
 class TestRemoveDayItemWithStrategy:
-    def test_normal_item_attempts_snapshot_first(self) -> None:
+    def test_normal_item_attempts_soft_delete_first(self) -> None:
         client = FakeClient(_day_with_product())
         result = client.planner.remove_day_item_with_strategy(
             TEST_USER, TEST_DAY, "breakfast", "item-1", item_kind="normal_item"
         )
         steps = [a["step"] for a in result["attempts"] if not a.get("skipped")]
-        assert "snapshot_remove" in steps
+        assert steps[0] == "soft_deleted_at"
+
+    def test_snapshot_remove_is_not_ok_when_the_server_keeps_the_row(self) -> None:
+        day = _day_with_product()
+        day["dietPlan"]["lunch"]["items"] = [
+            {"planDayDietItemId": "other", "foodType": "PRODUCT", "productId": 2, "measureId": 1, "measureQuantity": 1}
+        ]
+        client = UpsertFakeClient(day)
+
+        result = client.planner.remove_day_item_via_snapshot(TEST_USER, TEST_DAY, "breakfast", "item-1")
+
+        assert result["ok"] is False
+        assert result["removedIdAbsentAfterSync"] is False
+        assert result["countDecreased"] is False
+
+    def test_soft_remove_checks_the_whole_day_when_the_row_is_in_another_meal(self) -> None:
+        day = _day_with_product(meal="dinner")
+        day["dietPlan"]["breakfast"] = {"items": []}
+        client = IgnoringFakeClient(day)
+
+        result = client.planner.soft_remove_day_item_via_snapshot(TEST_USER, TEST_DAY, "breakfast", "item-1")
+
+        assert result["ok"] is False
+        assert result["removedIdAbsentAfterSync"] is False
+
+    def test_rollback_sends_only_a_deleted_at_marker(self) -> None:
+        day = _day_with_product()
+        day["dietPlan"]["lunch"]["items"] = [
+            {"planDayDietItemId": "keep", "foodType": "PRODUCT", "productId": 2, "measureId": 1, "measureQuantity": 1}
+        ]
+        client = DeletedAtHidingFakeClient(day)
+
+        result = client.planner.rollback_added_item(
+            TEST_USER, TEST_DAY, meal_type="breakfast", plan_day_diet_item_id="item-1"
+        )
+
+        assert result["ok"] is True
+        assert result["cleanupMode"] == "removed"
+        sent = client.last_sync_payload[TEST_DAY.isoformat()]
+        assert list(sent) == ["dietPlan"]
+        assert [row["planDayDietItemId"] for row in sent["dietPlan"]["breakfast"]["items"]] == ["item-1"]
+        assert sent["dietPlan"]["breakfast"]["items"][0]["deletedAt"]
+        assert [row["planDayDietItemId"] for row in client.day_payload["dietPlan"]["lunch"]["items"]] == ["keep"]
 
     def test_custom_add_item_attempts_soft_delete_first(self) -> None:
         client = FakeClient(_day_with_custom_item(source="WEB", quantity=100.0))

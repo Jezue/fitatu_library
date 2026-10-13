@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from copy import deepcopy
@@ -23,6 +24,7 @@ from fitatu_api.api_client import (
     UserSettingsModule,
     WaterModule,
 )
+from fitatu_api.exceptions import FitatuAuthError, FitatuConnectionError, FitatuRateLimitError
 from fitatu_api.fitatu_api import FitatuLibrary
 
 TEST_DAY = date(2026, 4, 19)
@@ -51,6 +53,17 @@ class FakeClient:
         expected_path = f"/diet-and-activity-plan/{TEST_USER_ID}/day/{TEST_DAY.isoformat()}"
         if method == "GET" and path == expected_path:
             return deepcopy(self.day_payload)
+        if method == "POST" and path == f"/diet-plan/{TEST_USER_ID}/days":
+            json_data = kwargs.get("json_data")
+            if not isinstance(json_data, dict):
+                raise AssertionError("sync payload missing")
+            self.last_sync_payload = deepcopy(json_data)
+            day_key = TEST_DAY.isoformat()
+            payload = json_data.get(day_key)
+            if not isinstance(payload, dict):
+                raise AssertionError("day payload missing")
+            self.day_payload = deepcopy(payload)
+            return [{"date": day_key, "revision": "rev-1", "errorMessage": None}]
         raise AssertionError(f"Unexpected request: {method} {path} {kwargs}")
 
     def request_first_success(
@@ -63,17 +76,7 @@ class FakeClient:
         self.request_log.append((method, paths[0]))
         if method == "DELETE":
             raise FitatuApiError("missing", status_code=404)
-        if method != "POST":
-            raise AssertionError(f"Unexpected method: {method}")
-        if json_data is None:
-            raise AssertionError("sync payload missing")
-        self.last_sync_payload = deepcopy(json_data)
-        day_key = TEST_DAY.isoformat()
-        payload = json_data.get(day_key)
-        if not isinstance(payload, dict):
-            raise AssertionError("day payload missing")
-        self.day_payload = deepcopy(payload)
-        return {"status": "ok", "savedDay": day_key, "path": paths[0]}
+        raise AssertionError(f"Unexpected method: {method}")
 
     def search_food(self, phrase: str, **kwargs: object) -> list[dict[str, object]]:
         return deepcopy(self.search_results.get(phrase.lower(), []))
@@ -412,14 +415,16 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(compact["recipeId"], 777)
         self.assertEqual(compact["planDayDietItemId"], "recipe-1")
 
-    def test_remove_day_item_falls_back_to_soft_delete_on_404(self) -> None:
+    def test_remove_day_item_marks_the_row_deleted(self) -> None:
         client = FakeClient(_make_day_payload())
 
         result = client.planner.remove_day_item(TEST_USER_ID, TEST_DAY, "breakfast", "item-1")
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["cleanupMode"], "removed")
-        self.assertNotIn("breakfast", client.day_payload["dietPlan"])
+        self.assertEqual(result["cleanupMode"], "deleted_at")
+        synced = client.day_payload["dietPlan"]["breakfast"]["items"]
+        self.assertEqual(synced[0]["planDayDietItemId"], "item-1")
+        self.assertTrue(synced[0]["deletedAt"])
 
     def test_remove_day_item_delegates_to_auto_strategy(self) -> None:
         client = FakeClient(_make_day_payload())
@@ -578,10 +583,6 @@ class PlannerTests(unittest.TestCase):
         search_item = {"id": 55, "name": "Banan", "measureId": 7}
 
         with patch.object(
-            client.planner,
-            "quick_add_form",
-            side_effect=FitatuApiError("missing", status_code=404),
-        ), patch.object(
             client,
             "search_food",
             return_value=[search_item],
@@ -719,19 +720,42 @@ class PlannerTests(unittest.TestCase):
                 strict_measure=True,
             )
 
-    def test_route_variant_helpers_call_first_success(self) -> None:
+    def test_unsupported_route_helpers_warn_but_still_call_through(self) -> None:
         client = Mock()
         client.auth.fitatu_user_id = TEST_USER_ID
         client.request_first_success.return_value = {"status": "ok"}
         module = PlannerModule(client)
 
-        module.get_product_for_meal("10", "breakfast", TEST_DAY)
-        module.send_changes({"items": []})
-        module.add_day_items(TEST_USER_ID, TEST_DAY, [{"id": 1}])
-        module.sync_single_day(TEST_USER_ID, TEST_DAY, {"dietPlan": {}})
-        module.remove_activity_day_item(TEST_USER_ID, TEST_DAY, "act-1")
+        calls = (
+            lambda: module.get_product_for_meal("10", "breakfast", TEST_DAY),
+            lambda: module.quick_add_form({"name": "x"}),
+            lambda: module.send_changes({"items": []}),
+            lambda: module.add_day_items(TEST_USER_ID, TEST_DAY, [{"id": 1}]),
+            lambda: module.remove_activity_day_item(TEST_USER_ID, TEST_DAY, "act-1"),
+        )
+        for call in calls:
+            with self.assertWarns(DeprecationWarning):
+                call()
 
         self.assertEqual(client.request_first_success.call_count, 5)
+
+    def test_quick_add_form_with_fallback_rejects_incomplete_payload(self) -> None:
+        module = PlannerModule(Mock())
+        with self.assertRaises(FitatuApiError):
+            module.quick_add_form_with_fallback({"name": "banan"})
+
+    def test_sync_single_day_posts_to_the_single_days_route(self) -> None:
+        client = Mock()
+        client.request.return_value = [{"date": TEST_DAY.isoformat(), "revision": "r", "errorMessage": None}]
+        PlannerModule(client).sync_single_day(TEST_USER_ID, TEST_DAY, {"dietPlan": {}}, synchronous=True)
+
+        client.request.assert_called_once_with(
+            "POST",
+            f"/diet-plan/{TEST_USER_ID}/days",
+            json_data={TEST_DAY.isoformat(): {"dietPlan": {}}},
+            params={"synchronous": "true"},
+        )
+        client.request_first_success.assert_not_called()
 
 
 class FacadeTests(unittest.TestCase):
@@ -1263,8 +1287,28 @@ class ApiClientTests(unittest.TestCase):
             "fitatu_api.client.requests.request",
             side_effect=requests.RequestException("boom"),
         ):
-            with self.assertRaises(FitatuApiError):
+            with self.assertRaises(FitatuConnectionError):
                 client.request("GET", "/ping")
+
+    def test_request_raises_typed_errors_by_status(self) -> None:
+        cases = {401: FitatuAuthError, 403: FitatuApiError, 429: FitatuRateLimitError, 422: FitatuApiError}
+        for status, expected in cases.items():
+            client = self._make_client()
+            client.auth.refresh_token = None
+            response = Mock(status_code=status, text="{}", headers={})
+            with self.subTest(status=status), patch(
+                "fitatu_api.client.requests.request", return_value=response
+            ), patch("fitatu_api.client.time.sleep", return_value=None):
+                with self.assertRaises(expected) as ctx:
+                    client.request("GET", "/ping")
+                self.assertEqual(ctx.exception.status_code, status)
+                self.assertIs(type(ctx.exception), expected)
+
+    def test_api_error_exposes_codename_from_body(self) -> None:
+        error = FitatuApiError("quota", status_code=403, body='{"codename": "NUMBER_OF_USES_EXCEEDED"}')
+        self.assertEqual(error.codename, "NUMBER_OF_USES_EXCEEDED")
+        self.assertIsNone(FitatuApiError("x", body="not json").codename)
+        self.assertIsNone(FitatuApiError("x").codename)
 
     def test_request_retries_get_on_429_then_succeeds(self) -> None:
         client = self._make_client()
@@ -1368,6 +1412,16 @@ class ApiClientTests(unittest.TestCase):
 
         self.assertEqual(result["id"], 321)
         self.assertEqual(req.call_count, 2)
+        self.assertEqual(req.call_args_list[1].args, ("GET", "/recipes/321"))
+
+    def test_search_food_sends_access_type_as_list_param(self) -> None:
+        client = self._make_client()
+        with patch.object(client, "request", return_value=[]) as req:
+            client.search_food("ban")
+
+        params = req.call_args.kwargs["params"]
+        self.assertEqual(params["accessType[]"], ["FREE", "PREMIUM"])
+        self.assertNotIn("accessType", params)
 
     def test_refresh_persists_tokens_to_store(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1647,6 +1701,17 @@ class AuthStoreTests(unittest.TestCase):
             store.clear()
             self.assertEqual(store.load(), {})
 
+    @unittest.skipIf(os.name == "nt", "POSIX permissions")
+    def test_token_store_file_is_owner_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "tokens.json"
+            path.write_text("{}", encoding="utf-8")
+            path.chmod(0o644)
+
+            FitatuTokenStore(path).save(bearer_token="a", refresh_token="b")
+
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
     def test_token_store_ignores_invalid_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "tokens.json"
@@ -1791,7 +1856,23 @@ class ServiceModuleTests(unittest.TestCase):
         result = module.get_catalog()
 
         self.assertEqual(result[0]["id"], 1)
-        client.request.assert_called_once_with("GET", "/activities/")
+        client.request.assert_called_once_with("GET", "/activities", params=None)
+
+    def test_activities_module_get_catalog_sends_only_given_params(self) -> None:
+        client = Mock()
+        ActivitiesModule(client).get_catalog(locale="pl_PL", bmr=1800.0, sex=1)
+
+        client.request.assert_called_once_with(
+            "GET", "/activities", params={"locale": "pl_PL", "bmr": 1800.0, "sex": 1}
+        )
+
+    def test_user_settings_get_new_requests_the_dated_route(self) -> None:
+        client = Mock()
+        client.request.return_value = {"userId": 1}
+
+        UserSettingsModule(client).get_new("user-123", TEST_DAY)
+
+        client.request.assert_called_once_with("GET", f"/users/user-123/settings-new/{TEST_DAY.isoformat()}")
 
 
 class FacadeConvenienceTests(unittest.TestCase):
@@ -2163,10 +2244,15 @@ class LoginTests(unittest.TestCase):
         mock_resp.text = "Unauthorized"
 
         with patch("fitatu_api.client.requests.post", return_value=mock_resp):
-            with self.assertRaises(FitatuApiError) as ctx:
+            with self.assertRaises(FitatuAuthError) as ctx:
                 FitatuApiClient.login("bad@example.com", "wrong")
 
         self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_login_wraps_network_errors(self) -> None:
+        with patch("fitatu_api.client.requests.post", side_effect=requests.ConnectionError("dns")):
+            with self.assertRaises(FitatuConnectionError):
+                FitatuApiClient.login("me@example.com", "secret")
 
     def test_login_raises_when_token_missing_from_response(self) -> None:
         mock_resp = Mock()

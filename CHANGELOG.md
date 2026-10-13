@@ -4,6 +4,75 @@ All notable changes to this project will be documented in this file.
 
 The format is inspired by Keep a Changelog, with practical notes for a small Python library.
 
+## [0.4.0] - 2026-10-13
+
+Based on a decompile of the Fitatu Android app 4.17.1 (Flutter, Dart AOT) and live checks of
+every changed request. The full list of routes the app uses is in
+`docs/APP_4_17_1_API_CATALOG.md`.
+
+Fixed:
+
+- planner writes no longer untick "eaten" on every item of the day; a row synced without the
+  flag gets `eaten=false` and the compacted payload dropped it (the `eaten=` arguments of the add
+  and update helpers never reached the server for the same reason)
+- `sync_days()` raises `FitatuPlannerSyncError` when the server rejects a day. The endpoint
+  answers 202 in that case and only reports `errorMessage` per day, so failed writes used to be
+  reported as successes
+- `remove_day_item_via_snapshot()` no longer reports `ok=True` when the row is still there
+  (whole-day "before" count was compared with a single-meal "after" count)
+- removal tries `deletedAt` first: leaving a row out of the payload never deletes it
+- `soft_remove_day_item_via_snapshot()` checks the whole day after the reload; a row living in
+  another meal used to come back as "removed"
+- `rollback_added_item()` deletes with a `deletedAt` marker instead of re-syncing the day
+  without the row (which never deletes), so it no longer always falls back to "neutralised"
+- `FitatuLibrary` planner helpers now honour client kwargs such as `base_url`; non-Polish
+  accounts were silently sent to `pl-pl`
+- the token store file is written with owner-only permissions (0600)
+- `user_settings.get_new()` calls `/settings-new/{day}`; the dateless GET was the cause of the
+  405, not the account type
+- live test suite: the default test day was yesterday, and its fixture clears the test meal,
+  so running it wiped real snack entries. It now defaults to a day a year ahead
+- `demo.py` called `get_recipes_catalog(params=...)`, which does not accept params
+- README/COOKBOOK used `cleanup["deleted"]`; the keys are `deletedCount` / `deletedProductIds`
+
+Added:
+
+- `client.measurements`: weight and body sizes per day, weight history and chart, body-part
+  history, size summary. `set_day()` merges with the stored record and refuses to relabel stored
+  values with a different unit
+- `client.summary`: range nutrition and activity totals, per-nutrient day series, top products,
+  diary export (csv/xls/pdf/txt); `request(..., raw=True)` for binary responses
+- `client.foods`: favourite foods (read/toggle) and recently used foods
+- `activities.search()`, `activities.get_recent()`, `planner.get_day_revisions()`
+- facade: `get_daily_targets_via_api`, `log_weight_via_api`, `get_weight_history_via_api`,
+  `get_range_summary_via_api`, `export_diary_via_api`, `get_favorite_foods_via_api`,
+  `get_recent_foods_via_api`
+- typed errors: `FitatuAuthError` (401), `FitatuRateLimitError` (429), `FitatuConnectionError`
+  (no HTTP response), `FitatuPlannerSyncError` (rejected day), all subclassing `FitatuApiError`;
+  `FitatuApiError.codename`. `login()` raises them too, so a network failure during login is
+  now `FitatuConnectionError` instead of a raw `requests` exception
+- README section on which headers are required and how the API host is chosen
+- `docs/APP_4_17_1_API_CATALOG.md` with every route of the 4.17.1 app
+
+Changed:
+
+- `search_food()` sends `accessType[]` like the app
+- `activities.get_catalog()` uses `/activities` and accepts `page`, `limit`, `locale`, `bmr`, `sex`
+- `get_product_details()` tries `/products/{id}` then `/recipes/{id}`; the `/v2` and `/v3`
+  variants do not exist
+- day sync payloads no longer send `toiletItems` (the field is `toilet`, and omitted keys keep
+  their stored value)
+
+Deprecated:
+
+- `planner.get_product_for_meal()`, `quick_add_form()`, `send_changes()`, `add_day_items()` and
+  `remove_activity_day_item()`: their routes do not exist (mostly app screen routes picked up
+  from the binary). `quick_add_form_with_fallback()` now goes straight to search + add.
+
+Removed:
+
+- unused hard-delete helpers in `PlannerModule`
+
 ## [0.3.0] - 2026-04-21
 
 Third alpha release focused on broader Fitatu workflow coverage, test coverage, water write support, and production readiness.
