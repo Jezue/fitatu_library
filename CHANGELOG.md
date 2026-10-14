@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.0] - Unreleased
+## [0.5.0] - 2026-10-14
 
 The release that makes the library usable from an agent. The planner is rebuilt on what the day
 sync endpoint really does, pinned by recorded API responses; sessions live in one file that the
