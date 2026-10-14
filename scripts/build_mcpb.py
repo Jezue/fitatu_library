@@ -5,7 +5,8 @@
 The bundle is a zip of mcpb/manifest.json (MCPB manifest 0.4, server type ``uv``) with this
 release's version and the tool list added, mcpb/server/main.py, and a pyproject.toml that pins
 ``fitatu-api[mcp]`` to this version: the host runs ``uv run`` on it, which installs that version
-from PyPI. So build it only for a version that is on PyPI. Not tested in Claude Desktop yet.
+from PyPI. So build it only for a version that is on PyPI. Started with ``uv run`` the way the host
+does; not yet installed through the Claude Desktop UI.
 """
 
 from __future__ import annotations

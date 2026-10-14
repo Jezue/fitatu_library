@@ -88,7 +88,7 @@ token, a name, an e-mail address, or your own meals, weights or measurements.
 
 - One logical change per pull request, with its tests and the docs it makes untrue updated:
   README.md, docs/AGENTS.md, docs/API_REFERENCE.md (with the call's stability), docs/PLANNER.md,
-  and an entry in `CHANGELOG.md` under the unreleased version for anything a user notices.
+  and an entry in `CHANGELOG.md` under `## [Unreleased]` at the top for anything a user notices.
 - Commit subjects follow [Conventional Commits](https://www.conventionalcommits.org/):
   `feat(agent): ...`, `fix(client): ...`, `docs: ...`, `test: ...`, `ci: ...`, `build: ...`.
   The body says why the change is needed, not only what it does.
