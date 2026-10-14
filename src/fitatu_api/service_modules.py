@@ -35,7 +35,7 @@ def _warn_legacy_settings_read(name: str) -> None:
     warnings.warn(
         f"{name}() reads a legacy settings route. Use client.user_settings.get_new(user_id, day), "
         "where the app reads goals, the meal schema and water settings. "
-        "It will be removed in a future release.",
+        "It will be removed in 1.0.",
         DeprecationWarning,
         stacklevel=3,
     )
@@ -112,6 +112,26 @@ class UserSettingsModule:
         uid = validate_numeric_id(user_id, "user_id")
         data = self._client.request("PATCH", f"/users/{uid}/settings-new", json_data=payload)
         return write_reply(data)
+
+    def get_premium(self, user_id: str) -> dict[str, Any]:
+        """Whether a premium plan runs today and until when: ``{"active": bool, "end_date": str | None}``.
+
+        Nothing else leaves this method: ``GET /users/{id}/subscriptions`` also carries prices,
+        currencies and store transaction ids (checked live 2026-10-14). ``end_date`` is the latest
+        end (``YYYY-MM-DD``) of the plans running today; None when none runs or one has no end.
+        """
+        uid = validate_numeric_id(user_id, "user_id")
+        path = f"/users/{uid}/subscriptions"
+        reply = read_reply(self._client.request("GET", path), f"GET {path}")
+        today = date.today().isoformat()
+        # shortcut: the dates' format was not recorded; their first 10 characters are taken as YYYY-MM-DD.
+        # Pin it once a reply with a plan is recorded.
+        ends = [
+            str(plan.get("endDate") or "9999-12-31")[:10]
+            for plan in as_dict_list(reply.get("subscriptions"))
+            if str(plan.get("startDate") or "")[:10] <= today <= str(plan.get("endDate") or "9999-12-31")[:10]
+        ]
+        return {"active": bool(ends), "end_date": None if not ends or max(ends) == "9999-12-31" else max(ends)}
 
     def update_water_settings(self, user_id: str, *, unit_capacity: int) -> dict[str, Any]:
         """Update water settings inside the `settings-new` payload."""
@@ -432,6 +452,8 @@ class MeasurementsModule:
     ) -> list[dict[str, Any]]:
         """Return one page of weight entries as ``[{date, value, difference, direction}, ...]``.
 
+        Newest first. Without ``from_date`` and ``to_date`` the page holds every entry up to
+        ``limit``, however old: there is no default period (checked live 2026-10-14).
         ``direction`` follows the goal type: 1 = gain, -1 = reduction, 0 = maintenance.
         The endpoint is paged (the app asks for 41 rows); keep increasing ``page`` until a
         page comes back shorter than ``limit``.
@@ -512,10 +534,12 @@ class SummaryModule:
         self._client = client
 
     def get_nutrition(self, user_id: str, from_date: date | str, to_date: date | str) -> dict[str, Any]:
-        """Return the range summary per nutrient, e.g. ``{"energy": {"current", "min", "max", ...}, ...}``.
+        """Return the range summary per nutrient, e.g. ``{"energy": {"current", "eaten", "min", "max"}, ...}``.
 
-        Recorded for one day only, where ``current`` is that day's total; whether a longer
-        range sums or averages the days is not known yet.
+        ``current`` is the total of every row over the whole range, not a daily average (checked
+        live 2026-10-13; the recording covers one day); ``eaten`` counts only the rows ticked as
+        eaten (null when none is), and ``min``/``max`` are the goals summed over the days
+        (checked live 2026-10-14).
         """
         uid = validate_numeric_id(user_id, "user_id")
         path = f"/v2/diet-plan/{uid}/summary/custom"
@@ -525,7 +549,11 @@ class SummaryModule:
     def get_nutrient_by_day(
         self, user_id: str, nutrient: str, from_date: date | str, to_date: date | str
     ) -> dict[str, Any]:
-        """Return one nutrient day by day (``{targets, measures}``).
+        """Return one nutrient day by day: ``{measures, targets}`` for energy (kcal per day),
+        ``{measures, targetRanges}`` (``{min, max}`` per day) for protein, fat and carbohydrate.
+
+        Every day of the range is a key of ``measures``; it counts every row, planned or eaten,
+        and is null on a day with nothing logged (checked live 2026-10-14).
 
         ``nutrient`` uses the API's camelCase names: ``energy``, ``protein``, ``fat``,
         ``carbohydrate``, ``fiber``, ``sugars``, ``saturatedFat``, ``salt``, ``vitaminC``...
@@ -545,7 +573,12 @@ class SummaryModule:
         page: int = 1,
         limit: int = 20,
     ) -> dict[str, Any]:
-        """Return the products that contributed most of ``nutrient`` (``{list, count}``)."""
+        """Return the foods that contributed most of ``nutrient``: ``{list, count}``.
+
+        ``list`` rows are ``{id, name, amount: {current, per100}}`` sorted by ``current``,
+        highest first, with the numbers as strings; ``per100`` is null for a custom row, whose
+        ``id`` is the row's (checked live 2026-10-14 for energy and protein).
+        """
         uid = validate_numeric_id(user_id, "user_id")
         params: dict[str, Any] = {**_date_range_params(from_date, to_date), **_page_params(page, limit)}
         path = f"/diet-plan/{uid}/summary-product/{_nutrient(nutrient)}/custom"
@@ -572,6 +605,52 @@ class SummaryModule:
         params = {"format": fmt, **_date_range_params(from_date, to_date)}
         data = self._client.request("GET", f"/diet-plan/{uid}/export", params=params, raw=True)
         return data if isinstance(data, bytes) else None
+
+
+class FastingModule:
+    """Intermittent fasting, read only: the fasting schemes and the eating periods of a range."""
+
+    def __init__(self, client: FitatuApiClient) -> None:
+        self._client = client
+
+    def get_types(self, user_id: str) -> list[dict[str, Any]]:
+        """The fasting schemes, ``{id, symbol, currentlyInUse, rating, ratingCount, reviewsPerLocale}``:
+        symbols such as ``16_08_hours``, ``5_2_days`` or ``custom`` (9 of them, checked live 2026-10-14)."""
+        uid = validate_numeric_id(user_id, "user_id")
+        return as_dict_list(self._client.request("GET", f"/intermittent-fasting/{uid}/types"))
+
+    def get_summary(self, user_id: str, from_date: date | str, to_date: date | str) -> list[dict[str, Any]]:
+        """Per fasting day of the range ``{date, eatingPeriods, expectedEatingPeriods}``, each period
+        ``{date, from, to}`` with times of day; an empty list without fasting (checked live 2026-10-14)."""
+        uid = validate_numeric_id(user_id, "user_id")
+        dates = _date_range_params(as_date(from_date, "from_date"), as_date(to_date, "to_date"))
+        params = {"from": dates["fromDate"], "to": dates["toDate"]}  # this route names them from and to
+        return as_dict_list(self._client.request("GET", f"/intermittent-fasting/{uid}/summary", params=params))
+
+
+class HabitsModule:
+    """Habits, read only: the habit catalog, the user's habits and the app's good days."""
+
+    def __init__(self, client: FitatuApiClient) -> None:
+        self._client = client
+
+    def get_catalog(self, user_id: str) -> list[dict[str, Any]]:
+        """The habits the user can take up: ``{id, name, translationKey, length, premium}``, ``length`` in
+        days and ``name`` in the account's language (22, checked live 2026-10-14)."""
+        uid = validate_numeric_id(user_id, "user_id")
+        return as_dict_list(self._client.request("GET", f"/habits/{uid}"))
+
+    def get_user_habits(self, user_id: str) -> list[dict[str, Any]]:
+        """The user's habits: ``{completed, enrolledDate, habit, habitItems}``, ``habit`` as in
+        :meth:`get_catalog` and ``habitItems`` the checked days, ``{dayNumber, date}``."""
+        uid = validate_numeric_id(user_id, "user_id")
+        return as_dict_list(self._client.request("GET", f"/users/{uid}/habits"))
+
+    def get_good_days(self, user_id: str) -> list[str]:
+        """The dates the app's summary marks as good days, all of them (a list of date strings)."""
+        uid = validate_numeric_id(user_id, "user_id")
+        data = self._client.request("GET", f"/habits/{uid}/good-days")
+        return [str(day) for day in data] if isinstance(data, list) else []
 
 
 class FoodsModule:

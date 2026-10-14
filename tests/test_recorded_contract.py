@@ -105,6 +105,9 @@ class TestFakeServerMatchesRecording:
     def test_day_get_keeps_every_recorded_top_level_key(self) -> None:
         assert set(FakeFitatuServer().day_view(DAY)) == set(recorded("day_empty"))
 
+    def test_day_get_keeps_the_meal_names_and_times(self) -> None:
+        assert FakeFitatuServer().day_view(DAY)["dietPlan"] == recorded("day_empty")["dietPlan"]
+
 
 class TestPlannerWritesMatchWhatWorkedLive:
     def test_add_product_sends_only_the_new_row_with_the_recorded_keys(self) -> None:
@@ -164,7 +167,7 @@ class TestPlannerWritesMatchWhatWorkedLive:
             "PRODUCT", hit["foodId"], hit["measure"]["measureId"], 2
         )
         assert "recipeId" not in row
-        assert result["searchItem"]["type"] == "PRODUCT"
+        assert result["search_item"]["type"] == "PRODUCT"
 
     def test_add_activity_sends_the_recorded_write_shape(self) -> None:
         server = FakeFitatuServer()
@@ -179,7 +182,7 @@ class TestPlannerWritesMatchWhatWorkedLive:
         assert {**row, "uuid": recorded_row["uuid"]} == recorded_row
         assert result["ok"] is True
         [stored] = server.day_view(DAY)["activityPlan"]
-        assert (stored["uuid"], stored["energy"]) == (result["rowId"], 123)
+        assert (stored["uuid"], stored["energy"]) == (result["row_id"], 123)
 
     def test_remove_activity_resends_it_in_the_write_shape_with_deleted_at(self) -> None:
         server = FakeFitatuServer(recorded("day_after_activity"))
@@ -276,7 +279,7 @@ class TestLibraryReadsRecordedResponses:
         client = Mock()
         client.auth.fitatu_user_id = RECORDED_USER_ID
         client.user_settings.get_new.return_value = recorded("settings_new")
-        with patch("fitatu_api.facade.FitatuApiClient", return_value=client):
+        with patch("fitatu_api.facade.FitatuApiClient", return_value=client), pytest.warns(DeprecationWarning):
             result = FitatuLibrary({}).get_daily_targets_via_api()["result"]
 
         assert result["energy"] == 2000
@@ -333,6 +336,9 @@ def test_scrubber_removes_personal_data() -> None:
                 {"foodId": 2, "name": "Plain catalog item", "index": "SEARCH", "userNumberOfUse": 3, "favorite": True},
             ]},
             "measurement_weight_history": {"request": {}, "body": [{"date": "2020-01-01", "value": 70, "difference": -23.7}]},
+            "summary_nutrient_protein": {"request": {}, "body": {
+                "measures": {"2027-01-03": 16.66}, "targetRanges": {"2027-01-03": {"min": 137.5, "max": 171.25}}
+            }},
             "settings_new": {"request": {}, "body": {
                 "userId": 987654,
                 "nickname": "jezue-private",
@@ -346,12 +352,15 @@ def test_scrubber_removes_personal_data() -> None:
     scrubbed = recorder.scrub(raw)
     text = str(scrubbed)
     for secret in ("987654", "My secret lunch", "12:34", "1985-05-05", "3100", "612", "jezue-private",
-                   "15.057", "692.2", "2950", "Night feast", "03:15", "Secret snack", "-23.7"):
+                   "15.057", "692.2", "2950", "Night feast", "03:15", "Secret snack", "-23.7", "137.5", "171.25"):
         assert secret not in text, secret
     assert scrubbed["calls"]["search_food"]["body"] == [
         {"foodId": 2, "name": "Plain catalog item", "index": "SEARCH", "userNumberOfUse": 0, "favorite": False}
     ]
     assert scrubbed["calls"]["settings_new"]["body"]["userDietSettings"]["weightChangeDirection"] == 0
+    assert scrubbed["calls"]["summary_nutrient_protein"]["body"] == {
+        "measures": {"2027-01-03": 16.66}, "targetRanges": {"2027-01-03": {"min": 90, "max": 110}}
+    }
 
 
 def test_leak_guard_flags_values_the_scrubber_missed() -> None:

@@ -9,7 +9,8 @@ DEFAULT_SESSION_PATH = "~/.fitatu/session.json"
 
 # How the client identifies itself: as the Fitatu web app. API-Key and API-Secret are
 # required on every call; the rest is sent the way the web app sends it. Sessions do not
-# store these, so a fix here reaches every saved session.
+# store these, so a fix here reaches every saved session; until a release has it,
+# $FITATU_CLIENT_PROFILE overrides any of the keys (auth.client_profile()).
 WEB_CLIENT_PROFILE: dict[str, str] = {
     "api_key": "FITATU-MOBILE-APP",
     "api_secret": "PYRXtfs88UDJMuCCrNpLV",

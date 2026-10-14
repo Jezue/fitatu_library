@@ -73,8 +73,12 @@ docs/REFOCUS_PLAN.md
 
 # Operational / analysis scripts (not part of the public library)
 scripts/*
-# ...except the tool that refreshes the recorded test fixtures
+# ...except the tools that refresh the recorded test fixtures and check them against the live API,
+# and the model evaluation
 !scripts/record_fixtures.py
+!scripts/check_contract.py
+!scripts/eval_agent.py
+!scripts/build_mcpb.py
 fitatu_login.py
 session_data.template.json
 live_validation_payloads.template.json

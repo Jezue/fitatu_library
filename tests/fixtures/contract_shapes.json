@@ -1,0 +1,94 @@
+{
+ "water_day": {
+  "path": "/water/{user_id}/{day}",
+  "reply": {"water": {"waterConsumption": 750, "target": 2000}, "settings": {"waterUnitCapacity": 250}}
+ },
+ "foods_recent": {
+  "path": "/search/food/{user_id}/last-used",
+  "query": {"meal": "breakfast"},
+  "reply": [{"foodId": 1, "type": "PRODUCT", "name": "Product", "brand": null, "energy": 84,
+             "measure": {"measureId": 46, "measureName": "piece", "measureWeight": 60, "measureCapacity": null}}]
+ },
+ "foods_favorites": {
+  "path": "/users/{user_id}/favorite/foods",
+  "query": {"page": 1, "limit": 50},
+  "reply": [{"foodId": 1, "type": "PRODUCT", "name": "Product", "brand": null, "energy": 84,
+             "measure": {"measureId": 46, "measureName": "piece", "measureWeight": 60, "measureCapacity": null}}]
+ },
+ "foods_recent_own": {
+  "path": "/search/food/user/{user_id}/last-used",
+  "query": {"page": 1, "limit": 50},
+  "reply": []
+ },
+ "search_user_food": {
+  "path": "/search/food/user/{user_id}",
+  "query": {"date": "{day}", "phrase": "", "page": 1, "limit": 10},
+  "reply": []
+ },
+ "summary_nutrient_protein": {
+  "path": "/v2/diet-plan/{user_id}/summary/protein/custom",
+  "query": {"fromDate": "{day}", "toDate": "{day}"},
+  "reply": {"measures": {"2027-01-03": 10}, "targetRanges": {"2027-01-03": {"min": 90, "max": 110}}}
+ },
+ "summary_top_products_protein": {
+  "path": "/diet-plan/{user_id}/summary-product/protein/custom",
+  "query": {"fromDate": "{day}", "toDate": "{day}", "page": 1, "limit": 5},
+  "reply": {"list": [{"id": 1, "name": "Product", "amount": {"current": "10.00", "per100": "20.00"}}], "count": 1}
+ },
+ "search_recipes": {
+  "path": "/search/catalog/recipes",
+  "query": {"page": 1, "limit": 5, "locale": "pl_PL", "phrase": "kurczak", "hasFilters": "true", "maxEnergy": 500},
+  "reply": [{"foodId": 7000001, "type": "RECIPE", "name": "Recipe", "brand": null, "energy": 420.5,
+             "measure": {"measureId": 39, "measureName": "porcja", "measureWeight": 300, "measureCapacity": null},
+             "favorite": false, "premiumInRecipesCatalog": false, "rating": 4.5,
+             "cookingTime": 20, "preparationTime": 10}]
+ },
+ "recipes_catalog": {
+  "path": "/recipes-catalog",
+  "reply": {"categories": [{"id": "1", "recipes": [{"id": 1, "premiumInRecipesCatalog": false}]}]}
+ },
+ "fasting_types": {
+  "path": "/intermittent-fasting/{user_id}/types",
+  "reply": [{"id": 1, "symbol": "16_08_hours", "currentlyInUse": null, "rating": null, "ratingCount": 0, "reviewsPerLocale": null}]
+ },
+ "fasting_summary": {
+  "path": "/intermittent-fasting/{user_id}/summary",
+  "query": {"from": "{day}", "to": "{day}"},
+  "reply": [{"date": "2027-01-03", "eatingPeriods": [{"date": "2027-01-03", "from": "09:00", "to": "17:00"}],
+             "expectedEatingPeriods": [{"date": "2027-01-03", "from": "10:00", "to": "18:00"}]}]
+ },
+ "habits_catalog": {
+  "path": "/habits/{user_id}",
+  "reply": [{"id": 1, "name": "Habit", "translationKey": "habit_water", "length": 21, "premium": false}]
+ },
+ "habits_user": {
+  "path": "/users/{user_id}/habits",
+  "reply": [{"completed": false, "enrolledDate": "2027-01-01",
+             "habit": {"id": 1, "name": "Habit", "translationKey": "habit_water", "length": 21, "premium": false},
+             "habitItems": [{"dayNumber": 1, "date": "2027-01-01"}]}]
+ },
+ "habits_good_days": {
+  "path": "/habits/{user_id}/good-days",
+  "reply": ["2027-01-01"]
+ },
+ "subscriptions": {
+  "path": "/users/{user_id}/subscriptions",
+  "reply": {"subscriptions": [{"id": null, "startDate": "2027-01-01", "endDate": "2027-12-31", "planName": null,
+                               "planGroupName": null, "planGroupType": null, "provider": null, "providerId": null,
+                               "duration": null, "amount": null, "currency": null, "description": null,
+                               "lastOriginalTransactionId": null}]}
+ },
+ "activities_recent": {
+  "path": "/search/activity/{user_id}/last-used",
+  "query": {"page": 1, "limit": 20},
+  "reply": []
+ },
+ "food_tags_recipe": {
+  "path": "/resources/food-tags/recipe",
+  "reply": null
+ },
+ "upgrade_application": {
+  "path": "/upgrade-application/{app_os}/{app_version}",
+  "reply": {"newestApplicationVersion": "4.13.1", "upgradeApplication": 0}
+ }
+}

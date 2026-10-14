@@ -6,12 +6,16 @@ fakes, so this script is how that file gets refreshed when Fitatu changes someth
     python -m fitatu_api login -o session_data.json
     python scripts/record_fixtures.py --session session_data.json
 
+Requests go through ``FitatuApiClient``, which refreshes an expired bearer token and saves
+the new one to the session file, so a session older than an hour works.
+
 It only touches an empty day (``--day``, default 2027-01-03) and an empty measurement
 date (``--measurement-day``, default 2020-01-01), uses public catalog items plus one
 synthetic custom row, and deletes everything it created (also when a step fails). Water
 on that day is written only when it can be put back exactly, and is put back. Recent and
-favourite foods are only read. Before anything is written, ``scrub`` replaces the user
-id, profile, goals, usage history and custom meal names with fixed synthetic values, and
+favourite foods, fasting and habits are only read. Before anything is written, ``scrub``
+replaces the user id, profile, goals, usage history and custom meal names with fixed
+synthetic values and empties the day's note, the fasting periods and the habits, and
 ``leaked_values`` refuses to write the file if any personal value from the raw recording
 is still in it.
 """
@@ -66,6 +70,12 @@ SYNTHETIC_DIET = {
     "weightChangeSpeed": 0,
     "weightChangeSpeedKg": 0,
     "weightChangeDirection": 0,
+}
+# The daily macro ranges (g) the by-nutrient summaries get instead of the account's.
+SYNTHETIC_TARGET_RANGES = {
+    "protein": {"min": 90, "max": 110},
+    "fat": {"min": 60, "max": 74},
+    "carbohydrate": {"min": 225, "max": 275},
 }
 SYNTHETIC_CALCULATED = {
     "BMR": 1700,
@@ -210,8 +220,8 @@ def scrub(recording: dict[str, Any]) -> dict[str, Any]:
                     meal["mealName"], meal["mealTime"] = NEUTRAL_MEALS[meal_key]
                     if isinstance(meal.get("recommendedEnergy"), (int, float)):
                         meal["recommendedEnergy"] = 400
-            # Per-account flags on catalog items.
-            for flag, value in (("favorite", False), ("currentUserPrivateBarcode", None)):
+            # Per-account values: flags on catalog items, and a day's note and note tags (health data).
+            for flag, value in (("favorite", False), ("currentUserPrivateBarcode", None), ("note", None), ("tagsIds", [])):
                 if flag in body:
                     body[flag] = value
 
@@ -236,7 +246,7 @@ def scrub(recording: dict[str, Any]) -> dict[str, Any]:
             meal["mealName"], meal["mealTime"] = name, time
 
     for name, call in calls.items():
-        if name.startswith("search_food") and isinstance(call.get("body"), list):
+        if name.startswith(("search_food", "search_recipes")) and isinstance(call.get("body"), list):
             # Search puts the account's own history first ("LAST_USED") and counts its uses;
             # keep only plain catalog hits, without the per-account fields.
             call["body"] = [row for row in call["body"] if isinstance(row, dict) and row.get("index") != "LAST_USED"]
@@ -263,6 +273,15 @@ def scrub(recording: dict[str, Any]) -> dict[str, Any]:
             if amount in (0, WATER_ML):
                 call["body"]["water"]["waterConsumption"] = amount
 
+    # The account's fasting periods, habits and good days: nothing of them is kept (an empty list).
+    for name in ("fasting_summary", "habits_user", "habits_good_days"):
+        if name in calls:
+            calls[name]["body"] = _neutral(calls[name]["body"])
+    for row in (calls.get("fasting_types") or {}).get("body") or []:
+        if isinstance(row, dict) and "currentlyInUse" in row:
+            # The app decodes it as a double (a usage figure?) and it may be the account's flag: keep only its type.
+            row["currentlyInUse"] = _neutral(row["currentlyInUse"])
+
     user_info = (calls.get("user_info") or {}).get("body")
     if isinstance(user_info, dict):
         calls["user_info"]["body"] = {key: value for key, value in user_info.items() if key in USER_INFO_KEYS}
@@ -278,6 +297,10 @@ def scrub(recording: dict[str, Any]) -> dict[str, Any]:
         body = (calls.get(name) or {}).get("body")
         if isinstance(body, dict) and isinstance(body.get(key), dict):
             body[key] = {day: value for day in body[key]}
+    for nutrient, bounds in SYNTHETIC_TARGET_RANGES.items():
+        body = (calls.get(f"summary_nutrient_{nutrient}") or {}).get("body")
+        if isinstance(body, dict) and isinstance(body.get("targetRanges"), dict):
+            body["targetRanges"] = {day: dict(bounds) for day in body["targetRanges"]}
     activities = (calls.get("summary_activities") or {}).get("body")
     if isinstance(activities, dict) and activities.get("targetEnergy") is not None:
         activities["targetEnergy"] = 300
@@ -305,6 +328,9 @@ def leaked_values(raw: dict[str, Any], scrubbed_text: str) -> list[str]:
         for meal in ((call.get("body") or {}).get("dietPlan") or {}).values() if isinstance(call.get("body"), dict) else []:
             if isinstance(meal, dict) and meal.get("mealTime"):
                 sensitive.add(str(meal["mealTime"]))
+    for call in calls.values():
+        if isinstance(call.get("body"), dict) and isinstance(call["body"].get("note"), str):
+            sensitive.add(call["body"]["note"])
     user_info = (calls.get("user_info") or {}).get("body") or {}
     for key in ("birthDate", "nickname", "email", "username"):
         for source in (settings, settings.get("userSettings") or {}, user_info):
@@ -349,36 +375,56 @@ class RecordingError(RuntimeError):
     """Raised when a step fails in a way the fixture must not capture."""
 
 
+def send(
+    client: Any, method: str, path: str, *, query: dict[str, Any] | None = None, body: Any = None, include_auth: bool = True
+) -> tuple[int, str, Any]:
+    """Send one request through ``client`` and return the reply as it came: status, content type, body.
+
+    The client refreshes an expiring or rejected bearer token and retries reads on 5xx. A 4xx
+    reply is returned like a 2xx one, since the scenario records some on purpose (404 for a
+    missing measurement, 405, 422); a 401 a refresh did not fix, a 429, a 5xx after the retries,
+    a technical break and a network error are raised, and so is a redirect.
+    """
+    from fitatu_api import FitatuApiError, FitatuNotFoundError
+
+    responses: list[Any] = []
+
+    def keep(response: Any, *args: Any, **kwargs: Any) -> None:
+        responses.append(response)
+
+    hooks = client._http.hooks["response"]  # sees every response, a refresh's too: the request's own comes last
+    hooks.append(keep)
+    try:
+        client.request(method, path, params=query, json_data=body, include_auth=include_auth)
+    except FitatuApiError as exc:
+        if type(exc) not in (FitatuApiError, FitatuNotFoundError) or not 300 <= (exc.status_code or 0) < 500:
+            raise
+    finally:
+        hooks.remove(keep)
+    response = responses[-1]
+    if response.is_redirect:  # the client does not follow it, so the body and API-Secret stayed here
+        raise RecordingError(f"{method} {path} was redirected to {response.headers.get('location')!r}")
+    content_type = response.headers.get("content-type") or ""
+    parsed = response.json() if "json" in content_type and response.text else response.text
+    return response.status_code, content_type, parsed
+
+
 def record(client: Any, user_id: str, day: date, measurement_day: date) -> dict[str, Any]:
     """Run the recording scenario and return the raw calls (real statuses and bodies)."""
-    import requests
-
     calls: dict[str, Any] = {}
     day_iso = day.isoformat()
 
-    def call(name: str | None, method: str, path: str, *, query: dict[str, Any] | None = None, body: Any = None) -> Any:
-        response = requests.request(
-            method,
-            client._url(path),
-            headers=client._headers(include_auth=True, has_json=body is not None),
-            params=query,
-            json=body,
-            timeout=client.timeout_seconds,
-            allow_redirects=False,  # a redirect would resend the body and API-Secret to any host
-        )
-        if response.is_redirect:
-            raise RecordingError(f"{name}: {method} {path} was redirected to {response.headers.get('location')!r}")
-        content_type = response.headers.get("content-type") or ""
-        parsed: Any = response.text
-        if "json" in content_type and response.text:
-            parsed = response.json()
+    def call(
+        name: str | None, method: str, path: str, *, query: dict[str, Any] | None = None, body: Any = None, include_auth: bool = True
+    ) -> Any:
+        status, content_type, parsed = send(client, method, path, query=query, body=body, include_auth=include_auth)
         rejected = path.endswith("/days") and isinstance(parsed, list) and any(row.get("errorMessage") for row in parsed)
         if rejected and name not in {"sync_rejected", "sync_delete_activity"}:
             raise RecordingError(f"{name}: day sync rejected: {parsed}")
         if name:
             calls[name] = {
                 "request": {"method": method, "path": path, "query": query, "body": body},
-                "status": response.status_code,
+                "status": status,
                 "contentType": content_type or None,
                 "body": parsed,
             }
@@ -420,6 +466,8 @@ def record(client: Any, user_id: str, day: date, measurement_day: date) -> dict[
         # Not a LAST_USED hit: that is the account's own history, possibly a private product.
         product_id = next(row["foodId"] for row in found if row.get("type") == "PRODUCT" and row.get("index") != "LAST_USED")
         product = call("product_details", "GET", f"/products/{product_id}")
+        if product.get("barcode"):  # a generic product (loose eggs, say) has none
+            call("search_food_barcode", "GET", "/search/new/food", query={"phrase": product["barcode"], "page": 1, "limit": 5, "locale": "pl_PL"})
         call("recipe_details", "GET", "/recipes/590200")
         measure_id = (product.get("measures") or [{}])[0].get("id", 1)
 
@@ -447,7 +495,10 @@ def record(client: Any, user_id: str, day: date, measurement_day: date) -> dict[
         span = {"fromDate": day_iso, "toDate": day_iso}
         call("summary_nutrition", "GET", f"/v2/diet-plan/{user_id}/summary/custom", query=span)
         call("summary_nutrient_energy", "GET", f"/v2/diet-plan/{user_id}/summary/energy/custom", query=span)
+        for nutrient in SYNTHETIC_TARGET_RANGES:
+            call(f"summary_nutrient_{nutrient}", "GET", f"/v2/diet-plan/{user_id}/summary/{nutrient}/custom", query=span)
         call("summary_top_products_energy", "GET", f"/diet-plan/{user_id}/summary-product/energy/custom", query={**span, "page": 1, "limit": 5})
+        call("summary_top_products_protein", "GET", f"/diet-plan/{user_id}/summary-product/protein/custom", query={**span, "page": 1, "limit": 5})
         call("summary_activities", "GET", f"/activity-plan/{user_id}/summary/custom", query=span)
         call("export_csv", "GET", f"/diet-plan/{user_id}/export", query={"format": "csv", **span})
         call("export_empty_range", "GET", f"/diet-plan/{user_id}/export", query={"format": "csv", "fromDate": "2027-02-01", "toDate": "2027-02-02"})
@@ -497,6 +548,16 @@ def record(client: Any, user_id: str, day: date, measurement_day: date) -> dict[
         call("settings_new_without_date", "GET", f"/users/{user_id}/settings-new")
         call("activities_catalog", "GET", "/activities", query={"page": 1, "limit": 2, "locale": "pl_PL"})
         call("activity_search", "GET", "/search/activity/bieganie", query={"page": 1, "limit": 2, "locale": "pl_PL"})
+
+        # The read routes of the 0.5.0 tools. Not the subscriptions: prices and transaction ids.
+        call("search_recipes", "GET", "/search/catalog/recipes", query={"page": 1, "limit": 5, "locale": "pl_PL", "phrase": "kurczak", "hasFilters": "true", "maxEnergy": 500})
+        call("fasting_types", "GET", f"/intermittent-fasting/{user_id}/types")
+        call("fasting_summary", "GET", f"/intermittent-fasting/{user_id}/summary", query={"from": day_iso, "to": day_iso})
+        call("habits_catalog", "GET", f"/habits/{user_id}")
+        call("habits_user", "GET", f"/users/{user_id}/habits")
+        call("habits_good_days", "GET", f"/habits/{user_id}/good-days")
+        # Sent with the token: without it Fitatu answers 401, although the app lists the route under its unauthorized client.
+        call("upgrade_application", "GET", f"/upgrade-application/{client.auth.app_os}/{client.auth.app_version}")
     finally:
         # Leave the account as we found it, even if a step above failed.
         left_behind = []
@@ -542,7 +603,7 @@ def record(client: Any, user_id: str, day: date, measurement_day: date) -> dict[
 
 
 def main(argv: list[str] | None = None) -> int:
-    from fitatu_api import FitatuApiClient, FitatuAuthContext
+    from fitatu_api import FitatuApiClient
 
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--session", required=True, help="session_data.json from `fitatu-api login`")
@@ -551,11 +612,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, default=OUTPUT)
     args = parser.parse_args(argv)
 
-    auth = FitatuAuthContext.from_session_data(json.loads(Path(args.session).read_text(encoding="utf-8")))
-    if not auth.fitatu_user_id:
-        raise SystemExit("session has no fitatu_user_id")
-    with FitatuApiClient(auth=auth) as client:
-        raw = record(client, auth.fitatu_user_id, args.day, args.measurement_day)
+    with FitatuApiClient.from_session(args.session) as client:  # refreshed tokens go back to the file
+        if not client.auth.fitatu_user_id:
+            raise SystemExit("session has no fitatu_user_id")
+        raw = record(client, client.auth.fitatu_user_id, args.day, args.measurement_day)
     text = json.dumps(scrub(raw), ensure_ascii=False, indent=1) + "\n"
     leaks = leaked_values(raw, text)
     if leaks:

@@ -14,7 +14,7 @@ upserts rows by `planDayDietItemId` and keeps rows that are not sent, so a clien
 rows it changes ([PLANNER.md](PLANNER.md)). A "Checked live" note was probed by hand against
 `pl-pl.fitatu.com` on 2026-10-13.
 
-Endpoints: 149 · already covered: 38
+Endpoints: 149 · already covered: 48
 
 
 ## activities
@@ -64,7 +64,7 @@ Endpoints: 149 · already covered: 38
 
 | | Method | Path | Query | Body | Response | Purpose | Dart method | Conf. |
 |---|---|---|---|---|---|---|---|---|
-| ✅ | POST | `~/diet-plan/{userId}/days` | synchronous (bool, optional; written only when non-null by _$PlannerChangesRequestToJson; the app sends synchronous=true from forceSynchronizePlannerDay and forceSendPlannerLocalChanges, and omits it from synchronizePlannerLocalChanges) | JSON object (Map<String,dynamic>, passed as Options.compose data). Keys are dates as 'yyyy-MM-dd'. Each value is a PlannerUpdateRequest serialized by toJson: {planDayRevisions, activities, dietPlan, toilet, water, note, tagsIds}. It is a full-day snapshot with soft-deleted entries included. See DTO PlannerUpdateRequest. No Content-Type header literal, so Dio's default JSON is used. | List<PlannerSynchronizationDTO>, one per day sent: [{date: String, revision: String?, errorMessage: String?}] | Upload locally changed planner days (meals, activities, toilet, water, note) as full-day snapshots and get a new revision per day. In the app this is the only write path for diet, activity, water and notes. Recorded: the server does not need full snapshots. It upserts rows by planDayDietItemId, keeps every row that is not in the payload (a meal sent with items [] keeps its rows; a payload with only activities keeps the food rows), replaces a sent row as a whole (an omitted eaten becomes false) and hides rows sent with deletedAt. A rejected day still answers 202, with revision null and an errorMessage, and nothing is saved for it. | `_PlannerApi (features/planner/data/api/planner_api.dart)._PlannerApi.sendPlannerSynchronization` | high |
+| ✅ | POST | `~/diet-plan/{userId}/days` | synchronous (bool, optional; written only when non-null by _$PlannerChangesRequestToJson; the app sends synchronous=true from forceSynchronizePlannerDay and forceSendPlannerLocalChanges, and omits it from synchronizePlannerLocalChanges) | JSON object (Map<String,dynamic>, passed as Options.compose data). Keys are dates as 'yyyy-MM-dd'. Each value is a PlannerUpdateRequest serialized by toJson: {planDayRevisions, activities, dietPlan, toilet, water, note, tagsIds}. It is a full-day snapshot with soft-deleted entries included. See DTO PlannerUpdateRequest. No Content-Type header literal, so Dio's default JSON is used. | List<PlannerSynchronizationDTO>, one per day sent: [{date: String, revision: String?, errorMessage: String?}] | Upload locally changed planner days (meals, activities, toilet, water, note) as full-day snapshots and get a new revision per day. In the app this is the only write path for diet, activity, water and notes. Recorded: the server does not need full snapshots. It upserts rows by planDayDietItemId, keeps every row that is not in the payload (a meal sent with items [] keeps its rows; a payload with only activities keeps the food rows), replaces a sent row as a whole (an omitted eaten becomes false) and hides rows sent with deletedAt. A rejected day still answers 202, with revision null and an errorMessage, and nothing is saved for it. Checked live (2026-10-14): a payload without note and tagsIds (only dietPlan, only activities, a row deletion) keeps them and the water; {"note": "text", "tagsIds": []} writes the note and note null deletes it. | `_PlannerApi (features/planner/data/api/planner_api.dart)._PlannerApi.sendPlannerSynchronization` | high |
 | ✅ | GET | `~/diet-plan/{userId}/days/{date}/revisions` |  | none | List<String> of revision ids for the day (cast via List.cast<String>) | Cheap conflict check. synchronizePlannerDay compares server revisions with the local planDayRevisions and refetches the day via getPlanner only when the server has revisions the client does not know. | `_PlannerApi._PlannerApi.getPlannerRevisions` | high |
 | ✅ | GET | `~/diet-plan/{userId}/export` | format (String: 'xls' \| 'pdf' \| 'txt' \| 'csv'; enum DataExportFormat excel/pdf/text/csv via const map @pp+0x3a0c8), fromDate (yyyy-MM-dd), toDate (yyyy-MM-dd) | none | HttpResponse<List<int>>: raw file bytes. Options.responseType = ResponseType.bytes. The client reads the 'content-type' response header to choose MimeKind/extension. | Download a diary export file (xls/pdf/txt/csv) for a date range so it can be shared. Recorded: 204 with an empty body for a range without entries, 422 when fromDate is after toDate. | `_DataExportApi (features/data_export/data/api/data_export_api.dart)._DataExportApi.getExportedData` | high |
 | ✅ | GET | `~/diet-plan/{userId}/summary-product/{nutritionType}/custom` | fromDate (yyyy-MM-dd via DateConverter), toDate (yyyy-MM-dd), page (int; key always present), limit (int; key always present) | none | SummaryNutritionProductsDTO {list: [{name: String, amount: {current: num, per100: num?}}], count: int} | Products that contributed most to a nutrient over a date range (nutrition details screen), paginated. | `_SummaryApi (features/summary/data/api/summary_api.dart)._SummaryApi.getNutritionProductsSummary` | high |
@@ -127,8 +127,8 @@ Endpoints: 149 · already covered: 38
 
 | | Method | Path | Query | Body | Response | Purpose | Dart method | Conf. |
 |---|---|---|---|---|---|---|---|---|
-|  | GET | `~/habits/{userId}` |  | none | List<HabitDTO {id: int, name: String, translationKey: String, length: int (inferred), premium: bool}> | Habit catalog available to the user | `_HabitApi.getHabits` | high |
-|  | GET | `~/habits/{userId}/good-days` |  | none | List<String> (dates; the source maps them to List<Date>) | List of 'good days' (habit streak tab in summary). | `_SummaryApi._SummaryApi.getGoodDays` | high |
+| ✅ | GET | `~/habits/{userId}` |  | none | List<HabitDTO {id: int, name: String, translationKey: String, length: int (inferred), premium: bool}> | Habit catalog available to the user. Checked live (2026-10-14): 22 habits, name in Polish, length in days. | `_HabitApi.getHabits` | high |
+| ✅ | GET | `~/habits/{userId}/good-days` |  | none | List<String> (dates; the source maps them to List<Date>) | List of 'good days' (habit streak tab in summary). | `_SummaryApi._SummaryApi.getGoodDays` | high |
 
 ## health
 
@@ -142,8 +142,8 @@ Endpoints: 149 · already covered: 38
 |---|---|---|---|---|---|---|---|---|
 |  | GET | `~/intermittent-fasting/{userId}/periods` | date (yyyy-MM-dd, required) | none | List<FastingPeriodDTO {id: String, date: String, startDate: String, endDate: String, default: bool, deleted: bool}> | Fasting periods for a given day | `_FastingApi.getFastingPeriods` | high |
 |  | POST | `~/intermittent-fasting/{userId}/periods` |  | JSON ARRAY of FastingPeriodRequest: [{id, date, startDate, endDate, default, deleted, isCreatedDynamically}]. The app always sends a 1-element list. | void | Create, update or soft-delete fasting periods (eating windows) | `_FastingApi.updateFastingPeriods` | high |
-|  | GET | `~/intermittent-fasting/{userId}/summary` | from (yyyy-MM-dd, required), to (yyyy-MM-dd, required) | none | List<FastingSummaryDTO {date: String, eatingPeriods: List<FastingEatingPeriodDTO>, expectedEatingPeriods: List<FastingEatingPeriodDTO>}>; FastingEatingPeriodDTO {date: String, from: String (time, Time.parse), to: String (time)} | Per-day intermittent-fasting summary (actual vs expected eating windows) for a date range | `_FastingApi.getSummary` | high |
-|  | GET | `~/intermittent-fasting/{userId}/types` |  | none | List<FastingDTO {id: int (SafeInt), symbol: FastingType string, currentlyInUse: double (SafeDouble), rating?: double, reviewsPerLocale: List<{count: int, locale: String}>}> | Catalog of fasting types/schemes (14:10, 16:8, 18:6, 20:4, other) with usage and ratings | `_FastingTypesApi.getFastings` | high |
+| ✅ | GET | `~/intermittent-fasting/{userId}/summary` | from (yyyy-MM-dd, required), to (yyyy-MM-dd, required) | none | List<FastingSummaryDTO {date: String, eatingPeriods: List<FastingEatingPeriodDTO>, expectedEatingPeriods: List<FastingEatingPeriodDTO>}>; FastingEatingPeriodDTO {date: String, from: String (time, Time.parse), to: String (time)} | Per-day intermittent-fasting summary (actual vs expected eating windows) for a date range. Checked live (2026-10-14): an empty list for days without fasting. | `_FastingApi.getSummary` | high |
+| ✅ | GET | `~/intermittent-fasting/{userId}/types` |  | none | List<FastingDTO {id: int (SafeInt), symbol: FastingType string, currentlyInUse: double (SafeDouble), rating?: double, reviewsPerLocale: List<{count: int, locale: String}>}> | Catalog of fasting types/schemes (14:10, 16:8, 18:6, 20:4, other) with usage and ratings. Checked live (2026-10-14): 9 types, symbols 14_10_hours, 16_08_hours, 18_06_hours, 20_04_hours, 5_2_days, 6_1_days, mwf_days, tts_days, custom, with id, currentlyInUse, rating, ratingCount, reviewsPerLocale. | `_FastingTypesApi.getFastings` | high |
 
 ## label-scanner
 
@@ -219,8 +219,8 @@ Endpoints: 149 · already covered: 38
 | | Method | Path | Query | Body | Response | Purpose | Dart method | Conf. |
 |---|---|---|---|---|---|---|---|---|
 | ✅ | POST | `~/recipes` |  | JSON UpdatedRecipeRequest | UpdatedRecipeDTO | Create recipe | `_RecipeApi._RecipeApi.addRecipe(UpdatedRecipeRequest body)` | high |
-|  | DELETE | `~/recipes/{recipeId}` |  | none | void | Delete recipe | `_RecipeApi._RecipeApi.deleteRecipe(int recipeId)` | high |
-|  | PUT | `~/recipes/{recipeId}` |  | JSON UpdatedRecipeRequest | UpdatedRecipeDTO | Update recipe | `_RecipeApi._RecipeApi.putRecipe(int recipeId, UpdatedRecipeRequest body)` | high |
+| ✅ | DELETE | `~/recipes/{recipeId}` |  | none | void | Delete recipe | `_RecipeApi._RecipeApi.deleteRecipe(int recipeId)` | high |
+| ✅ | PUT | `~/recipes/{recipeId}` |  | JSON UpdatedRecipeRequest | UpdatedRecipeDTO | Update recipe. Not checked live yet: `client.update_recipe` sends the create body whole, as the app does. | `_RecipeApi._RecipeApi.putRecipe(int recipeId, UpdatedRecipeRequest body)` | high |
 |  | POST | `~/recipes/{recipeId}/action/report` |  | JSON {message: String} | void | Report recipe error | `_RecipeApi._RecipeApi.reportRecipe(int recipeId, ReportRecipeRequest body)` | high |
 
 ## recipes-ai
@@ -281,7 +281,7 @@ Endpoints: 149 · already covered: 38
 |---|---|---|---|---|---|---|---|---|
 | ✅ | GET | `~/search/activity/{phrase}` | page?, limit?, locale?, bmr?, sex? (int: 0=notKnown,1=male,2=female,9=notApplicable) | none | List<SearchActivityItemDTO> {activityId, name, type(int 0..3), intensity(int 1..4), energy(double), measuresDescription, measures:[ActivityMeasureDTO{measureId,name,short,type,scale,selected,value,defaultValue}], uuid?} | Search activity/training catalog (on main API host via ApiClient). GetSearchActivitiesUseCase <- DailyGoalTrainingSearchBloc. | `_ApiClient.getSearchActivities` | high |
 | ✅ | GET | `~/search/activity/{userId}/last-used` | page?, limit?, locale?, bmr?, sex? | none | List<SearchActivityItemDTO> | User's recently used activities (cached locally afterwards). GetLastUsedUsersActivitiesUseCase. | `_ApiClient.getLastUsedUsersActivities` | high |
-|  | GET | `~/search/catalog/recipes` | page, limit, hasFilters, locale, phrase, + filter-derived keys (tags[], meals[], ingredients[], source[], minEnergy.., minCookingTime/maxCookingTime, type) | none | List<SearchRecipeCatalogItemDTO> | Recipe catalog search | `_SearchApi._SearchApi.getCatalogRecipes(SearchFoodRequest request)` | high |
+| ✅ | GET | `~/search/catalog/recipes` | page, limit, hasFilters, locale, phrase, + filter-derived keys (tags[], meals[], ingredients[], source[], minEnergy.., minCookingTime/maxCookingTime, type) | none | List<SearchRecipeCatalogItemDTO> | Recipe catalog search. Checked live (2026-10-14): hits in the food search's shape with type RECIPE, energy and measure of one portion, premiumInRecipesCatalog, rating, cookingTime, preparationTime; maxEnergy filters by energy per portion, only with hasFilters=true; meals[]=dinner did not visibly filter; some hits are premium. | `_SearchApi._SearchApi.getCatalogRecipes(SearchFoodRequest request)` | high |
 |  | GET | `~/search/food-proposal` | page, limit, energy, locale, phrase, shuffleWithSeed, + filter-derived keys (tags[], meals[], ingredients[], source[], foodProposalPlan[] ...) | none | List<SearchRecipeCatalogItemDTO> | Food proposal (meal-plan proposal) search | `_SearchApi._SearchApi.getFoodProposal(SearchFoodRequest request)` | high |
 | ✅ | GET | `~/search/food/user/{userId}` | page, limit, accessType[], hasFilters, locale, phrase, type, + filter-derived keys | none | List<SearchFoodItemDTO> | Search within user's own foods | `_SearchApi._SearchApi.getSearchUserFood(String userId, SearchFoodRequest request)` | high |
 | ✅ | GET | `~/search/food/user/{userId}/last-used` | page, limit, hasFilters, locale, type, + filter-derived keys (tags[], meals[], ingredients[], source[], foodProposalPlan[], min*/max*) when set | none | List<SearchFoodItemDTO> | User's own (custom) foods last used | `_SearchApi._SearchApi.getUserLastUsedFoods(String userId, SearchFoodRequest request)` | high |
@@ -309,7 +309,7 @@ Endpoints: 149 · already covered: 38
 
 | | Method | Path | Query | Body | Response | Purpose | Dart method | Conf. |
 |---|---|---|---|---|---|---|---|---|
-|  | GET | `~/upgrade-application/{os}/{appVersion}` |  | none | AppUpdateDTO {newestApplicationVersion, upgradeApplication} | Check for a forced or optional app update. | `_UnauthorizedClient._UnauthorizedClient.getAppUpdateInfo` | high |
+| ✅ | GET | `~/upgrade-application/{os}/{appVersion}` |  | none | AppUpdateDTO {newestApplicationVersion, upgradeApplication} | Check for a forced or optional app update. Checked live (2026-10-14): `WEB/4.13.1` answers {"newestApplicationVersion": "4.13.1", "upgradeApplication": 0}, `ANDROID/4.17.1` newest 4.17.1; without the bearer token it answers 401 "JWT Token not found", despite the unauthorized client. `fitatu-api doctor` asks it for the version the library sends. | `_UnauthorizedClient._UnauthorizedClient.getAppUpdateInfo` | high |
 
 ## user
 
@@ -363,7 +363,7 @@ Endpoints: 149 · already covered: 38
 
 | | Method | Path | Query | Body | Response | Purpose | Dart method | Conf. |
 |---|---|---|---|---|---|---|---|---|
-|  | GET | `~/users/{userId}/habits` |  | none | List<UserHabitDTO {completed, enrolledDate, habit{id,name,translationKey,length,premium}, habitItems[{dayNumber,date}]}> | The user's enrolled habits with their check-in days | `_HabitApi.getUserHabits` | high |
+| ✅ | GET | `~/users/{userId}/habits` |  | none | List<UserHabitDTO {completed, enrolledDate, habit{id,name,translationKey,length,premium}, habitItems[{dayNumber,date}]}> | The user's enrolled habits with their check-in days | `_HabitApi.getUserHabits` | high |
 |  | PUT | `~/users/{userId}/habits/{habitId}` |  | JSON object UpdateHabitRequest {habitItems: [{dayNumber: int, date: yyyy-MM-dd}], completed: bool, enrolledDate: yyyy-MM-dd} | UserHabitDTO {completed: bool, enrolledDate: String, habit: HabitDTO, habitItems: List<HabitCompletedDayDTO>} | Enroll in, restart, finish or check in a habit (the whole state is upserted) | `_HabitApi.updateHabit` | high |
 
 ## users/…/measurements
@@ -409,7 +409,7 @@ Endpoints: 149 · already covered: 38
 
 | | Method | Path | Query | Body | Response | Purpose | Dart method | Conf. |
 |---|---|---|---|---|---|---|---|---|
-|  | GET | `~/users/{userId}/subscriptions` |  | none | UserSubscriptionHistoryDTO {subscriptions: List<UserSubscriptionDTO{id, startDate, endDate, planName, planGroupType, provider, providerId, duration, description?}>} | History of the user's subscriptions. | `_UserSubscriptionApi.getUserSubscriptionHistory` | high |
+| ✅ | GET | `~/users/{userId}/subscriptions` |  | none | UserSubscriptionHistoryDTO {subscriptions: List<UserSubscriptionDTO{id, startDate, endDate, planName, planGroupType, provider, providerId, duration, description?}>} | History of the user's subscriptions. Checked live (2026-10-14): each also has planGroupName, amount, currency and lastOriginalTransactionId; `user_settings.get_premium` keeps only whether one runs and its end date. | `_UserSubscriptionApi.getUserSubscriptionHistory` | high |
 
 ## voice-ai
 

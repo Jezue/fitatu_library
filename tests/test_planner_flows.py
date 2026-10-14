@@ -253,8 +253,8 @@ class PlannerTests(unittest.TestCase):
         )
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["addedItem"]["foodType"], "CUSTOM_ITEM")
-        self.assertEqual(result["addedItem"]["name"], "Fresh juice")
+        self.assertEqual(result["added_item"]["foodType"], "CUSTOM_ITEM")
+        self.assertEqual(result["added_item"]["name"], "Fresh juice")
 
     def test_add_recipe_to_day_meal_appends_recipe_entry(self) -> None:
         client = FakeClient(_make_day_payload())
@@ -271,8 +271,8 @@ class PlannerTests(unittest.TestCase):
         )
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["addedItem"]["foodType"], "RECIPE")
-        self.assertEqual(result["addedItem"]["recipeId"], 123456)
+        self.assertEqual(result["added_item"]["foodType"], "RECIPE")
+        self.assertEqual(result["added_item"]["recipeId"], 123456)
 
         saved_item = client.day_payload["dietPlan"]["breakfast"]["items"][-1]
         self.assertEqual(saved_item["foodType"], "RECIPE")
@@ -300,9 +300,9 @@ class PlannerTests(unittest.TestCase):
         )
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["addedItem"]["measureId"], 39)
-        self.assertEqual(result["addedItem"]["measureQuantity"], 1)
-        self.assertEqual(result["addedItem"]["ingredientsServing"], 1)
+        self.assertEqual(result["added_item"]["measureId"], 39)
+        self.assertEqual(result["added_item"]["measureQuantity"], 1)
+        self.assertEqual(result["added_item"]["ingredientsServing"], 1)
 
     def test_remove_day_item_marks_the_row_deleted(self) -> None:
         client = FakeClient(_make_day_payload())
@@ -310,7 +310,7 @@ class PlannerTests(unittest.TestCase):
         result = client.planner.remove_day_item(TEST_USER_ID, TEST_DAY, meal_type="breakfast", item_id="item-1")
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["cleanupMode"], "removed")
+        self.assertEqual(result["cleanup_mode"], "removed")
         self.assertEqual(client.day_payload["dietPlan"]["breakfast"]["items"], [])
         self.assertTrue(client.all_rows(TEST_DAY.isoformat())["item-1"]["deletedAt"])
 
@@ -338,9 +338,9 @@ class PlannerTests(unittest.TestCase):
             item_id="recipe-custom-1",
         )
 
-        self.assertEqual(product_kind["resolvedKind"], "normal_item")
-        self.assertEqual(custom_add_kind["resolvedKind"], "custom_add_item")
-        self.assertEqual(custom_recipe_kind["resolvedKind"], "custom_recipe_item")
+        self.assertEqual(product_kind["resolved_kind"], "normal_item")
+        self.assertEqual(custom_add_kind["resolved_kind"], "custom_add_item")
+        self.assertEqual(custom_recipe_kind["resolved_kind"], "custom_recipe_item")
 
     def test_remove_day_item_deletes_a_custom_recipe_like_row_the_same_way(self) -> None:
         client = FakeClient(_make_custom_recipe_like_payload())
@@ -360,7 +360,7 @@ class PlannerTests(unittest.TestCase):
         result = client.planner.remove_day_items_by_kind(TEST_USER_ID, TEST_DAY, item_kind="normal_item", all_meals=True)
 
         self.assertTrue(result["ok"])
-        self.assertEqual((result["targetedCount"], result["removedCount"]), (1, 1))
+        self.assertEqual((result["targeted_count"], result["removed_count"]), (1, 1))
         self.assertEqual(len(client.sync_payloads), 1)
         after = {row["planDayDietItemId"] for meal in client.day_payload["dietPlan"].values() for row in meal["items"]}
         self.assertEqual(before - after, {"prod-1"})
@@ -373,7 +373,7 @@ class PlannerTests(unittest.TestCase):
         )
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["targetedCount"], 1)
+        self.assertEqual(result["targeted_count"], 1)
         self.assertEqual(result["meal"], "lunch")
         [sent] = client.last_sync_payload[TEST_DAY.isoformat()]["dietPlan"]["lunch"]["items"]
         self.assertEqual(sent["planDayDietItemId"], "custom-add-1")
@@ -418,9 +418,9 @@ class PlannerTests(unittest.TestCase):
         )
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["measureResolution"]["measureId"], 1)
-        self.assertEqual(result["measureResolution"]["measureQuantity"], 200)
-        self.assertEqual(result["measureResolution"]["strategy"], "direct_unit_match")
+        self.assertEqual(result["measure_resolution"]["measure_id"], 1)
+        self.assertEqual(result["measure_resolution"]["measure_quantity"], 200)
+        self.assertEqual(result["measure_resolution"]["strategy"], "direct_unit_match")
 
     def test_add_search_result_to_day_meal_converts_amount_when_unit_missing(self) -> None:
         client = FakeClient(
@@ -460,9 +460,9 @@ class PlannerTests(unittest.TestCase):
         )
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["measureResolution"]["measureId"], 2)
-        self.assertAlmostEqual(float(result["measureResolution"]["measureQuantity"]), 2.0)
-        self.assertEqual(result["measureResolution"]["strategy"], "converted_from_weight")
+        self.assertEqual(result["measure_resolution"]["measure_id"], 2)
+        self.assertAlmostEqual(float(result["measure_resolution"]["measure_quantity"]), 2.0)
+        self.assertEqual(result["measure_resolution"]["strategy"], "converted_from_weight")
 
     def test_add_search_result_to_day_meal_raises_when_unit_unresolvable_in_strict_mode(self) -> None:
         client = FakeClient(

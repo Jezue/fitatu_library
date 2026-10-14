@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Jezue/fitatu_library/security/advisories/new
+    about: Report it privately, not in an issue. See SECURITY.md.
+  - name: A problem with Fitatu itself (the app, your account, the food data)
+    url: https://www.fitatu.com
+    about: This project is unofficial; Fitatu's support handles the service.

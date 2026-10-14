@@ -1,0 +1,24 @@
+name: Feature request
+description: A Fitatu feature the library or the agent tools do not cover yet, or a change to one they do.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Some things are left out on purpose: tools that write to the shared food catalog or to
+        other users' items, change account goals or settings, or handle passwords. See
+        [docs/AGENTS.md](https://github.com/Jezue/fitatu_library/blob/main/docs/AGENTS.md).
+  - type: textarea
+    id: need
+    attributes:
+      label: What you want to do
+      description: The task, in the words you would use with the app or with an assistant.
+    validations:
+      required: true
+  - type: textarea
+    id: api
+    attributes:
+      label: Where it is in Fitatu
+      description: |
+        The screen in the app, and the route if you know it (docs/APP_4_17_1_API_CATALOG.md lists
+        the routes the Android app uses). Leave out personal values.

@@ -21,7 +21,9 @@ from .planner import PlannerModule
 from .service_modules import (
     ActivitiesModule,
     DietPlanModule,
+    FastingModule,
     FoodsModule,
+    HabitsModule,
     MeasurementsModule,
     ResourcesModule,
     SummaryModule,
@@ -52,6 +54,8 @@ __all__ = [
     "MeasurementsModule",
     "SummaryModule",
     "FoodsModule",
+    "FastingModule",
+    "HabitsModule",
     "ResourcesModule",
     "__version__",
 ]

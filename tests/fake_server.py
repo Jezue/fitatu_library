@@ -10,11 +10,14 @@ recording through this fake to keep the two in step:
   defaults (``eaten`` becomes ``False``)
 - a new row whose id is not a UUID v1 makes the server reject the whole day (still 202)
 - rows sent with ``deletedAt`` disappear from the day GET
-- the day GET always returns every meal of the day, empty or not
+- the day GET always returns every meal of the day, empty or not, with the meal's own fields
+  (``mealName``, the name the user gave it, ``mealTime``, ...)
 - activities go in the same sync under ``activities``, upserted by ``uuid``, and only in
   the write shape; any other key (e.g. a row copied from the day GET) rejects the day
   with a field-by-field ``errorMessage``. The day GET lists them under ``activityPlan``
   in a longer read shape, without the ones sent with ``deletedAt``
+- ``note`` and ``tagsIds`` sent in the sync replace the day's; a sync without them keeps them
+  (checked live 2026-10-14, not recorded)
 
 Nutrition is not recalculated; tests here are about ids, meals and flags.
 """
@@ -29,7 +32,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from fitatu_api import FitatuApiError, PlannerModule
+from fitatu_api import FitatuApiError, FitatuNotFoundError, PlannerModule
 
 RECORDING = json.loads((Path(__file__).parent / "fixtures" / "api_recording.json").read_text(encoding="utf-8"))
 CALLS: dict[str, Any] = RECORDING["calls"]
@@ -91,7 +94,7 @@ class FakeFitatuServer:
     ``request`` also answers what a real client sends for everything else: a food search
     from ``search_results``, then ``routes`` (canned replies by ``(method, path)`` for routes
     the recording lacks), then the first recorded call with the same method and path; a
-    recorded 4xx is raised as ``FitatuApiError`` with that status.
+    recorded 4xx is raised as ``FitatuApiError`` with that status (a 404 as ``FitatuNotFoundError``).
     """
 
     def __init__(
@@ -104,10 +107,15 @@ class FakeFitatuServer:
         user_id: str = RECORDED_USER_ID,
     ) -> None:
         skeleton = copy.deepcopy(day) if day is not None else recorded("day_empty")
-        self.meals = list((skeleton.get("dietPlan") or {}).keys())
+        # Each meal's own fields (mealName, mealTime, ...) as seeded; the day GET returns them with its rows.
+        self.meal_fields = {
+            meal_key: {key: value for key, value in (bucket or {}).items() if key != "items"}
+            for meal_key, bucket in (skeleton.get("dietPlan") or {}).items()
+        }
         self.day_extras = {key: value for key, value in skeleton.items() if key not in {"dietPlan", "activityPlan"}}
         self.days: dict[str, dict[str, tuple[str, dict[str, Any]]]] = {}
         self.day_activities: dict[str, dict[str, dict[str, Any]]] = {}
+        self.day_notes: dict[str, dict[str, Any]] = {}  # note and tagsIds per day, once a sync sends them
         self._activity_seed = skeleton.get("activityPlan") or []
         self._seed = [
             (meal_key, row)
@@ -147,7 +155,8 @@ class FakeFitatuServer:
         if call is None:
             raise AssertionError(f"unexpected request: {method} {path}")
         if call["status"] >= 400:
-            raise FitatuApiError(f"{method} {path} -> {call['status']}", status_code=call["status"], body=json.dumps(call["body"]))
+            error = FitatuNotFoundError if call["status"] == 404 else FitatuApiError  # as the client raises it
+            raise error(f"{method} {path} -> {call['status']}", status_code=call["status"], body=json.dumps(call["body"]))
         return copy.deepcopy(call["body"])
 
     def search_food(self, phrase: str, *, limit: int = 5, **kwargs: Any) -> list[dict[str, Any]]:
@@ -155,12 +164,12 @@ class FakeFitatuServer:
 
     def get_product_details(self, product_id: int | str) -> dict[str, Any]:
         if str(product_id) not in self.products:
-            raise FitatuApiError(f"product {product_id} not found", status_code=404)
+            raise FitatuNotFoundError(f"product {product_id} not found", status_code=404)
         return copy.deepcopy(self.products[str(product_id)])
 
     def get_recipe(self, recipe_id: int | str) -> dict[str, Any]:
         if str(recipe_id) not in self.recipes:
-            raise FitatuApiError(f"recipe {recipe_id} not found", status_code=404)
+            raise FitatuNotFoundError(f"recipe {recipe_id} not found", status_code=404)
         return copy.deepcopy(self.recipes[str(recipe_id)])
 
     # -- server behaviour ---------------------------------------------------------
@@ -202,6 +211,7 @@ class FakeFitatuServer:
                 stored[str(row["planDayDietItemId"])] = (meal_key, {**ROW_DEFAULTS, **self._catalog_fields(row), **row})
             for row in activities:
                 self._activities(day)[str(row["uuid"])] = self._activity_read_shape(day, row)
+            self.day_notes.setdefault(day, {}).update({key: day_payload[key] for key in ("note", "tagsIds") if key in (day_payload or {})})
             results.append({"date": day, "revision": str(uuid.uuid1()), "errorMessage": None})
         return results
 
@@ -222,8 +232,8 @@ class FakeFitatuServer:
 
     def day_view(self, day: str) -> dict[str, Any]:
         """The day as ``GET /diet-and-activity-plan/{id}/day/{day}`` returns it."""
-        view = copy.deepcopy(self.day_extras)
-        view["dietPlan"] = {meal_key: {"items": []} for meal_key in self.meals}
+        view = copy.deepcopy({**self.day_extras, **self.day_notes.get(day, {})})
+        view["dietPlan"] = {meal_key: {**copy.deepcopy(fields), "items": []} for meal_key, fields in self.meal_fields.items()}
         for meal_key, row in self._rows(day).values():
             if not row.get("deletedAt"):
                 view["dietPlan"].setdefault(meal_key, {"items": []})["items"].append(copy.deepcopy(row))

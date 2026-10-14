@@ -1,0 +1,654 @@
+{
+  "get_today": {
+    "parameters": {},
+    "required": [],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "get_day": {
+    "parameters": {
+      "date": "string"
+    },
+    "required": [
+      "date"
+    ],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "get_targets": {
+    "parameters": {
+      "date": "string"
+    },
+    "required": [
+      "date"
+    ],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "get_range_summary": {
+    "parameters": {
+      "from_date": "string",
+      "to_date": "string"
+    },
+    "required": [
+      "from_date",
+      "to_date"
+    ],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "get_progress": {
+    "parameters": {
+      "from_date": "string",
+      "to_date": "string"
+    },
+    "required": [
+      "from_date",
+      "to_date"
+    ],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "get_top_foods": {
+    "parameters": {
+      "from_date": "string",
+      "limit": "integer",
+      "nutrient": "string",
+      "to_date": "string"
+    },
+    "required": [
+      "from_date",
+      "to_date"
+    ],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "get_report": {
+    "parameters": {
+      "from_date": "string",
+      "to_date": "string"
+    },
+    "required": [
+      "from_date",
+      "to_date"
+    ],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "get_shopping_list": {
+    "parameters": {
+      "from_date": "string",
+      "to_date": "string"
+    },
+    "required": [
+      "from_date",
+      "to_date"
+    ],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "search_food": {
+    "parameters": {
+      "limit": "integer",
+      "phrase": "string"
+    },
+    "required": [
+      "phrase"
+    ],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  "search_recipes": {
+    "parameters": {
+      "limit": "integer",
+      "max_energy_kcal": "number",
+      "phrase": "string"
+    },
+    "required": [],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  "find_by_barcode": {
+    "parameters": {
+      "barcode": "string"
+    },
+    "required": [
+      "barcode"
+    ],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  "get_food_measures": {
+    "parameters": {
+      "food_id": "integer",
+      "food_type": "string"
+    },
+    "required": [
+      "food_id",
+      "food_type"
+    ],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  "get_recent_foods": {
+    "parameters": {
+      "limit": "integer",
+      "meal": "string"
+    },
+    "required": [
+      "meal"
+    ],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "get_favorite_foods": {
+    "parameters": {
+      "limit": "integer"
+    },
+    "required": [],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "get_my_foods": {
+    "parameters": {
+      "limit": "integer",
+      "phrase": "string"
+    },
+    "required": [],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "get_weight_history": {
+    "parameters": {
+      "from_date": "string",
+      "limit": "integer",
+      "to_date": "string"
+    },
+    "required": [],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "get_body_measurements": {
+    "parameters": {
+      "from_date": "string",
+      "to_date": "string"
+    },
+    "required": [],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "get_water": {
+    "parameters": {
+      "date": "string"
+    },
+    "required": [
+      "date"
+    ],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "get_fasting": {
+    "parameters": {
+      "from_date": "string",
+      "to_date": "string"
+    },
+    "required": [
+      "from_date",
+      "to_date"
+    ],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "get_habits": {
+    "parameters": {},
+    "required": [],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "get_good_days": {
+    "parameters": {
+      "from_date": "string",
+      "to_date": "string"
+    },
+    "required": [],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "search_activity": {
+    "parameters": {
+      "limit": "integer",
+      "phrase": "string"
+    },
+    "required": [
+      "phrase"
+    ],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  "preview_removal": {
+    "parameters": {
+      "date": "string",
+      "row_ids": "array"
+    },
+    "required": [
+      "date",
+      "row_ids"
+    ],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "add_food": {
+    "parameters": {
+      "date": "string",
+      "eaten": "boolean",
+      "food_id": "integer",
+      "food_type": "string",
+      "meal": "string",
+      "measure_id": "integer",
+      "quantity": "number",
+      "row_id": "string",
+      "unit": "string"
+    },
+    "required": [
+      "date",
+      "food_id",
+      "food_type",
+      "meal",
+      "quantity"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  "add_foods": {
+    "parameters": {
+      "date": "string",
+      "eaten": "boolean",
+      "items": "array",
+      "meal": "string",
+      "row_id": "string"
+    },
+    "required": [
+      "date",
+      "items",
+      "meal"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  "add_custom_item": {
+    "parameters": {
+      "carbohydrate_g": "number",
+      "date": "string",
+      "eaten": "boolean",
+      "energy_kcal": "number",
+      "fat_g": "number",
+      "meal": "string",
+      "name": "string",
+      "protein_g": "number",
+      "row_id": "string"
+    },
+    "required": [
+      "date",
+      "energy_kcal",
+      "meal",
+      "name"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  "update_item": {
+    "parameters": {
+      "date": "string",
+      "eaten": "boolean",
+      "quantity": "number",
+      "row_id": "string"
+    },
+    "required": [
+      "date",
+      "row_id"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  "move_item": {
+    "parameters": {
+      "date": "string",
+      "row_id": "string",
+      "to_date": "string",
+      "to_meal": "string"
+    },
+    "required": [
+      "date",
+      "row_id",
+      "to_meal"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  "copy_meal": {
+    "parameters": {
+      "eaten": "boolean",
+      "from_date": "string",
+      "from_meal": "string",
+      "row_id": "string",
+      "row_ids": "array",
+      "to_date": "string",
+      "to_meal": "string"
+    },
+    "required": [
+      "from_date",
+      "from_meal",
+      "to_date"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  "remove_items": {
+    "parameters": {
+      "date": "string",
+      "dry_run": "boolean",
+      "row_ids": "array"
+    },
+    "required": [
+      "date",
+      "row_ids"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "log_weight": {
+    "parameters": {
+      "date": "string",
+      "weight_kg": "number"
+    },
+    "required": [
+      "date",
+      "weight_kg"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "log_measurements": {
+    "parameters": {
+      "biceps": "number",
+      "calf": "number",
+      "chest": "number",
+      "date": "string",
+      "fat_percentage": "number",
+      "hips": "number",
+      "neck": "number",
+      "stomach": "number",
+      "thigh": "number",
+      "waist": "number"
+    },
+    "required": [
+      "date"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "set_water": {
+    "parameters": {
+      "date": "string",
+      "water_ml": "integer"
+    },
+    "required": [
+      "date",
+      "water_ml"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "set_note": {
+    "parameters": {
+      "date": "string",
+      "note": "string"
+    },
+    "required": [
+      "date",
+      "note"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "add_activity": {
+    "parameters": {
+      "activity_id": "integer",
+      "date": "string",
+      "energy_kcal": "integer",
+      "minutes": "integer",
+      "row_id": "string"
+    },
+    "required": [
+      "activity_id",
+      "date",
+      "energy_kcal",
+      "minutes"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  "remove_activity": {
+    "parameters": {
+      "date": "string",
+      "row_id": "string"
+    },
+    "required": [
+      "date",
+      "row_id"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "set_favorite": {
+    "parameters": {
+      "favorite": "boolean",
+      "food_id": "integer",
+      "food_type": "string"
+    },
+    "required": [
+      "food_id",
+      "food_type"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "create_recipe": {
+    "parameters": {
+      "description": "string",
+      "ingredients": "array",
+      "name": "string",
+      "servings": "integer"
+    },
+    "required": [
+      "ingredients",
+      "name"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  "update_recipe": {
+    "parameters": {
+      "description": "string",
+      "ingredients": "array",
+      "name": "string",
+      "recipe_id": "integer",
+      "servings": "integer"
+    },
+    "required": [
+      "recipe_id"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "delete_recipe": {
+    "parameters": {
+      "recipe_id": "integer"
+    },
+    "required": [
+      "recipe_id"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  }
+}

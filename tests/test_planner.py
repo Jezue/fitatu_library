@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import uuid
 from copy import deepcopy
 from datetime import date
@@ -288,8 +289,9 @@ class TestStaticHelpers:
         product = {"defaultMeasureId": 5}
         assert PlannerModule._extract_measure_id(product) == 5
 
-    def test_extract_measure_id_fallback(self) -> None:
-        assert PlannerModule._extract_measure_id({}) == 1
+    def test_extract_measure_id_does_not_guess(self) -> None:
+        assert PlannerModule._extract_measure_id({}) is None
+        assert PlannerModule._extract_measure_id({"measure": {"measureName": "g"}}) is None
 
     def test_normalize_measure_unit_aliases(self) -> None:
         assert PlannerModule._normalize_measure_unit("gram") == "g"
@@ -477,14 +479,14 @@ class TestAddProductToDayMeal:
         result = client.planner.add_product_to_day_meal(
             TEST_USER, TEST_DAY, meal_type="breakfast", product_id=1, measure_id=1
         )
-        assert result["addedItem"]["foodType"] == "PRODUCT"
+        assert result["added_item"]["foodType"] == "PRODUCT"
 
     def test_item_id_generated(self) -> None:
         client = FakeClient(_empty_day())
         result = client.planner.add_product_to_day_meal(
             TEST_USER, TEST_DAY, meal_type="breakfast", product_id=1, measure_id=1
         )
-        assert bool(result["addedItem"]["planDayDietItemId"])
+        assert bool(result["added_item"]["planDayDietItemId"])
 
     def test_raises_for_missing_meal(self) -> None:
         client = FakeClient(_empty_day())
@@ -515,14 +517,14 @@ class TestAddProductToDayMeal:
         result = client.planner.add_product_to_day_meal(
             TEST_USER, TEST_DAY, meal_type="breakfast", product_id=1, measure_id=1, source="WEB"
         )
-        assert result["addedItem"]["source"] == "WEB"
+        assert result["added_item"]["source"] == "WEB"
 
     def test_eaten_flag(self) -> None:
         client = FakeClient(_empty_day())
         result = client.planner.add_product_to_day_meal(
             TEST_USER, TEST_DAY, meal_type="breakfast", product_id=1, measure_id=1, eaten=True
         )
-        assert result["addedItem"]["eaten"] is True
+        assert result["added_item"]["eaten"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -552,14 +554,14 @@ class TestAddRecipeToDayMeal:
         result = client.planner.add_recipe_to_day_meal(
             TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1, food_type="RECIPE"
         )
-        assert result["addedItem"]["foodType"] == "RECIPE"
+        assert result["added_item"]["foodType"] == "RECIPE"
 
     def test_food_type_recipe_ai(self) -> None:
         client = FakeClient(_empty_day())
         result = client.planner.add_recipe_to_day_meal(
             TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1, food_type="RECIPE_AI"
         )
-        assert result["addedItem"]["foodType"] == "RECIPE_AI"
+        assert result["added_item"]["foodType"] == "RECIPE_AI"
 
     def test_invalid_food_type_raises(self) -> None:
         client = FakeClient(_empty_day())
@@ -573,7 +575,7 @@ class TestAddRecipeToDayMeal:
         result = client.planner.add_recipe_to_day_meal(
             TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1
         )
-        assert bool(result["addedItem"]["planDayDietItemId"])
+        assert bool(result["added_item"]["planDayDietItemId"])
 
     def test_explicit_serving_is_sent(self) -> None:
         client = FakeClient(
@@ -583,7 +585,7 @@ class TestAddRecipeToDayMeal:
         result = client.planner.add_recipe_to_day_meal(
             TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=9999, ingredients_serving=5
         )
-        assert result["addedItem"]["ingredientsServing"] == 5
+        assert result["added_item"]["ingredientsServing"] == 5
 
     def test_raises_for_missing_meal(self) -> None:
         client = FakeClient(_empty_day())
@@ -597,15 +599,15 @@ class TestAddRecipeToDayMeal:
         result = client.planner.add_recipe_to_day_meal(
             TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1, ingredients_serving=3
         )
-        assert result["addedItem"]["ingredientsServing"] == 3
+        assert result["added_item"]["ingredientsServing"] == 3
 
     def test_measure_id_and_quantity_stored(self) -> None:
         client = FakeClient(_empty_day())
         result = client.planner.add_recipe_to_day_meal(
             TEST_USER, TEST_DAY, meal_type="breakfast", recipe_id=1, measure_id=39, measure_quantity=2
         )
-        assert result["addedItem"]["measureId"] == 39
-        assert result["addedItem"]["measureQuantity"] == 2
+        assert result["added_item"]["measureId"] == 39
+        assert result["added_item"]["measureQuantity"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -626,14 +628,14 @@ class TestAddCustomItemToDayMeal:
         result = client.planner.add_custom_item_to_day_meal(
             TEST_USER, TEST_DAY, meal_type="breakfast", name="Soup", calories=100, protein_g=5, fat_g=2, carbs_g=10
         )
-        assert result["addedItem"]["foodType"] == "CUSTOM_ITEM"
+        assert result["added_item"]["foodType"] == "CUSTOM_ITEM"
 
     def test_name_stored(self) -> None:
         client = FakeClient(_empty_day())
         result = client.planner.add_custom_item_to_day_meal(
             TEST_USER, TEST_DAY, meal_type="breakfast", name="  My Salad  ", calories=0, protein_g=0, fat_g=0, carbs_g=0
         )
-        assert result["addedItem"]["name"] == "My Salad"
+        assert result["added_item"]["name"] == "My Salad"
 
     def test_empty_name_raises(self) -> None:
         client = FakeClient(_empty_day())
@@ -647,7 +649,7 @@ class TestAddCustomItemToDayMeal:
         result = client.planner.add_custom_item_to_day_meal(
             TEST_USER, TEST_DAY, meal_type="breakfast", name="X", calories=300, protein_g=25, fat_g=10, carbs_g=30
         )
-        item = result["addedItem"]
+        item = result["added_item"]
         assert item["energy"] == pytest.approx(300.0)
         assert item["protein"] == pytest.approx(25.0)
         assert item["fat"] == pytest.approx(10.0)
@@ -751,12 +753,12 @@ class TestMoveAndReplaceDayItem:
         )
 
         assert result["ok"] is True
-        assert result["fromMeal"] == "breakfast"
-        assert result["toMeal"] == "lunch"
+        assert result["from_meal"] == "breakfast"
+        assert result["to_meal"] == "lunch"
         assert client.last_request_kwargs is not None
         assert client.last_request_kwargs["params"] == {"synchronous": "true"}
 
-        payload = result["syncPayload"][TEST_DAY.isoformat()]["dietPlan"]
+        payload = result["sync_payload"][TEST_DAY.isoformat()]["dietPlan"]
         assert payload["breakfast"]["items"][0]["deletedAt"]
         assert payload["breakfast"]["items"][0]["productId"] == 1001
         assert payload["lunch"]["items"][0]["productId"] == 1001
@@ -774,9 +776,9 @@ class TestMoveAndReplaceDayItem:
             to_meal_type="snack",
         )
 
-        assert set(result["syncPayload"]) == {TEST_DAY.isoformat(), next_day.isoformat()}
-        assert "breakfast" in result["syncPayload"][TEST_DAY.isoformat()]["dietPlan"]
-        assert "snack" in result["syncPayload"][next_day.isoformat()]["dietPlan"]
+        assert set(result["sync_payload"]) == {TEST_DAY.isoformat(), next_day.isoformat()}
+        assert "breakfast" in result["sync_payload"][TEST_DAY.isoformat()]["dietPlan"]
+        assert "snack" in result["sync_payload"][next_day.isoformat()]["dietPlan"]
 
     def test_replace_day_item_with_custom_item_builds_delete_and_replacement(self) -> None:
         client = FakeClient(_day_with_product())
@@ -793,7 +795,7 @@ class TestMoveAndReplaceDayItem:
         )
 
         assert result["ok"] is True
-        payload_items = result["syncPayload"][TEST_DAY.isoformat()]["dietPlan"]["breakfast"]["items"]
+        payload_items = result["sync_payload"][TEST_DAY.isoformat()]["dietPlan"]["breakfast"]["items"]
         assert payload_items[0]["deletedAt"]
         assert payload_items[1]["foodType"] == "CUSTOM_ITEM"
         assert payload_items[1]["name"] == "Updated meal"
@@ -808,7 +810,7 @@ class TestMoveAndReplaceDayItem:
             TEST_USER, TEST_DAY, meal_type="breakfast", item_id="item-1", name="Jajecznica", calories=200, protein_g=12, fat_g=15, carbs_g=2
         )
         (row,) = client.day_payload["dietPlan"]["breakfast"]["items"]
-        assert (row["planDayDietItemId"], row["name"], row["eaten"]) == (replaced["rowId"], "Jajecznica", True)
+        assert (row["planDayDietItemId"], row["name"], row["eaten"]) == (replaced["row_id"], "Jajecznica", True)
 
     def test_move_checks_the_target_meal_on_the_target_day_before_syncing(self) -> None:
         client = FakeClient(_day_with_product())
@@ -827,10 +829,10 @@ class TestMoveAndReplaceDayItem:
             TEST_USER, TEST_DAY, from_meal_type="lunch", item_id="item-1", to_day="2026-01-16"
         )
         assert result["ok"] is True
-        assert result["toMeal"] == "breakfast"
+        assert result["to_meal"] == "breakfast"
         # The fake seeds every day with the same rows, so the next day also has its own item-1.
         moved = client.day_view("2026-01-16")["dietPlan"]["breakfast"]["items"]
-        assert result["rowId"] in {row["planDayDietItemId"] for row in moved}
+        assert result["row_id"] in {row["planDayDietItemId"] for row in moved}
         assert client.day_payload["dietPlan"]["breakfast"]["items"] == []
 
     def test_move_and_replace_report_not_ok_when_the_day_did_not_change(self) -> None:
@@ -841,6 +843,161 @@ class TestMoveAndReplaceDayItem:
         )
         assert moved["ok"] is False
         assert replaced["ok"] is False
+
+
+def _day_with_a_meal_to_copy() -> dict[str, Any]:
+    """Breakfast with an eaten product (item-1), a recipe (recipe-1) and a custom row (custom-1)."""
+    day = _day_with_product()
+    breakfast = day["dietPlan"]["breakfast"]["items"]
+    breakfast[0]["eaten"] = True
+    breakfast += [_day_with_recipe()["dietPlan"]["breakfast"]["items"][0], _day_with_custom_item()["dietPlan"]["breakfast"]["items"][0]]
+    return day
+
+
+class TestCopyMeal:
+    NEXT_DAY = "2026-01-16"
+
+    def test_copies_every_row_in_its_write_shape_in_one_sync(self) -> None:
+        client = FakeClient(_day_with_a_meal_to_copy())
+        seed = _new_row_id()
+        result = client.planner.copy_meal(
+            TEST_USER, TEST_DAY, from_meal_type="breakfast", to_day=self.NEXT_DAY, to_meal_type="lunch", row_id=seed
+        )
+        assert result["ok"] is True and (result["from_meal"], result["to_date"], result["to_meal"]) == ("breakfast", self.NEXT_DAY, "lunch")
+        [payload] = client.sync_payloads
+        product, recipe, custom = payload[self.NEXT_DAY]["dietPlan"]["lunch"]["items"]
+        assert result["row_ids"] == [product["planDayDietItemId"], recipe["planDayDietItemId"], custom["planDayDietItemId"]]
+        assert result["row_ids"][0] == seed and len(set(result["row_ids"])) == 3
+        assert all(uuid.UUID(row_id).version == 1 for row_id in result["row_ids"])
+        assert {key: value for key, value in product.items() if key != "planDayDietItemId"} == {
+            "foodType": "PRODUCT", "productId": 1001, "measureId": 11, "measureQuantity": 1.0, "ingredientsServing": None,
+            "source": "API", "eaten": True,  # kept from the row
+        }
+        assert {key: value for key, value in recipe.items() if key != "planDayDietItemId"} == {
+            "foodType": "RECIPE", "recipeId": 9999, "measureId": 39, "measureQuantity": 1.0, "ingredientsServing": 1,
+            "source": "API", "eaten": False,
+        }
+        assert (custom["foodType"], custom["name"], custom["energy"], custom["protein"], custom["fat"], custom["carbohydrate"]) == (
+            "CUSTOM_ITEM", "My custom", 200, 10, 5, 25
+        )
+        lunch = client.day_view(self.NEXT_DAY)["dietPlan"]["lunch"]["items"]
+        assert [row["planDayDietItemId"] for row in lunch] == result["row_ids"]
+        assert len(client.day_payload["dietPlan"]["breakfast"]["items"]) == 3  # the source is left as it was
+
+    def test_copies_only_the_listed_rows_with_the_given_eaten(self) -> None:
+        client = FakeClient(_day_with_a_meal_to_copy())
+        result = client.planner.copy_meal(
+            TEST_USER, TEST_DAY, from_meal_type="breakfast", to_day=TEST_DAY, to_meal_type="snack", item_ids=["custom-1", "item-1"], eaten=False
+        )
+        snack = client.day_payload["dietPlan"]["snack"]["items"]
+        assert [(row["planDayDietItemId"], row["foodType"], row["eaten"]) for row in snack] == [
+            (result["row_ids"][0], "PRODUCT", False),  # in the meal's order
+            (result["row_ids"][1], "CUSTOM_ITEM", False),
+        ]
+
+    def test_a_repeat_with_the_same_row_id_writes_nothing_new(self) -> None:
+        client = FakeClient(_day_with_a_meal_to_copy())
+        seed = _new_row_id()
+        first, again = (
+            client.planner.copy_meal(TEST_USER, TEST_DAY, from_meal_type="breakfast", to_day=self.NEXT_DAY, to_meal_type="lunch", row_id=seed)
+            for _ in range(2)  # e.g. the first reply was lost
+        )
+        assert again["ok"] is True and again["row_ids"] == first["row_ids"]
+        lunch = client.day_view(self.NEXT_DAY)["dietPlan"]["lunch"]["items"]
+        assert [row["planDayDietItemId"] for row in lunch] == first["row_ids"]
+
+    def test_a_copy_id_that_another_row_has_is_refused_before_anything_is_sent(self) -> None:
+        client = FakeClient(_day_with_a_meal_to_copy())
+        seed = _new_row_id()
+        arguments: dict[str, Any] = {"from_meal_type": "breakfast", "to_day": self.NEXT_DAY, "to_meal_type": "lunch", "row_id": seed}
+        first = client.planner.copy_meal(TEST_USER, TEST_DAY, **arguments)
+        # the copied recipe was marked eaten since, e.g. on the phone
+        client.planner.update_day_item(TEST_USER, self.NEXT_DAY, meal_type="lunch", item_id=first["row_ids"][1], eaten=True)
+        with pytest.raises(FitatuValidationError, match=rf"row_id {first['row_ids'][1]} already belongs to another row.*do not add it again"):
+            client.planner.copy_meal(TEST_USER, TEST_DAY, **arguments)
+        assert len(client.sync_payloads) == 2  # the copy and the update
+
+    def test_a_row_without_a_write_shape_is_skipped_and_reported(self) -> None:
+        day = _day_with_a_meal_to_copy()
+        ai_row = {**day["dietPlan"]["breakfast"]["items"][1], "planDayDietItemId": "ai-1", "foodType": "RECIPE_AI"}
+        day["dietPlan"]["lunch"]["items"] = [ai_row]
+        client = FakeClient(day)
+        result = client.planner.copy_meal(TEST_USER, TEST_DAY, from_meal_type="lunch", to_day=self.NEXT_DAY)
+        assert (result["ok"], result["row_ids"], [row["planDayDietItemId"] for row in result["skipped"]]) == (False, [], ["ai-1"])
+        assert client.sync_payloads == []
+
+    def test_mistakes_raise_before_anything_is_sent(self) -> None:
+        client = FakeClient(_day_with_a_meal_to_copy())
+        planner = client.planner
+        with pytest.raises(FitatuValidationError, match="not onto itself"):
+            planner.copy_meal(TEST_USER, TEST_DAY, from_meal_type="breakfast", to_day=TEST_DAY)
+        with pytest.raises(FitatuNotFoundError, match="not in breakfast.*ghost.*item-1"):
+            planner.copy_meal(TEST_USER, TEST_DAY, from_meal_type="breakfast", to_day=self.NEXT_DAY, item_ids=["item-1", "ghost"])
+        with pytest.raises(FitatuNotFoundError, match="lunch on 2026-01-15 has no rows"):
+            planner.copy_meal(TEST_USER, TEST_DAY, from_meal_type="lunch", to_day=self.NEXT_DAY)
+        with pytest.raises(FitatuNotFoundError, match="dinner"):
+            planner.copy_meal(TEST_USER, TEST_DAY, from_meal_type="breakfast", to_day=self.NEXT_DAY, to_meal_type="dinner")
+        with pytest.raises(FitatuValidationError, match="at least one row"):
+            planner.copy_meal(TEST_USER, TEST_DAY, from_meal_type="breakfast", to_day=self.NEXT_DAY, item_ids=[])
+        with pytest.raises(FitatuValidationError, match="UUID v1"):
+            planner.copy_meal(TEST_USER, TEST_DAY, from_meal_type="breakfast", to_day=self.NEXT_DAY, row_id=str(uuid.uuid4()))
+        assert client.sync_payloads == []
+
+
+class TestAddFoods:
+    ITEMS: list[dict[str, Any]] = [{"product_id": 1001, "measure_id": 11, "measure_quantity": 2}, {"recipe_id": 9999}]
+
+    def test_adds_every_item_in_one_sync_as_the_single_adds_send_it(self) -> None:
+        client = FakeClient(_empty_day())
+        seed = _new_row_id()
+        result = client.planner.add_foods_to_day_meal(TEST_USER, TEST_DAY, meal_type="lunch", items=self.ITEMS, eaten=True, row_id=seed)
+        [payload] = client.sync_payloads
+        sent = payload[TEST_DAY.isoformat()]["dietPlan"]["lunch"]["items"]
+        assert (result["ok"], result["meal"], result["added_items"]) == (True, "lunch", sent)
+        assert result["row_ids"] == [row["planDayDietItemId"] for row in sent] and result["row_ids"][0] == seed
+        single = FakeClient(_empty_day()).planner
+        common: dict[str, Any] = {"meal_type": "lunch", "eaten": True}
+        assert sent == [
+            single.add_product_to_day_meal(TEST_USER, TEST_DAY, product_id=1001, measure_id=11, measure_quantity=2, row_id=seed, **common)["added_item"],
+            single.add_recipe_to_day_meal(TEST_USER, TEST_DAY, recipe_id=9999, row_id=result["row_ids"][1], **common)["added_item"],
+        ]
+        assert uuid.UUID(result["row_ids"][1]).version == 1
+
+    def test_a_repeat_with_the_same_row_id_writes_the_same_rows(self) -> None:
+        client = FakeClient(_empty_day())
+        arguments: dict[str, Any] = {"meal_type": "lunch", "items": self.ITEMS, "row_id": _new_row_id()}
+        first, again = (client.planner.add_foods_to_day_meal(TEST_USER, TEST_DAY, **arguments) for _ in range(2))
+        assert again["row_ids"] == first["row_ids"]
+        assert [row["planDayDietItemId"] for row in client.day_payload["dietPlan"]["lunch"]["items"]] == first["row_ids"]
+
+    def test_an_id_another_row_has_is_refused(self) -> None:
+        client = FakeClient(_empty_day())
+        seed = _new_row_id()
+        client.planner.add_custom_item_to_day_meal(
+            TEST_USER, TEST_DAY, meal_type="lunch", name="X", calories=1, protein_g=0, fat_g=0, carbs_g=0, row_id=seed
+        )
+        with pytest.raises(FitatuValidationError, match=f"row_id {seed} already belongs to another row"):
+            client.planner.add_foods_to_day_meal(TEST_USER, TEST_DAY, meal_type="lunch", items=self.ITEMS, row_id=seed)
+        assert len(client.sync_payloads) == 1
+
+    def test_mistakes_raise_before_anything_is_sent(self) -> None:
+        client = FakeClient(_empty_day())
+        planner = client.planner
+        product = self.ITEMS[0]
+        with pytest.raises(FitatuValidationError, match=r"items\[1\]: measure_quantity must be > 0"):
+            planner.add_foods_to_day_meal(TEST_USER, TEST_DAY, meal_type="lunch", items=[product, {**product, "measure_quantity": 0}])
+        with pytest.raises(FitatuValidationError, match=r"items\[0\]: .*unexpected keyword argument 'unit'"):
+            planner.add_foods_to_day_meal(TEST_USER, TEST_DAY, meal_type="lunch", items=[{**product, "unit": "g"}])
+        with pytest.raises(FitatuValidationError, match=r"items\[0\]: .*measure_id"):
+            planner.add_foods_to_day_meal(TEST_USER, TEST_DAY, meal_type="lunch", items=[{"product_id": 1001}])
+        with pytest.raises(FitatuValidationError, match="at least one"):
+            planner.add_foods_to_day_meal(TEST_USER, TEST_DAY, meal_type="lunch", items=[])
+        with pytest.raises(FitatuValidationError, match="UUID v1"):
+            planner.add_foods_to_day_meal(TEST_USER, TEST_DAY, meal_type="lunch", items=self.ITEMS, row_id=str(uuid.uuid4()))
+        assert client.requests == []
+        with pytest.raises(FitatuNotFoundError, match="dinner"):
+            planner.add_foods_to_day_meal(TEST_USER, TEST_DAY, meal_type="dinner", items=self.ITEMS)
+        assert client.sync_payloads == []
 
 
 class TestWriteValidation:
@@ -896,15 +1053,15 @@ class TestOneNamePerConcept:
             TEST_USER, TEST_DAY, meal_type="lunch", name="Soup", calories=90, protein_g=3, fat_g=2, carbs_g=12
         )
         moved = planner.move_day_item(
-            TEST_USER, TEST_DAY, from_meal_type="lunch", item_id=added["rowId"], to_meal_type="snack"
+            TEST_USER, TEST_DAY, from_meal_type="lunch", item_id=added["row_id"], to_meal_type="snack"
         )
         replaced = planner.replace_day_item_with_custom_item(
-            TEST_USER, TEST_DAY, meal_type="snack", item_id=moved["rowId"], name="Stew", calories=200, protein_g=9, fat_g=8, carbs_g=20
+            TEST_USER, TEST_DAY, meal_type="snack", item_id=moved["row_id"], name="Stew", calories=200, protein_g=9, fat_g=8, carbs_g=20
         )
-        assert added["rowId"] == added["addedItem"]["planDayDietItemId"]
-        assert len({added["rowId"], moved["rowId"], replaced["rowId"]}) == 3
+        assert added["row_id"] == added["added_item"]["planDayDietItemId"]
+        assert len({added["row_id"], moved["row_id"], replaced["row_id"]}) == 3
         snack = client.day_payload["dietPlan"]["snack"]["items"]
-        assert [row["planDayDietItemId"] for row in snack] == [replaced["rowId"]]
+        assert [row["planDayDietItemId"] for row in snack] == [replaced["row_id"]]
 
 
 # ---------------------------------------------------------------------------
@@ -917,17 +1074,17 @@ class TestClassifyDayItemForRemoval:
         client = FakeClient(_day_with_product())
         result = client.planner.classify_day_item_for_removal(TEST_USER, TEST_DAY, meal_type="breakfast", item_id="item-1")
         assert result["found"] is True
-        assert result["resolvedKind"] == "normal_item"
+        assert result["resolved_kind"] == "normal_item"
 
     def test_custom_add_classified_correctly(self) -> None:
         client = FakeClient(_day_with_custom_item(source="WEB", quantity=100.0))
         result = client.planner.classify_day_item_for_removal(TEST_USER, TEST_DAY, meal_type="breakfast", item_id="custom-1")
-        assert result["resolvedKind"] == "custom_add_item"
+        assert result["resolved_kind"] == "custom_add_item"
 
     def test_custom_api_small_qty_classified_recipe_like(self) -> None:
         client = FakeClient(_day_with_custom_item(source="API", quantity=1.0))
         result = client.planner.classify_day_item_for_removal(TEST_USER, TEST_DAY, meal_type="breakfast", item_id="custom-1")
-        assert result["resolvedKind"] == "custom_recipe_item"
+        assert result["resolved_kind"] == "custom_recipe_item"
 
     def test_not_found_lists_the_day_rows(self) -> None:
         client = FakeClient(_day_with_product())
@@ -996,7 +1153,7 @@ class TestRemovalChecksAndRollback:
             client = FakeClient(day)
             result = client.planner.remove_day_item(TEST_USER, TEST_DAY, meal_type="breakfast", item_id=item_id)
             assert result["ok"] is True
-            assert result["cleanupMode"] == "removed"
+            assert result["cleanup_mode"] == "removed"
 
     def test_remove_checks_the_whole_day_when_the_row_is_in_another_meal(self) -> None:
         day = _day_with_product(meal="dinner")
@@ -1006,7 +1163,7 @@ class TestRemovalChecksAndRollback:
         result = client.planner.remove_day_item(TEST_USER, TEST_DAY, meal_type="breakfast", item_id="item-1")
 
         assert result["ok"] is False
-        assert result["removedIdAbsentAfterSync"] is False
+        assert result["removed_absent_after_sync"] is False
 
     def test_rollback_sends_only_a_deleted_at_marker(self) -> None:
         day = _day_with_product()
@@ -1020,7 +1177,7 @@ class TestRemovalChecksAndRollback:
         )
 
         assert result["ok"] is True
-        assert result["cleanupMode"] == "removed"
+        assert result["cleanup_mode"] == "removed"
         sent = client.last_sync_payload[TEST_DAY.isoformat()]
         assert list(sent) == ["dietPlan"]
         assert [row["planDayDietItemId"] for row in sent["dietPlan"]["breakfast"]["items"]] == ["item-1"]
@@ -1031,10 +1188,10 @@ class TestRemovalChecksAndRollback:
         client = FakeClient(_day_with_product())  # user's own oats: item-1, product 1001, in breakfast
         added = client.planner.add_product_to_day_meal(TEST_USER, TEST_DAY, meal_type="breakfast", product_id=1001, measure_id=11)
 
-        first = client.planner.rollback_added_item(TEST_USER, TEST_DAY, meal_type="breakfast", item_id=added["rowId"])
-        again = client.planner.rollback_added_item(TEST_USER, TEST_DAY, meal_type="breakfast", item_id=added["rowId"])
+        first = client.planner.rollback_added_item(TEST_USER, TEST_DAY, meal_type="breakfast", item_id=added["row_id"])
+        again = client.planner.rollback_added_item(TEST_USER, TEST_DAY, meal_type="breakfast", item_id=added["row_id"])
 
-        assert (first["ok"], first["removedId"]) == (True, added["rowId"])
+        assert (first["ok"], first["removed_id"]) == (True, added["row_id"])
         assert (again["ok"], again["reason"]) == (False, "item_not_found")
         assert [row["planDayDietItemId"] for row in client.day_payload["dietPlan"]["breakfast"]["items"]] == ["item-1"]
 
@@ -1063,7 +1220,7 @@ class TestRemovalChecksAndRollback:
         ]
         client = FakeClient(day)
         result = client.planner.remove_day_item(TEST_USER, TEST_DAY, meal_type="lunch", item_id=1001)
-        assert result["removedId"] == "lunch-oats"
+        assert result["removed_id"] == "lunch-oats"
 
     def test_a_product_logged_twice_is_never_picked_by_guess(self) -> None:
         day = _day_with_product(item_id="oats-1")
@@ -1079,7 +1236,7 @@ class TestRemovalChecksAndRollback:
             with pytest.raises(FitatuValidationError, match=r"matches 2 rows in breakfast.*oats-1 .*oats-2 "):
                 call()
         assert client.sync_payloads == []
-        assert planner.remove_day_item(TEST_USER, TEST_DAY, meal_type="breakfast", item_id="oats-2")["removedId"] == "oats-2"
+        assert planner.remove_day_item(TEST_USER, TEST_DAY, meal_type="breakfast", item_id="oats-2")["removed_id"] == "oats-2"
 
     def test_a_row_id_is_found_in_any_meal_but_a_product_id_only_in_the_given_one(self) -> None:
         client = FakeClient(_day_with_product())  # item-1 / product 1001 in breakfast
@@ -1123,8 +1280,8 @@ class TestRemoveDayItemsByKind:
     def test_removes_all_matching_kind(self) -> None:
         client = FakeClient(self._multi_item_payload())
         result = client.planner.remove_day_items_by_kind(TEST_USER, TEST_DAY, item_kind="normal_item", all_meals=True)
-        assert result["targetedCount"] == 2
-        assert result["removedCount"] == 2
+        assert result["targeted_count"] == 2
+        assert result["removed_count"] == 2
 
     def test_invalid_kind_raises(self) -> None:
         client = FakeClient(self._multi_item_payload())
@@ -1134,12 +1291,12 @@ class TestRemoveDayItemsByKind:
     def test_max_items_limits_removal(self) -> None:
         client = FakeClient(self._multi_item_payload())
         result = client.planner.remove_day_items_by_kind(TEST_USER, TEST_DAY, item_kind="normal_item", all_meals=True, max_items=1)
-        assert result["targetedCount"] == 1
+        assert result["targeted_count"] == 1
 
     def test_auto_kind_targets_all(self) -> None:
         client = FakeClient(self._multi_item_payload())
         result = client.planner.remove_day_items_by_kind(TEST_USER, TEST_DAY, item_kind="auto", all_meals=True)
-        assert result["targetedCount"] == 2
+        assert result["targeted_count"] == 2
 
     def test_meal_filter_applied(self) -> None:
         payload = deepcopy(self._multi_item_payload())
@@ -1148,7 +1305,7 @@ class TestRemoveDayItemsByKind:
         }
         client = FakeClient(payload)
         result = client.planner.remove_day_items_by_kind(TEST_USER, TEST_DAY, item_kind="normal_item", meal_type="breakfast")
-        assert result["targetedCount"] == 2
+        assert result["targeted_count"] == 2
 
     @pytest.mark.parametrize("kind", ["auto", "normal_item", "custom_add_item", "custom_recipe_item"])
     def test_the_whole_day_must_be_asked_for(self, kind: str) -> None:
@@ -1164,8 +1321,8 @@ class TestRemoveDayItemsByKind:
         result = client.planner.remove_day_items_by_kind(
             TEST_USER, TEST_DAY, item_kind="auto", all_meals=True, row_ids=["p2", "not-there"]
         )
-        assert [attempt["itemId"] for attempt in result["attempts"]] == ["p2"]
-        assert (result["ok"], result["missingRowIds"]) == (False, ["not-there"])
+        assert [attempt["item_id"] for attempt in result["attempts"]] == ["p2"]
+        assert (result["ok"], result["missing_row_ids"]) == (False, ["not-there"])
         assert [row["planDayDietItemId"] for row in client.day_payload["dietPlan"]["breakfast"]["items"]] == ["p1"]
 
     def test_a_requested_row_of_another_kind_is_reported_not_skipped(self) -> None:
@@ -1173,18 +1330,18 @@ class TestRemoveDayItemsByKind:
         added = client.planner.add_recipe_to_day_meal(TEST_USER, TEST_DAY, meal_type="lunch", recipe_id=9999)
         for dry_run in (True, False):
             result = client.planner.remove_day_items_by_kind(
-                TEST_USER, TEST_DAY, item_kind="custom_recipe_item", all_meals=True, row_ids=[added["rowId"]], dry_run=dry_run
+                TEST_USER, TEST_DAY, item_kind="custom_recipe_item", all_meals=True, row_ids=[added["row_id"]], dry_run=dry_run
             )
-            assert (result["ok"], result["targetedCount"], result["missingRowIds"]) == (False, 0, [added["rowId"]])
-        assert [row["planDayDietItemId"] for row in client.day_payload["dietPlan"]["lunch"]["items"]] == [added["rowId"]]
+            assert (result["ok"], result["targeted_count"], result["missing_row_ids"]) == (False, 0, [added["row_id"]])
+        assert [row["planDayDietItemId"] for row in client.day_payload["dietPlan"]["lunch"]["items"]] == [added["row_id"]]
 
     def test_dry_run_lists_the_targets_and_sends_nothing(self) -> None:
         client = FakeClient(self._multi_item_payload())
         result = client.planner.remove_day_items_by_kind(
             TEST_USER, TEST_DAY, item_kind="normal_item", meal_type="breakfast", max_items=1, dry_run=True
         )
-        assert result["dryRun"] is True
-        assert [row["itemId"] for row in result["targets"]] == ["p1"]
+        assert result["dry_run"] is True
+        assert [row["item_id"] for row in result["targets"]] == ["p1"]
         assert client.sync_payloads == []
         assert len(client.day_payload["dietPlan"]["breakfast"]["items"]) == 2
 
@@ -1196,7 +1353,7 @@ class TestRemoveDayItemsByKind:
     def test_empty_day_returns_zero(self) -> None:
         client = FakeClient(_empty_day())
         result = client.planner.remove_day_items_by_kind(TEST_USER, TEST_DAY, item_kind="auto", all_meals=True)
-        assert result["targetedCount"] == 0
+        assert result["targeted_count"] == 0
         assert result["ok"] is True
 
 
@@ -1227,8 +1384,8 @@ class TestResolveProductMeasure:
             product_id=1001, requested_amount=100, requested_unit="g"
         )
         assert result["strategy"] == "direct_unit_match"
-        assert result["measureId"] == 10
-        assert result["measureQuantity"] == pytest.approx(100.0)
+        assert result["measure_id"] == 10
+        assert result["measure_quantity"] == pytest.approx(100.0)
 
     def test_converted_from_weight(self) -> None:
         product = self._product_with_measures(
@@ -1239,7 +1396,7 @@ class TestResolveProductMeasure:
             product_id=1001, requested_amount=100, requested_unit="g"
         )
         assert result["strategy"] == "converted_from_weight"
-        assert result["measureQuantity"] == pytest.approx(0.5)
+        assert result["measure_quantity"] == pytest.approx(0.5)
 
     def test_direct_match_ml(self) -> None:
         product = self._product_with_measures(
@@ -1251,7 +1408,7 @@ class TestResolveProductMeasure:
             product_id=1001, requested_amount=200, requested_unit="ml"
         )
         assert result["strategy"] == "direct_unit_match"
-        assert result["measureQuantity"] == pytest.approx(200.0)
+        assert result["measure_quantity"] == pytest.approx(200.0)
 
     def test_strict_measure_raises_on_no_match(self) -> None:
         # No weight info on any measure, no "ml"-named measure → strict ml resolution must raise
@@ -1302,7 +1459,7 @@ class TestResolveProductMeasure:
             search_product=search_item,
         )
         assert result["strategy"] == "fallback_search_measure"
-        assert result["measureId"] == 99
+        assert result["measure_id"] == 99
 
     def test_direct_match_from_simple_measures(self) -> None:
         product = self._product_with_measures(
@@ -1316,8 +1473,8 @@ class TestResolveProductMeasure:
             requested_unit="lyzeczka",
         )
         assert result["strategy"] == "direct_unit_match_simpleMeasures"
-        assert result["measureId"] == 19
-        assert result["measureQuantity"] == pytest.approx(2.0)
+        assert result["measure_id"] == 19
+        assert result["measure_quantity"] == pytest.approx(2.0)
 
     def test_converts_grams_through_simple_measure_when_no_gram_measure(self) -> None:
         product = self._product_with_measures(
@@ -1331,9 +1488,9 @@ class TestResolveProductMeasure:
             requested_unit="g",
         )
         assert result["strategy"] == "converted_from_weight"
-        assert result["measureId"] == 19
-        assert result["measureName"] == "łyżeczka"
-        assert result["measureQuantity"] == pytest.approx(40.0)
+        assert result["measure_id"] == 19
+        assert result["measure_name"] == "łyżeczka"
+        assert result["measure_quantity"] == pytest.approx(40.0)
 
     def test_converts_ml_through_simple_measure_capacity(self) -> None:
         product = self._product_with_measures(
@@ -1347,8 +1504,8 @@ class TestResolveProductMeasure:
             requested_unit="ml",
         )
         assert result["strategy"] == "converted_from_capacity"
-        assert result["measureId"] == 32
-        assert result["measureQuantity"] == pytest.approx(2.0)
+        assert result["measure_id"] == 32
+        assert result["measure_quantity"] == pytest.approx(2.0)
 
     def test_direct_match_from_search_measure(self) -> None:
         product = self._product_with_measures(measures=[{"id": 1, "name": "g", "weightPerUnit": 1.0}])
@@ -1368,8 +1525,8 @@ class TestResolveProductMeasure:
             search_product=search_item,
         )
         assert result["strategy"] == "direct_unit_match_searchMeasure"
-        assert result["measureId"] == 77
-        assert result["measureQuantity"] == pytest.approx(3.0)
+        assert result["measure_id"] == 77
+        assert result["measure_quantity"] == pytest.approx(3.0)
 
     def test_no_measures_strict_raises(self) -> None:
         product = self._product_with_measures(measures=[])
@@ -1395,7 +1552,7 @@ class TestResolveProductMeasure:
         result = client.planner.resolve_product_measure(
             product_id=1001, requested_amount=50, requested_unit="g"
         )
-        assert result["productId"] == 1001
+        assert result["product_id"] == 1001
 
 
 # ---------------------------------------------------------------------------
@@ -1408,12 +1565,12 @@ class TestInputsAndErrors:
         client = FakeClient(_day_with_product())
         day = TEST_DAY.isoformat()
         added = client.planner.add_product_to_day_meal(TEST_USER, day, meal_type="lunch", product_id=7, measure_id=1)
-        assert client.planner.get_meal(TEST_USER, day, meal_type="lunch")["items"][0]["planDayDietItemId"] == added["rowId"]
-        assert client.planner.remove_day_item(TEST_USER, day, meal_type="lunch", item_id=added["rowId"])["ok"] is True
+        assert client.planner.get_meal(TEST_USER, day, meal_type="lunch")["items"][0]["planDayDietItemId"] == added["row_id"]
+        assert client.planner.remove_day_item(TEST_USER, day, meal_type="lunch", item_id=added["row_id"])["ok"] is True
         moved = client.planner.move_day_item(
             TEST_USER, day, from_meal_type="breakfast", item_id="item-1", to_day="2026-01-16"
         )
-        assert moved["toDate"] == "2026-01-16"
+        assert moved["to_date"] == "2026-01-16"
 
     @pytest.mark.parametrize("day", ["15.01.2026", "2026-13-01", 20260115, None])
     def test_a_bad_day_fails_before_any_request(self, day: Any) -> None:
@@ -1451,6 +1608,13 @@ class TestInputsAndErrors:
     def test_a_search_hit_that_is_neither_a_product_nor_a_recipe_is_refused(self, hit_type: str | None) -> None:
         client = FakeClient(_empty_day(), search_results={"x": [{"type": hit_type, "foodId": 777, "name": "X"}]})
         with pytest.raises(FitatuValidationError, match=f"'X' is of type {hit_type!r}"):
+            client.planner.add_search_result_to_day_meal(TEST_USER, TEST_DAY, meal_type="breakfast", phrase="x")
+        assert client.sync_payloads == []
+
+    def test_a_search_hit_without_a_measure_is_refused_not_logged_in_measure_1(self) -> None:
+        # The sync takes any measure id: measure 1 would store the quantity in whatever that is.
+        client = FakeClient(_empty_day(), search_results={"x": [{"type": "PRODUCT", "foodId": 777, "name": "X"}]})
+        with pytest.raises(FitatuValidationError, match="'X' names no measure; for a product pass measure_amount"):
             client.planner.add_search_result_to_day_meal(TEST_USER, TEST_DAY, meal_type="breakfast", phrase="x")
         assert client.sync_payloads == []
 
@@ -1496,13 +1660,13 @@ class TestRetrySafeWrites:
             result = client.planner.add_product_to_day_meal(
                 TEST_USER, TEST_DAY, meal_type="breakfast", product_id=7, measure_id=1, row_id=row_id
             )
-        assert result["rowId"] == row_id
+        assert result["row_id"] == row_id
         assert [row["planDayDietItemId"] for row in client.day_payload["dietPlan"]["breakfast"]["items"]] == [row_id]
 
     def test_a_row_id_that_belongs_to_another_row_is_refused(self) -> None:
         client = FakeClient(_empty_day())
         planner = client.planner
-        row_id = planner.add_product_to_day_meal(TEST_USER, TEST_DAY, meal_type="breakfast", product_id=7, measure_id=1)["rowId"]
+        row_id = planner.add_product_to_day_meal(TEST_USER, TEST_DAY, meal_type="breakfast", product_id=7, measure_id=1)["row_id"]
         other_rows = (
             lambda: planner.add_custom_item_to_day_meal(
                 TEST_USER, TEST_DAY, meal_type="breakfast", name="Bar", calories=1, protein_g=0, fat_g=0, carbs_g=0, row_id=row_id
@@ -1543,7 +1707,7 @@ class TestRetrySafeWrites:
         )
         for add in adds:
             row_id = _new_row_id()
-            assert add(row_id)["rowId"] == row_id
+            assert add(row_id)["row_id"] == row_id
             assert row_id in {row["planDayDietItemId"] for row in client.day_payload["dietPlan"]["breakfast"]["items"]}
 
     @pytest.mark.parametrize("row_id", [str(uuid.uuid4()), "row-1", ""])
@@ -1583,7 +1747,7 @@ class TestActivities:
         for _ in range(2):  # a retry with the same row_id does not log the workout twice
             added = client.planner.add_activity(TEST_USER, TEST_DAY.isoformat(), activity_id="535", minutes=45, energy=400, row_id=row_id)
         assert added["ok"] is True
-        assert added["addedActivity"]["activityId"] == 535
+        assert added["added_activity"]["activityId"] == 535
         assert [a["uuid"] for a in client.day_payload["activityPlan"]] == [row_id]
 
         removed = client.planner.remove_activity(TEST_USER, TEST_DAY, item_id=row_id)
@@ -1610,7 +1774,7 @@ class TestActivities:
 
     def test_a_row_id_that_belongs_to_another_activity_is_refused(self) -> None:
         client = FakeClient(_empty_day())
-        row_id = client.planner.add_activity(TEST_USER, TEST_DAY, activity_id=535, minutes=30, energy=300)["rowId"]
+        row_id = client.planner.add_activity(TEST_USER, TEST_DAY, activity_id=535, minutes=30, energy=300)["row_id"]
         for other in ({"activity_id": 1322}, {"minutes": 5}, {"energy": 10}):
             with pytest.raises(FitatuValidationError, match=rf"row_id {row_id} already belongs to another activity.*do not add it again"):
                 client.planner.add_activity(TEST_USER, TEST_DAY, **{"activity_id": 535, "minutes": 30, "energy": 300, **other}, row_id=row_id)
@@ -1621,7 +1785,7 @@ class TestActivities:
         added = client.planner.add_activity(TEST_USER, TEST_DAY, activity_id=535, minutes=30, energy=300)
         result = client.planner.remove_activity(TEST_USER, TEST_DAY, item_id="ghost")
         assert (result["ok"], result["reason"]) == (False, "item_not_found")
-        assert result["message"].endswith(f"activities on this day: {added['rowId']} (None, 300 kcal)")
+        assert result["message"].endswith(f"activities on this day: {added['row_id']} (None, 300 kcal)")
         assert len(client.sync_payloads) == 1
 
     def test_ok_is_false_when_the_day_did_not_change(self) -> None:
@@ -1635,3 +1799,13 @@ def test_row_ids_are_uuid_v1_without_the_machine_mac() -> None:
     assert all(row_id.version == 1 for row_id in ids)
     assert all(row_id.node & (1 << 40) for row_id in ids)  # multicast bit = random node
     assert uuid.getnode() not in {row_id.node for row_id in ids}
+
+
+def test_every_planner_argument_after_user_id_and_day_is_keyword_only() -> None:
+    """The convention docs/API_REFERENCE.md states; a positional one could not be made keyword-only later."""
+    positional = {}
+    for name, method in inspect.getmembers(PlannerModule, inspect.isfunction):
+        params = list(inspect.signature(method).parameters.values())
+        if not name.startswith("_") and [p.name for p in params[1:3]] == ["user_id", "day"]:
+            positional[name] = [p.name for p in params[3:] if p.kind is not p.KEYWORD_ONLY]
+    assert "set_note" in positional and not any(positional.values()), positional

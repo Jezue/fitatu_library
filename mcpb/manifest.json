@@ -1,0 +1,56 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/schemas/mcpb-manifest-v0.4.schema.json",
+  "manifest_version": "0.4",
+  "name": "fitatu",
+  "display_name": "Fitatu",
+  "description": "Unofficial Fitatu calorie counter: read and log food, weight, water and workouts.",
+  "long_description": "Your Fitatu food diary as tools: read a day, check what is left against your goals, search the food catalog, log meals, weight, water and workouts, and get weekly reports. Unofficial: Fitatu's private API can change at any time. Log in once with `fitatu-api login` (`uvx --from fitatu-api fitatu-api login`), then pick the session file it wrote below. Tool results, including what you ate, go to the model provider.",
+  "author": {
+    "name": "Adam Gajewski"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Jezue/fitatu_library"
+  },
+  "homepage": "https://github.com/Jezue/fitatu_library",
+  "documentation": "https://github.com/Jezue/fitatu_library/blob/main/docs/AGENTS.md#mcp",
+  "support": "https://github.com/Jezue/fitatu_library/issues",
+  "server": {
+    "type": "uv",
+    "entry_point": "server/main.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "server/main.py"],
+      "env": {
+        "FITATU_SESSION": "${user_config.session_file}",
+        "FITATU_MCP_READ_ONLY": "${user_config.read_only}"
+      }
+    }
+  },
+  "tools_generated": false,
+  "prompts_generated": true,
+  "keywords": ["fitatu", "calories", "nutrition", "food diary", "kalorie", "dieta"],
+  "license": "MIT",
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "python": ">=3.11"
+    }
+  },
+  "user_config": {
+    "session_file": {
+      "type": "file",
+      "title": "Session file",
+      "description": "The file `fitatu-api login` wrote: ~/.fitatu/session.json unless you gave it another path with -o.",
+      "required": false,
+      "default": "${HOME}/.fitatu/session.json"
+    },
+    "read_only": {
+      "type": "boolean",
+      "title": "Read only",
+      "description": "Serve only the tools that read the diary, so the model cannot change it.",
+      "required": false,
+      "default": false
+    }
+  }
+}

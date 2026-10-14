@@ -1,16 +1,20 @@
-"""The docs link only to files that exist, and AGENTS.md lists exactly the agent tools."""
+"""The docs link only to files that exist, AGENTS.md lists exactly the agent tools, its offline example runs,
+and server.json matches the release."""
 
 from __future__ import annotations
 
+import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
+from fitatu_api import __version__
 from fitatu_api.agent import TOOLS
 
 ROOT = Path(__file__).resolve().parents[1]
-DOCS = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
+DOCS = [ROOT / "README.md", ROOT / "CONTRIBUTING.md", ROOT / "SECURITY.md", *sorted((ROOT / "docs").glob("*.md"))]
 BLOB = "https://github.com/Jezue/fitatu_library/blob/main/"
 LINK = re.compile(r"\]\(([^)\s]+)\)")
 TOOL_ROW = re.compile(r"^\| `(\w+)` \|.*\| (read|write) \| (yes|no) \| (yes|no) \|$", re.MULTILINE)
@@ -56,3 +60,20 @@ def test_agents_md_lists_every_tool_with_its_annotations() -> None:
         for tool in TOOLS
     }
     assert documented == expected
+
+
+def test_the_offline_example_in_agents_md_runs(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    section = (ROOT / "docs" / "AGENTS.md").read_text(encoding="utf-8").split("## Try it without an account", 1)[1]
+    code = section.split("```python\n", 1)[1].split("```", 1)[0]
+    monkeypatch.chdir(ROOT)
+    monkeypatch.setattr(sys, "path", list(sys.path))  # the example adds tests/ to it
+    exec(compile(code, "docs/AGENTS.md", "exec"), {})
+    out = capsys.readouterr().out
+    assert "'ok': False" not in out and "'energy': 350.0" in out
+
+
+def test_server_json_is_this_version_and_the_readme_claims_its_name() -> None:
+    server = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
+    assert (server["version"], [package["version"] for package in server["packages"]]) == (__version__, [__version__])
+    # The MCP Registry accepts the PyPI package only when its README carries this line.
+    assert f"<!-- mcp-name: {server['name']} -->" in (ROOT / "README.md").read_text(encoding="utf-8")

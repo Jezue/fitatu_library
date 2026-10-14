@@ -1,0 +1,57 @@
+name: Bug report
+description: Something in fitatu-api, the agent tools or fitatu-mcp does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never paste your session file (`~/.fitatu/session.json`), a bearer or refresh token, a
+        password, or the `Authorization` header.** They are full access to your account, and
+        issues are public. Replace your user id, e-mail and food or meal names with neutral
+        values, and keep out anything about your health you would not post publicly.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: 'The output of `fitatu-api --version`, or a commit if installed from GitHub.'
+      placeholder: 0.5.0
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Python, operating system and MCP host
+      placeholder: Python 3.12, Windows 11, Claude Desktop
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: fitatu-api doctor
+      description: The output of `fitatu-api doctor`, run where the problem happens. It prints no token, user id or home directory.
+      render: text
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you ran (the code, the `fitatu-api` command or the tool call with its arguments), what you expected and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: The error
+      description: |
+        The error envelope a tool returned (`{"ok": false, "error": {"error_type", "message", "hint", ...}}`),
+        or the exception and its traceback. Check it for personal values first. A DEBUG log
+        (`fitatu-api --log-level DEBUG ...`, `FITATU_LOG_LEVEL=DEBUG` for fitatu-mcp, or
+        `logging.basicConfig(level=logging.DEBUG)`) holds no tokens, but it does show your
+        user id, dates and search phrases.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: Nothing in this issue is a session file, token, password or other secret.
+          required: true

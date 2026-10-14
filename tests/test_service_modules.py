@@ -367,6 +367,35 @@ class TestFoodsModule:
             FoodsModule(client).set_favorite(USER, "42/../1")
 
 
+class TestPremium:
+    TODAY = date.today()
+
+    @staticmethod
+    def plan(start: str, end: str | None) -> dict[str, Any]:
+        # the live reply's fields, with neutral values
+        return {
+            "id": 1, "startDate": start, "endDate": end, "planName": "Premium", "planGroupName": "premium", "planGroupType": "PREMIUM",
+            "provider": "STORE", "providerId": "x", "duration": "P1Y", "amount": "1.00", "currency": "PLN", "description": None,
+            "lastOriginalTransactionId": "0000",
+        }
+
+    @pytest.mark.parametrize(
+        ("dates", "expected"),
+        [
+            ([], {"active": False, "end_date": None}),
+            ([("2020-01-01 00:00:00", "2020-12-31 23:59:59")], {"active": False, "end_date": None}),  # over
+            ([("2099-01-01", "2099-12-31")], {"active": False, "end_date": None}),  # not started
+            ([("2020-01-01 00:00:00", "2098-01-31T10:00:00+00:00"), ("2020-01-01", "2099-01-31")], {"active": True, "end_date": "2099-01-31"}),
+            ([("2020-01-01", None)], {"active": True, "end_date": None}),  # no end
+        ],
+    )
+    def test_only_whether_a_plan_runs_today_and_until_when(self, dates: list[tuple[str, str | None]], expected: dict[str, Any]) -> None:
+        client = Mock()
+        client.request.return_value = {"subscriptions": [self.plan(start, end) for start, end in dates]}
+        assert UserSettingsModule(client).get_premium(USER) == expected  # nothing else: no prices or transaction ids
+        client.request.assert_called_once_with("GET", f"/users/{USER}/subscriptions")
+
+
 class TestActivitiesAndRevisions:
     def test_activity_search_quotes_the_phrase(self) -> None:
         client = Mock()
