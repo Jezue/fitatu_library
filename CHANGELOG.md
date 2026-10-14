@@ -5,13 +5,16 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
 ## [0.5.0] - 2026-10-14
 
 The release that makes the library usable from an agent. The planner is rebuilt on what the day
 sync endpoint really does, pinned by recorded API responses; sessions live in one file that the
 client keeps up to date; every failure is a typed, explained error; and `FitatuTools` exposes
-the diary as tools. No version has been published to PyPI yet, so unused and misleading surface
-was removed instead of deprecated. See "Upgrading from 0.4" at the end of this section.
+the diary as tools. 0.5.0 is the first version on PyPI (0.1.0 to 0.4.0 were only ever in git,
+untagged), so unused and misleading surface was removed instead of deprecated. See "Upgrading
+from 0.4" at the end of this section.
 
 ### Added
 
@@ -175,8 +178,9 @@ was removed instead of deprecated. See "Upgrading from 0.4" at the end of this s
   in its answer; it prints the score and how to run it when there is no key. Not run in CI
 - `mcpb/` and `scripts/build_mcpb.py`: a Claude Desktop bundle (`dist/fitatu-<version>.mcpb`,
   MCPB manifest 0.4, server type `uv`) with the session file and a read-only checkbox as its
-  settings; it installs the released `fitatu-api[mcp]` from PyPI. The manifest validates
-  against the bundle schema, but the bundle has not been tried in Claude Desktop yet
+  settings; it installs the released `fitatu-api[mcp]` from PyPI and is attached to the GitHub
+  release. The manifest validates against the bundle schema and the bundle starts with `uv run`
+  the way the host does; installing it through the Claude Desktop UI is not tested yet
 - `describe_error()`: any exception as a JSON-safe dict with `error_type`, `retryable` and a
   `hint`, used by `FitatuTools` and `FitatuLibrary`; a 429 without `Retry-After` gets a hint to
   wait a few seconds and retry once, and a 403 whose body is an HTML page (a firewall such as
@@ -675,3 +679,6 @@ Initial packaged repository extracted from the workspace integration code.
 - compatibility import paths for legacy module names
 - initial test suite for public API and resilience behavior
 - project metadata, MIT license, README, and contributor docs
+
+[Unreleased]: https://github.com/Jezue/fitatu_library/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Jezue/fitatu_library/releases/tag/v0.5.0

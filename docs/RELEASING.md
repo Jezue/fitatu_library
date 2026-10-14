@@ -8,16 +8,15 @@ anywhere. Once the version is on PyPI, a last job publishes `server.json` to the
 job may fail without failing the release: the package is already out, and the job can be
 re-run on its own.
 
-## One-time setup (repository owner)
+## One-time setup (repository owner, done for 0.5.0)
 
-1. On pypi.org, under *Your account > Publishing*, add a pending trusted publisher for the
-   project before the first release: PyPI project name `fitatu-api`, owner `Jezue`,
-   repository `fitatu_library`, workflow `release.yml`, environment `pypi`. The first
-   successful run creates the project; a pending publisher does not reserve the name until
-   then.
-2. On GitHub, under *Settings > Environments*, create the environment `pypi`. Adding
-   yourself as a required reviewer makes every publish wait for your approval, and a
-   deployment rule for tags `v*` keeps other refs out.
+1. PyPI trusted publishing for `fitatu-api` is set up (owner `Jezue`, repository
+   `fitatu_library`, workflow `release.yml`, environment `pypi`), under the project's
+   *Manage > Publishing* on pypi.org. Redo it only when the repository, the workflow file or
+   the environment is renamed; until it matches again, a release fails at *Publish to PyPI*.
+2. The GitHub environment `pypi` exists (*Settings > Environments*). Adding yourself as a
+   required reviewer makes every publish wait for your approval, and a deployment rule for
+   tags `v*` keeps other refs out.
 3. Optional, for the weekly *Live contract* workflow that tells when Fitatu changes its API:
    the repository secret `FITATU_SESSION_JSON` with a throwaway account's session. Without it
    the workflow skips with a notice; setting it up is in
@@ -50,9 +49,9 @@ re-run on its own.
 2. Set `__version__` in `src/fitatu_api/__init__.py`; the package version is read from it.
    Set the same version twice in `server.json` (`version` and the package's `version`);
    `tests/test_docs.py` fails until they match.
-3. In `CHANGELOG.md`, date the release's section: `## [X.Y.Z] - Unreleased` becomes
-   `## [X.Y.Z] - YYYY-MM-DD` (changes collected under a bare `## [Unreleased]` get that heading
-   instead).
+3. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` and update the link
+   references at the bottom of the file (`[X.Y.Z]` to the release tag, `[Unreleased]` to
+   `compare/vX.Y.Z...HEAD`).
 4. Run the checks CI runs:
 
    ```bash
@@ -88,10 +87,17 @@ re-run on its own.
    publishes the tagged commit's `server.json`; when that file was wrong, publish the fixed one
    by hand with [mcp-publisher](https://github.com/modelcontextprotocol/registry/releases)
    (`mcp-publisher login github`, then `mcp-publisher publish`).
-9. Optional, once `pip install fitatu-api==X.Y.Z` works: build the Claude Desktop bundle with
-   `python scripts/build_mcpb.py` and attach `dist/fitatu-X.Y.Z.mcpb` to the GitHub release. It
-   pins `fitatu-api[mcp]==X.Y.Z`, which the host installs from PyPI, so it is no use before the
-   release is there. Nothing builds it automatically yet.
+9. Once `pip install fitatu-api==X.Y.Z` works, build the Claude Desktop bundle with
+   `python scripts/build_mcpb.py` and create the GitHub release with it (the workflow does not
+   create one), with notes taken from the changelog section:
+
+   ```bash
+   gh release create vX.Y.Z --verify-tag --title "fitatu-api X.Y.Z" --notes-file notes.md dist/fitatu-X.Y.Z.mcpb
+   ```
+
+   The bundle pins `fitatu-api[mcp]==X.Y.Z`, which the host installs from PyPI, so it is no use
+   before the release is there.
+10. Add an empty `## [Unreleased]` above the new section of `CHANGELOG.md` for the next changes.
 
 ## Compatibility policy
 

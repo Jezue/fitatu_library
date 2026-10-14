@@ -610,15 +610,17 @@ Put `"--read-only"` in `args` for the read tools only. For uvx, `command` is the
 Cursor (`~/.cursor/mcp.json`) and other hosts
 that read an `mcpServers` file take the same entry.
 
-**Claude Desktop bundle (`.mcpb`).** `python scripts/build_mcpb.py` builds
-`dist/fitatu-<version>.mcpb` from `mcpb/`: an [MCP bundle](https://github.com/modelcontextprotocol/mcpb)
+**Claude Desktop bundle (`.mcpb`).** Download `fitatu-<version>.mcpb` from the
+[latest release](https://github.com/Jezue/fitatu_library/releases/latest) and open it, or build one with
+`python scripts/build_mcpb.py`, which writes `dist/fitatu-<version>.mcpb` from `mcpb/`: an [MCP bundle](https://github.com/modelcontextprotocol/mcpb)
 (manifest 0.4, server type `uv`) that installs with a double click. Its settings are the session
 file (default `~/.fitatu/session.json`) and a *Read only* checkbox, which `mcpb/server/main.py`
 turns into `--read-only`; the host runs it with `uv run`, which installs `fitatu-api[mcp]` of
 the bundle's version from PyPI, so build it only for a released version. Log in first with
 `fitatu-api login` (or `uvx --from fitatu-api fitatu-api login`). The manifest validates
-against the bundle schema, but the bundle has **not been tried in Claude Desktop yet**; the
-`mcpServers` entry above is the tested way.
+against the MCPB 0.4 schema and the bundle was started with `uv run` the way the host does (40
+tools, 23 with *Read only*); installing it through the Claude Desktop UI is **not tested yet**, so
+the `mcpServers` entry above stays the tested way.
 
 What the server does:
 
