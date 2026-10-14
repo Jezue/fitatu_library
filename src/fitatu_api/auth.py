@@ -17,6 +17,7 @@ from .constants import (
     FITATU_SESSION_CONTEXT_SCHEMA_VERSION,
     WEB_CLIENT_PROFILE,
 )
+from .exceptions import FitatuValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,36 @@ def resolve_session_path(path: str | Path | None = None) -> Path:
     ``$FITATU_SESSION_PATH``), else ``~/.fitatu/session.json``; ``~`` is expanded."""
     raw = path or os.environ.get("FITATU_SESSION") or os.environ.get("FITATU_SESSION_PATH")
     return Path(raw or DEFAULT_SESSION_PATH).expanduser()
+
+
+def client_profile() -> dict[str, str]:
+    """``WEB_CLIENT_PROFILE`` with the keys that ``$FITATU_CLIENT_PROFILE`` (a JSON object) sets.
+
+    For when Fitatu changes the web app's version or key before a release of this library does,
+    e.g. ``FITATU_CLIENT_PROFILE='{"app_version": "4.14.0"}'``.
+    """
+    raw = os.environ.get("FITATU_CLIENT_PROFILE")
+    if not raw:
+        return WEB_CLIENT_PROFILE
+    try:
+        override = json.loads(raw)
+    except ValueError:
+        override = None
+    if not (
+        isinstance(override, dict)
+        and override.keys() <= WEB_CLIENT_PROFILE.keys()
+        and all(isinstance(value, str) and value and value == value.strip() for value in override.values())
+    ):
+        # The value is not quoted: it may hold the API secret.
+        raise FitatuValidationError(
+            f"FITATU_CLIENT_PROFILE must be a JSON object with text values for some of: {', '.join(WEB_CLIENT_PROFILE)}"
+        )
+    return {**WEB_CLIENT_PROFILE, **override}
+
+
+def _profile(key: str, **options: Any) -> Any:
+    """A dataclass field whose default is ``client_profile()[key]``, read when the context is made."""
+    return field(default_factory=lambda: client_profile()[key], **options)
 
 
 def jwt_payload(token: str | None) -> dict[str, Any]:
@@ -53,23 +84,24 @@ class FitatuAuthContext:
     """Runtime auth/session context used by :class:`FitatuApiClient`.
 
     The client identity fields (``api_key`` ... ``user_agent``) default to
-    ``WEB_CLIENT_PROFILE``; the locales and timezone describe the user.
+    ``WEB_CLIENT_PROFILE``, with what ``$FITATU_CLIENT_PROFILE`` overrides (see
+    :func:`client_profile`); the locales and timezone describe the user.
     """
 
     # repr=False keeps secrets out of tracebacks, logs and agent traces that print the context.
     bearer_token: str | None = field(default=None, repr=False)
     refresh_token: str | None = field(default=None, repr=False)
-    api_key: str = WEB_CLIENT_PROFILE["api_key"]
-    api_secret: str = field(default=WEB_CLIENT_PROFILE["api_secret"], repr=False)
-    app_uuid: str = WEB_CLIENT_PROFILE["app_uuid"]
-    api_cluster: str = WEB_CLIENT_PROFILE["api_cluster"]
+    api_key: str = _profile("api_key")
+    api_secret: str = _profile("api_secret", repr=False)
+    app_uuid: str = _profile("app_uuid")
+    api_cluster: str = _profile("api_cluster")
     app_locale: str = "pl_PL"
     app_search_locale: str = "pl_PL"
     app_storage_locale: str = "pl_PL"
     app_timezone: str = "Europe/Warsaw"
-    app_os: str = WEB_CLIENT_PROFILE["app_os"]
-    app_version: str = WEB_CLIENT_PROFILE["app_version"]
-    user_agent: str = WEB_CLIENT_PROFILE["user_agent"]
+    app_os: str = _profile("app_os")
+    app_version: str = _profile("app_version")
+    user_agent: str = _profile("user_agent")
     fitatu_user_id: str | None = None
     # The account's API host; the client fills it in (see FitatuApiClient(base_url=...)).
     base_url: str | None = None

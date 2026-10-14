@@ -5,10 +5,12 @@ from __future__ import annotations
 import base64
 import inspect
 import json
+import os
 import stat
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,6 +28,12 @@ TEST_DATE = date(2026, 1, 15)
 TEST_USER = "99"
 
 
+def _library(*args: Any, **kwargs: Any) -> FitatuLibrary:
+    """``FitatuLibrary(...)``: deprecated, so the warning is asserted rather than silenced."""
+    with pytest.warns(DeprecationWarning, match="FitatuTools"):
+        return FitatuLibrary(*args, **kwargs)
+
+
 @pytest.fixture()
 def client() -> MagicMock:
     client = MagicMock()
@@ -36,7 +44,20 @@ def client() -> MagicMock:
 @pytest.fixture()
 def lib(client: MagicMock) -> Iterator[FitatuLibrary]:
     with patch("fitatu_api.facade.FitatuApiClient", return_value=client):
-        yield FitatuLibrary({"fitatu_user_id": TEST_USER})
+        yield _library({"fitatu_user_id": TEST_USER})
+
+
+def test_constructing_it_warns_once_naming_the_replacements(tmp_path: Path) -> None:
+    session = tmp_path / "session.json"
+    session.write_text(json.dumps({"bearer_token": "t", "refresh_token": "r", "fitatu_user_id": TEST_USER}), encoding="utf-8")
+    for build in (lambda: FitatuLibrary({}), lambda: FitatuLibrary.from_session(session)):
+        with pytest.warns(DeprecationWarning) as caught:
+            build()
+
+        [warning] = caught.list
+        assert ("FitatuTools" in str(warning.message), "FitatuApiClient" in str(warning.message)) == (True, True)
+        assert "removed in fitatu-api 1.0" in str(warning.message)
+        assert warning.filename == __file__  # the caller's line, also through from_session()
 
 
 PUBLIC_METHODS = [name for name, _ in inspect.getmembers(FitatuLibrary, inspect.isfunction) if not name.startswith("_")]
@@ -90,7 +111,7 @@ class TestEnvelope:
     def test_a_session_without_user_id_is_an_auth_error(self, client: MagicMock) -> None:
         client.auth.fitatu_user_id = None
         with patch("fitatu_api.facade.FitatuApiClient", return_value=client):
-            result = FitatuLibrary({}).get_day_summary_via_api(target_date=TEST_DATE)
+            result = _library({}).get_day_summary_via_api(target_date=TEST_DATE)
 
         assert (result["status"], result["error_type"]) == ("error", "auth")
         assert "user id" in result["message"]
@@ -99,11 +120,11 @@ class TestEnvelope:
 
 class TestSharedClient:
     def test_the_context_manager_closes_the_client(self, client: MagicMock) -> None:
-        with patch("fitatu_api.facade.FitatuApiClient", return_value=client), FitatuLibrary({}) as lib:
+        with patch("fitatu_api.facade.FitatuApiClient", return_value=client), _library({}) as lib:
             lib.get_recipe_via_api(recipe_id=1)
 
         client.close.assert_called_once_with()
-        FitatuLibrary({}).close()  # nothing built yet, nothing to close
+        _library({}).close()  # nothing built yet, nothing to close
 
     def test_session_helpers_use_the_shared_client(self, lib: FitatuLibrary, client: MagicMock) -> None:
         client.describe_auth_state.return_value = {"has_bearer_token": False}
@@ -121,13 +142,13 @@ class TestSharedClient:
 
 class TestPlannerWrappers:
     def test_add_product_by_unit_resolves_the_measure(self, lib: FitatuLibrary, client: MagicMock) -> None:
-        client.planner.add_product_to_day_meal_with_unit.return_value = {"ok": True, "rowId": "r1"}
+        client.planner.add_product_to_day_meal_with_unit.return_value = {"ok": True, "row_id": "r1"}
 
         result = lib.add_product_to_day_meal_via_api(
             target_date=TEST_DATE, meal_type="breakfast", product_id=1001, measure_unit="g", measure_amount=180
         )
 
-        assert result == {"status": "ok", "result": {"ok": True, "rowId": "r1"}}
+        assert result == {"status": "ok", "result": {"ok": True, "row_id": "r1"}}
         kwargs = client.planner.add_product_to_day_meal_with_unit.call_args.kwargs
         assert (kwargs["meal_type"], kwargs["amount"], kwargs["unit"]) == ("breakfast", 180, "g")
 
@@ -147,7 +168,7 @@ class TestPlannerWrappers:
         client.planner.add_product_to_day_meal.assert_not_called()
 
     def test_remove_by_kind_and_move_forward_their_scope(self, lib: FitatuLibrary, client: MagicMock) -> None:
-        client.planner.remove_day_items_by_kind.return_value = {"ok": True, "removedCount": 2}
+        client.planner.remove_day_items_by_kind.return_value = {"ok": True, "removed_count": 2}
         client.planner.move_day_item.return_value = {"ok": True}
 
         lib.remove_day_items_by_kind_via_api(target_date=TEST_DATE, item_kind="auto", all_meals=True, max_items=3)
@@ -309,11 +330,13 @@ class TestAccountReads:
         replaced = lib.export_diary_via_api(from_date=TEST_DATE, to_date=TEST_DATE, path=str(target), overwrite=True)
 
         assert written == {"status": "ok", "result": {"format": "csv", "size_bytes": 4, "path": str(target)}}
-        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+        if os.name != "nt":
+            assert stat.S_IMODE(target.stat().st_mode) == 0o600
         assert (refused["status"], "exists" in refused["message"]) == ("error", True)
         assert replaced["status"] == "ok"
         assert target.read_bytes() == b"a,b\n"
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes and symlinks")
     def test_overwrite_makes_a_new_private_file(self, lib: FitatuLibrary, client: MagicMock, tmp_path: Path) -> None:
         client.summary.export_diary.return_value = b"a,b\n"
         shared = tmp_path / "shared.csv"
@@ -342,7 +365,7 @@ class TestAccountReads:
         if overwrite:
             target.write_bytes(b"old export")
 
-        with patch(f"fitatu_api.facade.os.{move}", side_effect=OSError(28, "No space left on device")):
+        with patch(f"fitatu_api._files.os.{move}", side_effect=OSError(28, "No space left on device")):
             failed = lib.export_diary_via_api(from_date=TEST_DATE, to_date=TEST_DATE, path=target, overwrite=overwrite)
 
         assert failed["status"] == "error"

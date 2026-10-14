@@ -1,26 +1,56 @@
-"""High-level convenience facade for common Fitatu flows."""
+"""High-level convenience facade for common Fitatu flows; deprecated, removed in 1.0."""
 
 from __future__ import annotations
 
 import base64
-import os
-import tempfile
+import logging
+import sys
+import warnings
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 from typing import Any
 
+from ._files import write_private_file
 from ._summaries import daily_targets, day_summary
 from ._validation import as_date
 from .auth import FitatuAuthContext
 from .client import FitatuApiClient
-from .exceptions import FitatuApiError, FitatuAuthError, FitatuValidationError, describe_error
+from .exceptions import (
+    FitatuApiError,
+    FitatuAuthError,
+    FitatuValidationError,
+    describe_error,
+    log_caught,
+)
+
+logger = logging.getLogger(__name__)
 
 _BINARY_EXPORT_TYPES = {"pdf": "application/pdf", "xls": "application/vnd.ms-excel"}
+_DEPRECATED = (
+    "FitatuLibrary is deprecated and will be removed in fitatu-api 1.0. Use FitatuTools for results in an "
+    "envelope ({'ok': True, 'data': ...} / {'ok': False, 'error': ...}), or FitatuApiClient for data and "
+    "typed exceptions."
+)
+
+
+def _warn_deprecated() -> None:
+    """Warn once, at the first caller outside this module (the user's line, also through from_session())."""
+    frame, stacklevel = sys._getframe(1), 2
+    while frame.f_back is not None and frame.f_code.co_filename == __file__:
+        frame, stacklevel = frame.f_back, stacklevel + 1
+    warnings.warn(_DEPRECATED, DeprecationWarning, stacklevel=stacklevel)
 
 
 class FitatuLibrary:
     """High-level API-only facade for Fitatu endpoints.
+
+    .. deprecated:: 0.5.0
+        Constructing it (or :meth:`from_session`) emits a ``DeprecationWarning``; it will be
+        removed in 1.0. Use :class:`FitatuTools` for results in an envelope (``{"ok": True,
+        "data": ...}`` / ``{"ok": False, "error": describe_error(exc)}``), or
+        :class:`FitatuApiClient` for data and typed exceptions. Its behaviour and its
+        envelope stay as they are until then.
 
     Every ``*_via_api`` method returns a dict and never raises: ``{"status": "ok",
     "result": ...}``; ``"partial"`` instead of ``"ok"`` whenever ``result["ok"]`` is False
@@ -40,11 +70,11 @@ class FitatuLibrary:
       ``'YYYY-MM-DD'`` strings.
     - ``meal_type`` is a meal key of the day: ``breakfast``, ``second_breakfast``,
       ``lunch``, ``dinner``, ``snack`` or ``supper``.
-    - ``item_id`` names a row already on the day: ``row_id`` in day summaries, ``rowId``
-      in add results.
+    - ``item_id`` names a row already on the day: ``row_id`` in day summaries and in add
+      results.
     - ``row_id`` is an optional UUID v1 for a row being added. Sending the same one again
       updates that row instead of adding a second, so a retried add is safe. The id the
-      row got comes back as ``rowId``.
+      row got comes back as ``row_id``.
     - Energy is in kcal and macronutrients in grams; ``eaten=False`` logs a row as planned.
     - ``source`` is a row's source: ``API``, ``GENERATOR`` or ``FOOD_PROPOSAL``.
 
@@ -65,6 +95,7 @@ class FitatuLibrary:
         timeout_seconds: int = 25,
         session_path: str | Path | None = None,
     ) -> None:
+        _warn_deprecated()
         self.session_data = session_data
         self._client_options: dict[str, Any] = {
             "base_url": base_url,
@@ -78,7 +109,8 @@ class FitatuLibrary:
         """Load the facade from a session file and keep that file's tokens up to date.
 
         Args:
-            path: Session file; defaults to ``$FITATU_SESSION``, then
+            path: Session file; without one, ``$FITATU_SESSION_JSON`` when set (refreshed
+                tokens are then not saved), else ``$FITATU_SESSION``, then
                 ``~/.fitatu/session.json`` (see :meth:`FitatuApiClient.from_session`).
 
         Raises:
@@ -126,7 +158,9 @@ class FitatuLibrary:
                 raise FitatuAuthError("the session has no Fitatu user id; log in again to get a complete session")
             result = fn(client, user_id)
         except Exception as exc:
-            return {"status": "error", "operation": operation, **describe_error(exc)}
+            error = describe_error(exc)
+            log_caught(logger, operation, exc, error)
+            return {"status": "error", "operation": operation, **error}
         finally:
             self._mirror_tokens()
         partial = isinstance(result, dict) and result.get("ok") is False
@@ -353,7 +387,7 @@ class FitatuLibrary:
             predicate: Only products for which it returns True.
             page: Page number of the search, from 1.
             limit: Rows per page.
-            dry_run: Only report ``toDeleteProductIds`` (default); False deletes them.
+            dry_run: Only report ``to_delete_product_ids`` (default); False deletes them.
             max_deletions: Refuse to delete more than this many products.
         """
         return self._run(
@@ -617,7 +651,7 @@ class FitatuLibrary:
         to_date: date | str | None = None,
         to_meal_type: str | None = None,
     ) -> dict[str, Any]:
-        """Move a logged row to another meal and/or day; the copy gets a new ``rowId``.
+        """Move a logged row to another meal and/or day; the copy gets a new ``row_id``.
 
         Args:
             from_date: Day of the row.
@@ -846,19 +880,7 @@ class FitatuLibrary:
                 return None
             result: dict[str, Any] = {"format": fmt, "size_bytes": len(content)}
             if path is not None:
-                target = Path(path)
-                # Swapping in a fresh 0600 file keeps no old file's mode, follows no symlink
-                # and never leaves half an export behind.
-                fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
-                try:
-                    with os.fdopen(fd, "wb") as handle:
-                        handle.write(content)
-                    if overwrite:
-                        os.replace(tmp, target)
-                    else:
-                        os.link(tmp, target)  # fails when target exists, like O_EXCL
-                finally:
-                    Path(tmp).unlink(missing_ok=True)
+                write_private_file(path, content, overwrite=overwrite)
                 result["path"] = str(path)
             elif fmt in ("csv", "txt"):
                 result["content"] = content.decode("utf-8")

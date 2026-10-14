@@ -55,6 +55,15 @@ def _row_id(row_id: str | None) -> str:
     return str(parsed)
 
 
+def _derived_row_id(seed: uuid.UUID, index: int) -> str:
+    """The ``index``-th row id derived from ``seed`` (index 0 is ``seed`` itself).
+
+    It differs from ``seed`` only in the clock sequence (bits 48-61), so the same seed and
+    index always give the same id: a repeated multi-row write sends the same rows again.
+    """
+    return str(uuid.UUID(int=seed.int ^ (index << 48)))
+
+
 class PlannerModule:
     """High-level planner API.
 
@@ -72,8 +81,11 @@ class PlannerModule:
     Row ids: ``item_id`` names a row that is already on the day (its
     ``planDayDietItemId``, or an activity's ``uuid``); ``row_id`` is the id to give a
     row being added, so a retried add cannot duplicate it. Adds, moves, replacements and
-    activity writes return the id of the row they wrote as ``rowId``; updates report
-    ``itemId`` and removals ``removedId``.
+    activity writes return the id of the row they wrote as ``row_id``; updates report
+    ``item_id`` and removals ``removed_id``.
+
+    Results are dicts with snake_case keys; the values that are Fitatu payloads (the rows
+    sent or read, ``sync_response``) keep the API's camelCase keys.
     """
 
     def __init__(self, client: FitatuApiClient) -> None:
@@ -128,7 +140,9 @@ class PlannerModule:
         meal_key = cls.normalize_meal_key(meal_type)
         bucket = as_dict(diet_plan.get(meal_key))
         if bucket is None:
-            raise FitatuNotFoundError(f"meal not found: {meal_type!r}; this day has: {', '.join(sorted(diet_plan))}")
+            names = {key: (as_dict(meal) or {}).get("mealName") for key, meal in diet_plan.items()}
+            listed = ", ".join(f"{key} ({name})" if name else key for key, name in sorted(names.items()))
+            raise FitatuNotFoundError(f"meal not found: {meal_type!r}; this day has: {listed}")
         return meal_key, bucket
 
     @staticmethod
@@ -218,18 +232,23 @@ class PlannerModule:
         """
         day_data = self.get_day(user_id, day)
         meal_key = self._meal(day_data, meal_type)[0]
+        self._refuse_taken_row_id(day_data, meal_key, new_row)
+        return meal_key
+
+    @classmethod
+    def _refuse_taken_row_id(cls, day_data: dict[str, Any], meal_key: str, new_row: dict[str, Any]) -> None:
+        """Raise when another row of ``day_data`` has ``new_row``'s id (see :meth:`_meal_for_new_row`)."""
         row_id = new_row["planDayDietItemId"]
-        sent = self._food_of(meal_key, new_row)
-        for existing_meal, row in self._iter_rows(day_data):
-            if str(row.get("planDayDietItemId")) == row_id and not all(map(self._values_match, sent, self._food_of(existing_meal, row))):
+        sent = cls._food_of(meal_key, new_row)
+        for existing_meal, row in cls._iter_rows(day_data):
+            if str(row.get("planDayDietItemId")) == row_id and not all(map(cls._values_match, sent, cls._food_of(existing_meal, row))):
                 # Most often a retried add whose row was changed since (e.g. marked eaten on the phone).
                 raise FitatuValidationError(
                     f"row_id {row_id} already belongs to another row on this day: "
-                    f"{self._describe_rows([(existing_meal, row)])}. If this add repeats an earlier one, that "
+                    f"{cls._describe_rows([(existing_meal, row)])}. If this add repeats an earlier one, that "
                     "attempt was saved and the row has changed since: do not add it again. Update that row "
                     "instead, or remove it and add it again"
                 )
-        return meal_key
 
     def _upsert_rows(self, user_id: str, day: date, rows_by_meal: dict[str, list[dict[str, Any]]]) -> Any:
         """Send only these rows; synchronous so the next GET already sees them."""
@@ -271,13 +290,13 @@ class PlannerModule:
             return {
                 "ok": False,
                 "meal": meal_key,
-                "removedId": None,
-                "removedIdAbsentAfterSync": False,
-                "cleanupMode": "none",
+                "removed_id": None,
+                "removed_absent_after_sync": False,
+                "cleanup_mode": "none",
                 "reason": "item_not_found",
                 "message": self._row_not_found(day_data, item_id),
                 "removed": None,
-                "syncResponse": None,
+                "sync_response": None,
             }
         actual_meal, row = found
         sync_response, still_visible = self._delete_rows(user_id, day, [(actual_meal, row)])
@@ -285,17 +304,39 @@ class PlannerModule:
         return {
             "ok": removed,
             "meal": actual_meal,
-            "removedId": str(row.get("planDayDietItemId")),
-            "removedIdAbsentAfterSync": removed,
-            "cleanupMode": "removed" if removed else "none",
+            "removed_id": str(row.get("planDayDietItemId")),
+            "removed_absent_after_sync": removed,
+            "cleanup_mode": "removed" if removed else "none",
             "removed": row,
-            "syncResponse": sync_response,
+            "sync_response": sync_response,
         }
 
     def get_day(self, user_id: str, day: date | str) -> dict[str, Any]:
         """Fetch a single planner day snapshot."""
         path = f"/diet-and-activity-plan/{validate_numeric_id(user_id, 'user_id')}/day/{as_date(day).isoformat()}"
         return read_reply(self._client.request("GET", path), f"GET {path}")
+
+    def set_note(self, user_id: str, day: date | str, *, note: str | None) -> dict[str, Any]:
+        """Replace the day's note with ``note``; ``None`` or ``""`` deletes it.
+
+        The note goes in the day sync with the day's note tags as they are (``tagsIds``, read
+        first); nothing else of the day is sent, and its rows, activities and water stay as they
+        are (checked live 2026-10-14). The day is re-read: ``ok`` says it has the new note, and
+        ``previous`` is the note it had before (None without one).
+        """
+        if note is not None and not isinstance(note, str):
+            raise FitatuValidationError(f"note must be text or None, got {note!r}")
+        day = as_date(day)
+        before = self.get_day(user_id, day)
+        tags = before.get("tagsIds") if isinstance(before.get("tagsIds"), list) else []
+        text = note or None  # the app deletes a note by sending null
+        sync_response = self.sync_single_day(user_id, day, day_payload={"note": text, "tagsIds": tags})
+        return {
+            "ok": (self.get_day(user_id, day).get("note") or None) == text,
+            "note": text,
+            "previous": before.get("note") or None,
+            "sync_response": sync_response,
+        }
 
     def get_meal(self, user_id: str, day: date | str, *, meal_type: str) -> dict[str, Any]:
         """Return a single meal bucket from a planner day."""
@@ -332,16 +373,18 @@ class PlannerModule:
         return None
 
     @staticmethod
-    def _extract_measure_id(product: dict[str, Any]) -> int | str:
-        """Extract the best available measure id from a product or search-result dict."""
-        measure = product.get("measure")
-        if isinstance(measure, dict):
-            measure_dict = cast(dict[str, Any], measure)
-            measure_id = measure_dict.get("defaultMeasureId") or measure_dict.get("measureId")
-            if measure_id is not None:
-                return measure_id
-        measure_id = product.get("defaultMeasureId") or product.get("measureId")
-        return measure_id if measure_id is not None else 1
+    def _extract_measure_id(product: dict[str, Any]) -> int | str | None:
+        """The measure id a product or search-result dict names, or None when it names none.
+
+        Not a guess: the day sync accepts any measure id and stores the quantity in it.
+        """
+        measure = as_dict(product.get("measure")) or {}
+        return (
+            measure.get("defaultMeasureId")
+            or measure.get("measureId")
+            or product.get("defaultMeasureId")
+            or product.get("measureId")
+        )
 
     @staticmethod
     def _normalize_measure_unit(unit: str | None) -> str | None:
@@ -544,9 +587,9 @@ class PlannerModule:
     ) -> dict[str, Any]:
         """Resolve measure id and quantity for a target unit (g/ml/opakowanie/etc.).
 
-        Returns a dict with keys: ``measureId``, ``measureName``,
-        ``measureQuantity``, ``requestedAmount``, ``requestedUnit``,
-        ``strategy``, ``strictMeasure``, ``warnings``, ``productId``.
+        Returns a dict with keys: ``measure_id``, ``measure_name``,
+        ``measure_quantity``, ``requested_amount``, ``requested_unit``,
+        ``strategy``, ``strict_measure``, ``warnings``, ``product_id``.
 
         ``g`` and ``ml`` are converted through any measure with a known weight or
         capacity per unit (``converted_from_weight``/``converted_from_capacity``).
@@ -555,7 +598,7 @@ class PlannerModule:
         of the product has a weight or capacity to convert with):
 
         - ``fallback_search_measure``: the default measure of the search result is
-          used and ``measureQuantity`` is ``requested_amount`` as it is, not converted.
+          used and ``measure_quantity`` is ``requested_amount`` as it is, not converted.
         - ``fallback_first_measure``: no search result provided; the first product
           measure is used, quantity likewise unchanged.
 
@@ -627,8 +670,9 @@ class PlannerModule:
                     f"Cannot resolve unit '{requested_unit}' for product {product_id}; "
                     f"its measures: {self._measure_names(candidates)}"
                 )
-            if search_product is not None:
-                selected_measure_id = self._extract_measure_id(search_product)
+            search_measure_id = self._extract_measure_id(search_product) if search_product is not None else None
+            if search_product is not None and search_measure_id is not None:
+                selected_measure_id = search_measure_id
                 search_measure = as_dict(search_product.get("measure")) or {}
                 selected_measure_name = str(search_measure.get("measureName") or "")
                 strategy = "fallback_search_measure"
@@ -646,15 +690,15 @@ class PlannerModule:
                 raise FitatuValidationError(f"No measures available for product {product_id}")
 
         return {
-            "measureId": selected_measure_id,
-            "measureName": selected_measure_name,
-            "measureQuantity": selected_measure_quantity,
-            "requestedAmount": amount,
-            "requestedUnit": canonical_unit,
+            "measure_id": selected_measure_id,
+            "measure_name": selected_measure_name,
+            "measure_quantity": selected_measure_quantity,
+            "requested_amount": amount,
+            "requested_unit": canonical_unit,
             "strategy": strategy,
-            "strictMeasure": strict_measure,
+            "strict_measure": strict_measure,
             "warnings": warnings,
-            "productId": product_id,
+            "product_id": product_id,
         }
 
     def add_product_to_day_meal_with_unit(
@@ -688,13 +732,13 @@ class PlannerModule:
             day,
             meal_type=meal_type,
             product_id=product_id,
-            measure_id=cast(int | str, resolution["measureId"]),
-            measure_quantity=cast(float | int, resolution["measureQuantity"]),
+            measure_id=cast(int | str, resolution["measure_id"]),
+            measure_quantity=cast(float | int, resolution["measure_quantity"]),
             eaten=eaten,
             source=source,
             row_id=row_id,
         )
-        result["measureResolution"] = resolution
+        result["measure_resolution"] = resolution
         return result
 
     def add_product_to_day_meal(
@@ -717,33 +761,22 @@ class PlannerModule:
         a second one. An id that is already on the day with another food, meal, measure,
         quantity or ``eaten`` raises FitatuValidationError instead of overwriting that row
         (change a row with :meth:`update_day_item`). Without it a new id is generated.
-        Either way it comes back as ``rowId``.
+        Either way it comes back as ``row_id``.
         """
         day = as_date(day)
-        validate_numeric_id(product_id, "product_id")
-        validate_numeric_id(measure_id, "measure_id")
-        validate_bool(eaten, "eaten")
-        measure_quantity = self._coerce_positive_float(measure_quantity, field_name="measure_quantity")
-        new_item: dict[str, Any] = {
-            "planDayDietItemId": _row_id(row_id),
-            "foodType": "PRODUCT",
-            "measureId": measure_id,
-            "measureQuantity": measure_quantity,
-            "ingredientsServing": None,
-            "productId": product_id,
-            "source": source,
-            "eaten": eaten,
-        }
+        new_item = self._product_row(
+            product_id=product_id, measure_id=measure_id, measure_quantity=measure_quantity, eaten=eaten, source=source, row_id=row_id
+        )
         meal_key = self._meal_for_new_row(user_id, day, meal_type, new_item)
-        logger.debug("add_product user=%s day=%s meal=%s product=%s qty=%s", user_id, day, meal_key, product_id, measure_quantity)
+        logger.debug("add_product user=%s day=%s meal=%s product=%s qty=%s", user_id, day, meal_key, product_id, new_item["measureQuantity"])
         sync_response = self._upsert_rows(user_id, day, {meal_key: [new_item]})
         return {
             "ok": True,
-            "rowId": new_item["planDayDietItemId"],
+            "row_id": new_item["planDayDietItemId"],
             "meal": meal_key,
-            "productId": product_id,
-            "syncResponse": sync_response,
-            "addedItem": new_item,
+            "product_id": product_id,
+            "sync_response": sync_response,
+            "added_item": new_item,
         }
 
     def add_recipe_to_day_meal(
@@ -767,34 +800,135 @@ class PlannerModule:
         ``row_id`` works as in :meth:`add_product_to_day_meal`.
         """
         day = as_date(day)
-        validate_numeric_id(recipe_id, "recipe_id")
-        validate_numeric_id(measure_id, "measure_id")
-        validate_bool(eaten, "eaten")
-        measure_quantity = self._coerce_positive_float(measure_quantity, field_name="measure_quantity")
-        normalized_food_type = str(food_type or "RECIPE").strip().upper()
-        if normalized_food_type not in {"RECIPE", "RECIPE_AI"}:
-            raise FitatuValidationError(f"food_type must be RECIPE or RECIPE_AI, got {food_type!r}")
-        new_item: dict[str, Any] = {
-            "planDayDietItemId": _row_id(row_id),
-            "foodType": normalized_food_type,
-            "recipeId": recipe_id,
-            "measureId": measure_id,
-            "measureQuantity": measure_quantity,
-            "ingredientsServing": ingredients_serving,
-            "source": source,
-            "eaten": eaten,
-        }
+        new_item = self._recipe_row(
+            recipe_id=recipe_id,
+            food_type=food_type,
+            measure_id=measure_id,
+            measure_quantity=measure_quantity,
+            ingredients_serving=ingredients_serving,
+            eaten=eaten,
+            source=source,
+            row_id=row_id,
+        )
         meal_key = self._meal_for_new_row(user_id, day, meal_type, new_item)
         logger.debug("add_recipe user=%s day=%s meal=%s recipe=%s", user_id, day, meal_key, recipe_id)
         sync_response = self._upsert_rows(user_id, day, {meal_key: [new_item]})
         return {
             "ok": True,
-            "rowId": new_item["planDayDietItemId"],
+            "row_id": new_item["planDayDietItemId"],
             "meal": meal_key,
-            "recipeId": recipe_id,
+            "recipe_id": recipe_id,
+            "food_type": new_item["foodType"],
+            "sync_response": sync_response,
+            "added_item": new_item,
+        }
+
+    @classmethod
+    def _product_row(
+        cls,
+        *,
+        product_id: int | str,
+        measure_id: int | str,
+        measure_quantity: float | int = 1,
+        eaten: bool = False,
+        source: str = "API",
+        row_id: str | None = None,
+    ) -> dict[str, Any]:
+        """The sync row that adds a product, as :meth:`add_product_to_day_meal` sends it."""
+        validate_numeric_id(product_id, "product_id")
+        validate_numeric_id(measure_id, "measure_id")
+        validate_bool(eaten, "eaten")
+        quantity = cls._coerce_positive_float(measure_quantity, field_name="measure_quantity")
+        return {
+            "planDayDietItemId": _row_id(row_id),
+            "foodType": "PRODUCT",
+            "measureId": measure_id,
+            "measureQuantity": quantity,
+            "ingredientsServing": None,
+            "productId": product_id,
+            "source": source,
+            "eaten": eaten,
+        }
+
+    @classmethod
+    def _recipe_row(
+        cls,
+        *,
+        recipe_id: int | str,
+        food_type: str = "RECIPE",
+        measure_id: int | str = 39,
+        measure_quantity: float | int = 1,
+        ingredients_serving: float | int | None = 1,
+        eaten: bool = False,
+        source: str = "API",
+        row_id: str | None = None,
+    ) -> dict[str, Any]:
+        """The sync row that adds a recipe, as :meth:`add_recipe_to_day_meal` sends it."""
+        validate_numeric_id(recipe_id, "recipe_id")
+        validate_numeric_id(measure_id, "measure_id")
+        validate_bool(eaten, "eaten")
+        quantity = cls._coerce_positive_float(measure_quantity, field_name="measure_quantity")
+        normalized_food_type = str(food_type or "RECIPE").strip().upper()
+        if normalized_food_type not in {"RECIPE", "RECIPE_AI"}:
+            raise FitatuValidationError(f"food_type must be RECIPE or RECIPE_AI, got {food_type!r}")
+        return {
+            "planDayDietItemId": _row_id(row_id),
             "foodType": normalized_food_type,
-            "syncResponse": sync_response,
-            "addedItem": new_item,
+            "recipeId": recipe_id,
+            "measureId": measure_id,
+            "measureQuantity": quantity,
+            "ingredientsServing": ingredients_serving,
+            "source": source,
+            "eaten": eaten,
+        }
+
+    def add_foods_to_day_meal(
+        self,
+        user_id: str,
+        day: date | str,
+        *,
+        meal_type: str,
+        items: list[dict[str, Any]],
+        eaten: bool = False,
+        source: str = "API",
+        row_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Add several products and recipes to a meal in one sync. Only the new rows are sent.
+
+        Each item holds the keyword arguments of :meth:`add_product_to_day_meal`
+        (``product_id``, ``measure_id``, ``measure_quantity``) or, with a ``recipe_id``, of
+        :meth:`add_recipe_to_day_meal` (``measure_id`` 39 and ``measure_quantity`` 1 unless
+        given); ``eaten`` and ``source`` apply to every row. Every item, the meal and the ids
+        are checked before anything is sent, and an item's error names its index
+        (``items[1]: ...``). ``row_id`` (a UUID v1, else a new one) seeds the rows' ids as in
+        :meth:`copy_meal`: a repeat with the same ``row_id`` and items writes the same rows
+        again, and an id another row of the day already has raises FitatuValidationError, as
+        for the single adds. ``ok`` is True once the sync accepted the rows (they are not read
+        back); ``row_ids`` follow the order of ``items``.
+        """
+        day = as_date(day)
+        if not isinstance(items, list) or not items:
+            raise FitatuValidationError(f"items must list at least one product or recipe, got {items!r:.100}")
+        seed = uuid.UUID(_row_id(row_id))
+        rows: list[dict[str, Any]] = []
+        for index, item in enumerate(items):
+            common: dict[str, Any] = {"eaten": eaten, "source": source, "row_id": _derived_row_id(seed, index)}
+            try:
+                rows.append(self._recipe_row(**item, **common) if "recipe_id" in item else self._product_row(**item, **common))
+            except (FitatuValidationError, TypeError) as exc:  # TypeError: a key that is unknown, missing or given twice
+                raise FitatuValidationError(f"items[{index}]: {exc}") from None
+        day_data = self.get_day(user_id, day)
+        meal_key = self._meal(day_data, meal_type)[0]
+        for row in rows:
+            self._refuse_taken_row_id(day_data, meal_key, row)
+        logger.debug("add_foods user=%s day=%s meal=%s rows=%s", user_id, day, meal_key, len(rows))
+        sync_response = self._upsert_rows(user_id, day, {meal_key: rows})
+        return {
+            "ok": True,
+            "row_ids": [row["planDayDietItemId"] for row in rows],
+            "meal": meal_key,
+            "added_items": rows,
+            "sync_response": sync_response,
         }
 
     def update_day_item(
@@ -866,14 +1000,14 @@ class PlannerModule:
         return {
             "ok": ok,
             "meal": actual_meal_key,
-            "requestedMeal": meal_key,
-            "itemId": str(before_item.get("planDayDietItemId") or item_id),
-            "productId": before_item.get("productId"),
+            "requested_meal": meal_key,
+            "item_id": str(before_item.get("planDayDietItemId") or item_id),
+            "product_id": before_item.get("productId"),
             "before": before_item,
             "after": matched_after,
             "updates": updates_applied,
             "validation": validation,
-            "syncResponse": sync_response,
+            "sync_response": sync_response,
         }
 
     def add_custom_item_to_day_meal(
@@ -906,11 +1040,11 @@ class PlannerModule:
         sync_response = self._upsert_rows(user_id, day, {meal_key: [new_item]})
         return {
             "ok": True,
-            "rowId": new_item["planDayDietItemId"],
+            "row_id": new_item["planDayDietItemId"],
             "meal": meal_key,
             "name": new_item["name"],
-            "syncResponse": sync_response,
-            "addedItem": new_item,
+            "sync_response": sync_response,
+            "added_item": new_item,
         }
 
     @staticmethod
@@ -961,7 +1095,7 @@ class PlannerModule:
         meal_type: str,
         item_id: str,
     ) -> dict[str, Any]:
-        """Delete a row that was just added to ``meal_type``; ``item_id`` is the add's ``rowId``.
+        """Delete a row that was just added to ``meal_type``; ``item_id`` is the add's ``row_id``.
 
         Only the row with that ``planDayDietItemId`` in that meal is deleted, never another
         row of the same food: a rollback of an add that never landed, or a repeated one,
@@ -1003,7 +1137,8 @@ class PlannerModule:
         Without ``measure_unit`` the hit's own search measure is used, ``measure_quantity``
         (or ``measure_amount``) of it. ``measure_unit`` with ``measure_amount`` is resolved
         through the product's measures (:meth:`resolve_product_measure`) and works for
-        PRODUCT hits only; a recipe is logged in its search measure, usually portions.
+        PRODUCT hits only; a recipe is logged in its search measure, usually portions. A hit
+        that names no measure raises FitatuValidationError rather than guessing one.
         ``row_id`` works as in :meth:`add_product_to_day_meal`.
         """
         day = as_date(day)
@@ -1043,21 +1178,27 @@ class PlannerModule:
                 search_product=hit,
             )
         else:
+            measure_id = self._extract_measure_id(hit)
+            if measure_id is None:
+                raise FitatuValidationError(
+                    f"search hit {hit.get('name')!r} names no measure; for a product pass measure_amount with "
+                    "measure_unit ('g' or 'ml'), or add it by id with a measure from get_product_details()"
+                )
             resolution = {
-                "measureId": self._extract_measure_id(hit),
-                "measureName": search_measure.get("measureName"),
-                "measureQuantity": amount,
-                "requestedAmount": amount,
-                "requestedUnit": None,
+                "measure_id": measure_id,
+                "measure_name": search_measure.get("measureName"),
+                "measure_quantity": amount,
+                "requested_amount": amount,
+                "requested_unit": None,
                 "strategy": "search_default",
-                "strictMeasure": strict_measure,
+                "strict_measure": strict_measure,
                 "warnings": [],
             }
 
         row = {
             "meal_type": meal_type,
-            "measure_id": resolution["measureId"],
-            "measure_quantity": resolution["measureQuantity"],
+            "measure_id": resolution["measure_id"],
+            "measure_quantity": resolution["measure_quantity"],
             "eaten": eaten,
             "row_id": row_id,
         }
@@ -1065,14 +1206,14 @@ class PlannerModule:
             result = self.add_recipe_to_day_meal(user_id, day, recipe_id=food_id, **row)
         else:
             result = self.add_product_to_day_meal(user_id, day, product_id=food_id, **row)
-        result["searchItem"] = {
+        result["search_item"] = {
             "name": hit.get("name"),
             "type": hit.get("type"),
-            "foodId": hit.get("foodId"),
+            "food_id": hit.get("foodId"),
             "id": hit.get("id"),
-            "measureId": resolution["measureId"],
+            "measure_id": resolution["measure_id"],
         }
-        result["measureResolution"] = resolution
+        result["measure_resolution"] = resolution
         return result
 
     def sync_days(
@@ -1158,7 +1299,7 @@ class PlannerModule:
         ``item_id`` is the row's ``planDayDietItemId`` (found in any meal); a ``productId``
         works only when exactly one row of ``from_meal_type`` has it. ``to_meal_type``
         defaults to the row's meal and must exist on the target day; that is checked
-        before anything is sent. ``ok`` is True when a re-read shows the copy (``rowId``)
+        before anything is sent. ``ok`` is True when a re-read shows the copy (``row_id``)
         on the target day and the original gone.
         """
         from_day = as_date(from_day, "from_day")
@@ -1183,17 +1324,113 @@ class PlannerModule:
         removed_id = str(source_item.get("planDayDietItemId"))
         return {
             "ok": not self._has_row(source_after, removed_id) and self._has_row(target_after, moved_item["planDayDietItemId"]),
-            "rowId": moved_item["planDayDietItemId"],
+            "row_id": moved_item["planDayDietItemId"],
             "operation": "move_day_item",
-            "fromDate": from_day.isoformat(),
-            "toDate": target_day.isoformat(),
-            "fromMeal": source_meal_key,
-            "toMeal": to_meal_key,
-            "removedId": removed_id,
-            "addedItem": moved_item,
-            "deleteMarker": delete_marker,
-            "syncPayload": days_payload,
-            "syncResponse": sync_response,
+            "from_date": from_day.isoformat(),
+            "to_date": target_day.isoformat(),
+            "from_meal": source_meal_key,
+            "to_meal": to_meal_key,
+            "removed_id": removed_id,
+            "added_item": moved_item,
+            "delete_marker": delete_marker,
+            "sync_payload": days_payload,
+            "sync_response": sync_response,
+        }
+
+    # What a copy sends of a catalog row: the keys of the recorded adds (sync_add_product, sync_add_recipe).
+    _COPIED_KEYS = {
+        "PRODUCT": ("foodType", "productId", "measureId", "measureQuantity", "ingredientsServing"),
+        "RECIPE": ("foodType", "recipeId", "measureId", "measureQuantity", "ingredientsServing"),
+    }
+
+    def copy_meal(
+        self,
+        user_id: str,
+        from_day: date | str,
+        *,
+        from_meal_type: str,
+        to_day: date | str,
+        to_meal_type: str | None = None,
+        item_ids: list[str] | None = None,
+        eaten: bool | None = None,
+        row_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Copy a meal's rows (or those in ``item_ids``) to another meal and/or day, in one sync.
+
+        ``to_meal_type`` defaults to the source meal, and must exist on ``to_day``; the target
+        must differ from the source in day or meal. Each copy is rebuilt in the write shape of
+        an add (a custom row from its name and nutrition), with the source row's ``eaten``
+        unless ``eaten`` is given; a row of another type (e.g. ``RECIPE_AI``) is not copied
+        but listed in ``skipped``. ``row_id`` (a UUID v1, else a new one) seeds the copies'
+        ids: the n-th copy's id differs from it only in the clock sequence (the first copy
+        gets ``row_id`` itself), so repeating the call with the same ``row_id`` writes the
+        same rows again instead of new ones, and an id that another row of the target day
+        already has raises FitatuValidationError, as for the adds. Nothing is sent before
+        all of that is checked. ``ok`` is True when a re-read shows every copy (``row_ids``).
+        """
+        from_day, to_day = as_date(from_day, "from_day"), as_date(to_day, "to_day")
+        if eaten is not None:
+            validate_bool(eaten, "eaten")
+        if item_ids is not None and not item_ids:  # None is the whole meal
+            raise FitatuValidationError("item_ids must name at least one row, or be None for the whole meal")
+        seed = uuid.UUID(_row_id(row_id))
+
+        source_day = self.get_day(user_id, from_day)
+        from_meal_key, bucket = self._meal(source_day, from_meal_type)
+        rows = as_dict_list(bucket.get("items"))
+        if item_ids is not None:
+            wanted = [str(item_id) for item_id in item_ids]
+            missing = sorted(set(wanted) - {str(row.get("planDayDietItemId")) for row in rows})
+            if missing:
+                raise FitatuNotFoundError(
+                    f"not in {from_meal_key} on {from_day}: {', '.join(missing)}; its rows: "
+                    f"{self._describe_rows([(from_meal_key, row) for row in rows])}"
+                )
+            rows = [row for row in rows if str(row.get("planDayDietItemId")) in wanted]
+        if not rows:
+            raise FitatuNotFoundError(f"{from_meal_key} on {from_day} has no rows to copy")
+        target = source_day if to_day == from_day else self.get_day(user_id, to_day)
+        to_meal_key = self._meal(target, to_meal_type or from_meal_key)[0]
+        if (to_day, to_meal_key) == (from_day, from_meal_key):
+            raise FitatuValidationError(f"copy {from_meal_key} to another meal or day, not onto itself")
+
+        copies: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        for index, row in enumerate(rows):
+            copy_id = _derived_row_id(seed, index)
+            food_type = str(row.get("foodType"))
+            if food_type == "CUSTOM_ITEM":
+                copy = self._custom_item_from_values(
+                    name=row.get("name") or "",
+                    calories=row.get("energy") or 0,
+                    protein_g=row.get("protein") or 0,
+                    fat_g=row.get("fat") or 0,
+                    carbs_g=row.get("carbohydrate") or 0,
+                    row_id=copy_id,
+                )
+            elif food_type in self._COPIED_KEYS:
+                copy = {"planDayDietItemId": copy_id, **{key: row.get(key) for key in self._COPIED_KEYS[food_type]}, "source": "API"}
+            else:  # no recorded write shape to rebuild it in
+                skipped.append(row)
+                continue
+            copy["eaten"] = bool(row.get("eaten")) if eaten is None else eaten
+            self._refuse_taken_row_id(target, to_meal_key, copy)
+            copies.append(copy)
+
+        row_ids = [copy["planDayDietItemId"] for copy in copies]
+        sync_response = self._upsert_rows(user_id, to_day, {to_meal_key: copies}) if copies else None
+        after = self.get_day(user_id, to_day) if copies else target
+        return {
+            "ok": bool(copies) and all(self._has_row(after, copied) for copied in row_ids),
+            "row_ids": row_ids,
+            "operation": "copy_meal",
+            "from_date": from_day.isoformat(),
+            "to_date": to_day.isoformat(),
+            "from_meal": from_meal_key,
+            "to_meal": to_meal_key,
+            "added_items": copies,
+            "skipped": skipped,
+            "sync_response": sync_response,
         }
 
     def replace_day_item_with_custom_item(
@@ -1214,7 +1451,7 @@ class PlannerModule:
 
         ``item_id`` is the row's ``planDayDietItemId`` (found in any meal); a ``productId``
         works only when exactly one row of ``meal_type`` has it. The new row keeps the old
-        one's ``eaten``. ``ok`` is True when a re-read shows the new row (``rowId``) and the
+        one's ``eaten``. ``ok`` is True when a re-read shows the new row (``row_id``) and the
         old one gone.
         """
         day = as_date(day)
@@ -1231,15 +1468,15 @@ class PlannerModule:
         removed_id = str(source_item.get("planDayDietItemId"))
         return {
             "ok": not self._has_row(after, removed_id) and self._has_row(after, replacement["planDayDietItemId"]),
-            "rowId": replacement["planDayDietItemId"],
+            "row_id": replacement["planDayDietItemId"],
             "operation": "replace_day_item_with_custom_item",
             "date": day.isoformat(),
             "meal": source_meal_key,
-            "removedId": removed_id,
-            "replacementItem": replacement,
-            "deleteMarker": delete_marker,
-            "syncPayload": days_payload,
-            "syncResponse": sync_response,
+            "removed_id": removed_id,
+            "replacement_item": replacement,
+            "delete_marker": delete_marker,
+            "sync_payload": days_payload,
+            "sync_response": sync_response,
         }
 
     def classify_day_item_for_removal(
@@ -1260,8 +1497,8 @@ class PlannerModule:
         resolved_kind, reason = self._resolve_item_kind(row)
         return {
             "found": True,
-            "requestedItemId": str(item_id),
-            "resolvedKind": resolved_kind,
+            "requested_item_id": str(item_id),
+            "resolved_kind": resolved_kind,
             "reason": reason,
             "meal": actual_meal,
             "item": row,
@@ -1296,9 +1533,9 @@ class PlannerModule:
         *,
         meal_type: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Return the day's rows (optionally one meal) with their removal kind."""
+        """Return the day's rows (optionally one meal) with their removal kind and meal name."""
         planner_day = self.get_day(user_id, as_date(day))
-        self._diet_plan(planner_day)
+        diet_plan = self._diet_plan(planner_day)
         selected_meal = self._meal(planner_day, meal_type)[0] if meal_type is not None else None
 
         rows: list[dict[str, Any]] = []
@@ -1309,11 +1546,12 @@ class PlannerModule:
             rows.append(
                 {
                     "meal": current_meal_key,
-                    "itemId": str(item.get("planDayDietItemId") or ""),
-                    "productId": item.get("productId"),
-                    "foodType": item.get("foodType"),
+                    "meal_name": diet_plan[current_meal_key].get("mealName"),
+                    "item_id": str(item.get("planDayDietItemId") or ""),
+                    "product_id": item.get("productId"),
+                    "food_type": item.get("foodType"),
                     "source": item.get("source"),
-                    "resolvedKind": resolved_kind,
+                    "resolved_kind": resolved_kind,
                     "reason": reason,
                     "item": item,
                 }
@@ -1338,9 +1576,10 @@ class PlannerModule:
         ``row_ids`` narrows the targets to those ``planDayDietItemId`` values (e.g. the rows
         a caller added itself), ``max_items`` caps them. A requested id that is not a
         target (not on the day, of another kind or meal, or past ``max_items``) is listed
-        in ``missingRowIds`` and makes ``ok`` False. With ``dry_run=True`` nothing is
-        sent and the result lists the ``targets``. Otherwise all targets go out in one
-        sync and the day is re-read to confirm each is gone.
+        in ``missing_row_ids`` and makes ``ok`` False. The result lists the ``targets``
+        (rows as :meth:`list_day_items_for_removal` gives them). With ``dry_run=True``
+        nothing is sent; otherwise all targets go out in one sync and the day is re-read
+        to confirm each is gone (``attempts``).
         """
         day = as_date(day)
         requested_kind = (item_kind or "").strip().lower()
@@ -1360,20 +1599,20 @@ class PlannerModule:
         targets = [
             row
             for row in self.list_day_items_for_removal(user_id, day, meal_type=meal_type)
-            if row["itemId"]
-            and requested_kind in {"auto", row["resolvedKind"]}
-            and (wanted_ids is None or row["itemId"] in wanted_ids)
+            if row["item_id"]
+            and requested_kind in {"auto", row["resolved_kind"]}
+            and (wanted_ids is None or row["item_id"] in wanted_ids)
         ][:max_items]
-        targeted_ids = {row["itemId"] for row in targets}
+        targeted_ids = {row["item_id"] for row in targets}
         missing = [str(row_id) for row_id in row_ids or [] if str(row_id) not in targeted_ids]
         meal_key = self.normalize_meal_key(meal_type) if meal_type is not None else None
         if dry_run:
             return {
                 "ok": not missing,
-                "dryRun": True,
-                "requestedKind": requested_kind,
-                "targetedCount": len(targets),
-                "missingRowIds": missing,
+                "dry_run": True,
+                "requested_kind": requested_kind,
+                "targeted_count": len(targets),
+                "missing_row_ids": missing,
                 "meal": meal_key,
                 "targets": targets,
             }
@@ -1388,25 +1627,26 @@ class PlannerModule:
             {
                 "seq": index,
                 "meal": row["meal"],
-                "itemId": row["itemId"],
-                "requestedKind": requested_kind,
-                "resolvedKind": row["resolvedKind"],
-                "ok": row["itemId"] not in still_visible,
-                "cleanupMode": "none" if row["itemId"] in still_visible else "removed",
+                "item_id": row["item_id"],
+                "requested_kind": requested_kind,
+                "resolved_kind": row["resolved_kind"],
+                "ok": row["item_id"] not in still_visible,
+                "cleanup_mode": "none" if row["item_id"] in still_visible else "removed",
             }
             for index, row in enumerate(targets, start=1)
         ]
         removed_count = sum(1 for attempt in attempts if attempt["ok"])
         return {
             "ok": removed_count == len(targets) and not missing,
-            "requestedKind": requested_kind,
-            "targetedCount": len(targets),
-            "removedCount": removed_count,
-            "failedCount": len(targets) - removed_count,
-            "missingRowIds": missing,
+            "requested_kind": requested_kind,
+            "targeted_count": len(targets),
+            "removed_count": removed_count,
+            "failed_count": len(targets) - removed_count,
+            "missing_row_ids": missing,
             "meal": meal_key,
+            "targets": targets,
             "attempts": attempts,
-            "syncResponse": sync_response,
+            "sync_response": sync_response,
         }
 
     def remove_day_item(
@@ -1462,7 +1702,7 @@ class PlannerModule:
         from. ``row_id`` (a UUID v1) becomes the activity's ``uuid`` and makes a retry
         safe, as for the add_* rows; one that is already on the day with another activity,
         energy or duration raises FitatuValidationError instead of overwriting it. The day
-        is re-read: ``ok`` says the activity is there, ``rowId`` is what
+        is re-read: ``ok`` says the activity is there, ``row_id`` is what
         :meth:`remove_activity` takes.
         """
         day = as_date(day)
@@ -1492,13 +1732,13 @@ class PlannerModule:
         sync_response = self.sync_single_day(user_id, day, day_payload={"activities": [activity]})
         return {
             "ok": self._find_activity(self.get_day(user_id, day), activity["uuid"]) is not None,
-            "rowId": activity["uuid"],
-            "addedActivity": activity,
-            "syncResponse": sync_response,
+            "row_id": activity["uuid"],
+            "added_activity": activity,
+            "sync_response": sync_response,
         }
 
     def remove_activity(self, user_id: str, day: date | str, *, item_id: str) -> dict[str, Any]:
-        """Delete a logged activity by its ``uuid`` (``item_id``, the ``rowId`` of :meth:`add_activity`).
+        """Delete a logged activity by its ``uuid`` (``item_id``, the ``row_id`` of :meth:`add_activity`).
 
         Like the app, the activity is re-sent with ``deletedAt``, converted to the write
         shape, then the day is re-read: ``ok`` says it is gone. An activity that is not on
@@ -1512,11 +1752,11 @@ class PlannerModule:
             listing = self._describe_activities(as_dict_list(day_data.get("activityPlan")))
             return {
                 "ok": False,
-                "rowId": item_id,
+                "row_id": item_id,
                 "reason": "item_not_found",
                 "message": f"activity not found: {item_id!r}; activities on this day: {listing}",
                 "removed": None,
-                "syncResponse": None,
+                "sync_response": None,
             }
         # shortcut: only the first simple measure is carried over; an activity logged with advanced
         # measures only would be rejected (FitatuPlannerSyncError). Map those if one turns up.
@@ -1533,7 +1773,7 @@ class PlannerModule:
         sync_response = self.sync_single_day(user_id, day, day_payload={"activities": [deleted]})
         return {
             "ok": self._find_activity(self.get_day(user_id, day), str(activity.get("uuid"))) is None,
-            "rowId": activity.get("uuid"),
+            "row_id": activity.get("uuid"),
             "removed": activity,
-            "syncResponse": sync_response,
+            "sync_response": sync_response,
         }

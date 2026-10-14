@@ -43,7 +43,7 @@ def ask(name: str, schema: dict[str, Any], required: bool) -> Any:
     if schema["type"] == "boolean":
         notes.append("Type true or false.")
     if schema["type"] == "array":
-        notes.append("Separate values with spaces.")
+        notes.append("Separate values with spaces." if schema["items"]["type"] == "string" else "Type a JSON array.")
     if "default" in schema:
         notes.append(f"Default: {json.dumps(schema['default'])}.")
     print(f"{name}{'' if required else ' (optional, Enter skips it)'}: {' '.join(notes)}")
@@ -55,11 +55,11 @@ def ask(name: str, schema: dict[str, Any], required: bool) -> Any:
             print("This one is required.")
         elif schema["type"] == "string":
             return text
-        elif schema["type"] == "array":
+        elif schema["type"] == "array" and schema["items"]["type"] == "string":
             return text.replace(",", " ").split()
         else:
             try:
-                return json.loads(text)  # integer, number or boolean
+                return json.loads(text)  # integer, number, boolean or a JSON array of objects
             except ValueError:
                 print(f"Not a JSON {schema['type']}.")
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import stat
 import time
 from pathlib import Path
@@ -18,6 +19,12 @@ from fitatu_api import FitatuApiClient, FitatuAuthError, FitatuLibrary
 HTTP = "fitatu_api.client.requests.Session.request"
 DAY = "2027-01-03"
 ROW_ID = "8f0c2a1e-8f3b-11ef-9c8e-0242ac120002"  # a UUID v1, as the server requires
+
+
+def _library(*args: Any, **kwargs: Any) -> FitatuLibrary:
+    """``FitatuLibrary(...)``: deprecated, so the warning is asserted rather than silenced."""
+    with pytest.warns(DeprecationWarning, match="FitatuTools"):
+        return FitatuLibrary(*args, **kwargs)
 
 
 def _jwt(payload: dict[str, Any]) -> str:
@@ -44,7 +51,7 @@ def _server(**request: Any) -> Mock:
 def test_an_expired_bearer_is_refreshed_once_and_the_new_pair_is_kept(tmp_path: Path) -> None:
     session_path = tmp_path / "session.json"
     session = {"bearer_token": EXPIRED, "refresh_token": "r1", "fitatu_user_id": RECORDED_USER_ID}
-    lib = FitatuLibrary(session, session_path=session_path)
+    lib = _library(session, session_path=session_path)
 
     with patch(HTTP, side_effect=_server) as http:
         assert lib.get_recipe_via_api(recipe_id=1)["status"] == "ok"
@@ -61,18 +68,19 @@ def test_an_expired_bearer_is_refreshed_once_and_the_new_pair_is_kept(tmp_path: 
     assert (session["bearer_token"], session["refresh_token"]) == (FRESH, "r2")
     saved = json.loads(session_path.read_text(encoding="utf-8"))
     assert (saved["bearer_token"], saved["refresh_token"]) == (FRESH, "r2")
-    assert stat.S_IMODE(session_path.stat().st_mode) == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(session_path.stat().st_mode) == 0o600
 
 
 def test_a_camel_case_session_does_not_get_its_old_pair_back_after_a_refresh() -> None:
     session = {"bearerToken": EXPIRED, "refreshToken": "r1", "fitatu_user_id": RECORDED_USER_ID}
-    lib = FitatuLibrary(session)
+    lib = _library(session)
 
     with patch(HTTP, side_effect=_server):
         assert lib.get_recipe_via_api(recipe_id=1)["status"] == "ok"
 
     assert "bearerToken" not in session and "refreshToken" not in session
-    reloaded = FitatuLibrary(session).export_session_context(include_tokens=True)
+    reloaded = _library(session).export_session_context(include_tokens=True)
     assert (reloaded["bearer_token"], reloaded["refresh_token"]) == (FRESH, "r2")
 
 
@@ -82,7 +90,7 @@ def test_session_path_tokens_win_over_session_data(tmp_path: Path) -> None:
     session = {"bearer_token": EXPIRED, "refresh_token": "r1", "fitatu_user_id": RECORDED_USER_ID}
 
     with patch(HTTP, return_value=_reply({"id": 1})) as http:
-        assert FitatuLibrary(session, session_path=session_path).get_recipe_via_api(recipe_id=1)["status"] == "ok"
+        assert _library(session, session_path=session_path).get_recipe_via_api(recipe_id=1)["status"] == "ok"
 
     assert http.call_args.kwargs["headers"]["authorization"] == f"Bearer {FRESH}"
     assert (session["bearer_token"], session["refresh_token"]) == (FRESH, "r2")
@@ -98,7 +106,9 @@ def test_from_session_finds_the_file_like_the_client_and_writes_tokens_back(
     )
     monkeypatch.setenv("FITATU_SESSION", str(session_path))
 
-    with patch(HTTP, side_effect=_server), FitatuLibrary.from_session() as lib:
+    with pytest.warns(DeprecationWarning, match="FitatuTools"):
+        lib = FitatuLibrary.from_session()
+    with patch(HTTP, side_effect=_server), lib:
         assert lib.get_recipe_via_api(recipe_id=1)["status"] == "ok"
 
     saved = json.loads(session_path.read_text(encoding="utf-8"))
@@ -108,7 +118,7 @@ def test_from_session_finds_the_file_like_the_client_and_writes_tokens_back(
 
 def test_one_client_built_from_the_constructor_options_serves_every_call() -> None:
     session = {"bearer_token": FRESH, "fitatu_user_id": RECORDED_USER_ID}
-    lib = FitatuLibrary(session, base_url="https://de-de.fitatu.com/api", timeout_seconds=5)
+    lib = _library(session, base_url="https://de-de.fitatu.com/api", timeout_seconds=5)
 
     with patch("fitatu_api.facade.FitatuApiClient", wraps=FitatuApiClient) as built, patch(
         HTTP, return_value=_reply({"id": 1})
@@ -125,7 +135,7 @@ def test_one_client_built_from_the_constructor_options_serves_every_call() -> No
 
 def test_search_uses_the_session_search_locale_unless_one_is_given() -> None:
     session = {"bearer_token": FRESH, "fitatu_user_id": RECORDED_USER_ID, "app_searchlocale": "de_DE"}
-    lib = FitatuLibrary(session)
+    lib = _library(session)
 
     with patch(HTTP, return_value=_reply([])) as http:
         lib.search_food_via_api(phrase="apfel")
@@ -143,7 +153,7 @@ def test_add_read_and_remove_a_row_on_the_fake_server() -> None:
     server = FakeFitatuServer()
     server.auth.bearer_token = server.auth.refresh_token = None  # mirrored into session_data after each call
     with patch("fitatu_api.facade.FitatuApiClient", return_value=server):
-        lib = FitatuLibrary({})
+        lib = _library({})
         added = lib.add_custom_item_to_day_meal_via_api(
             target_date=DAY, meal_type="snack", name="Apple", calories=52, protein_g=0.3, fat_g=0.2, carbs_g=14,
             row_id=ROW_ID,
@@ -151,7 +161,7 @@ def test_add_read_and_remove_a_row_on_the_fake_server() -> None:
     retried = lib.add_custom_item_to_day_meal_via_api(
         target_date=DAY, meal_type="snack", name="Apple", calories=52, protein_g=0.3, fat_g=0.2, carbs_g=14, row_id=ROW_ID
     )
-    row_id = added["result"]["rowId"]
+    row_id = added["result"]["row_id"]
     summary = lib.get_day_summary_via_api(target_date=DAY)["result"]
     removed = lib.remove_day_item_via_api(target_date=DAY, meal_type="snack", item_id=row_id)
     again = lib.remove_day_item_via_api(target_date=DAY, meal_type="snack", item_id=row_id)

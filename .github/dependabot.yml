@@ -1,0 +1,19 @@
+# Weekly update PRs, one per ecosystem. The actions in .github/workflows are pinned to commit
+# SHAs; Dependabot moves the SHA and the version comment together.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

@@ -12,8 +12,15 @@ from unittest.mock import Mock, patch
 import pytest
 from fake_server import RECORDED_USER_ID, recorded
 
-from fitatu_api import FitatuApiClient, FitatuAuthContext, FitatuAuthError, FitatuTokenStore
+from fitatu_api import (
+    FitatuApiClient,
+    FitatuAuthContext,
+    FitatuAuthError,
+    FitatuTokenStore,
+    FitatuValidationError,
+)
 from fitatu_api.__main__ import main
+from fitatu_api.constants import WEB_CLIENT_PROFILE
 
 HTTP = "fitatu_api.client.requests.Session.request"
 
@@ -34,8 +41,8 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home.mkdir()
     monkeypatch.setenv("HOME", home.as_posix())
     monkeypatch.setenv("USERPROFILE", home.as_posix())
-    monkeypatch.delenv("FITATU_SESSION", raising=False)
-    monkeypatch.delenv("FITATU_SESSION_PATH", raising=False)
+    for name in ("FITATU_SESSION", "FITATU_SESSION_PATH", "FITATU_SESSION_JSON", "FITATU_CLIENT_PROFILE"):
+        monkeypatch.delenv(name, raising=False)
     return home
 
 
@@ -71,6 +78,50 @@ def test_from_session_resolves_argument_then_env_then_home(
     assert client.auth.fitatu_user_id == "4"
     assert client.token_store is not None and client.token_store.path == explicit
     assert default.exists()
+
+
+def test_session_json_in_the_environment_comes_before_the_file_and_is_never_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    file = _write_session(tmp_path / "session.json", fitatu_user_id="1")
+    monkeypatch.setenv("FITATU_SESSION", str(file))
+    monkeypatch.setenv("FITATU_SESSION_JSON", json.dumps({"bearer_token": "env-bearer", "refresh_token": "env-refresh", "fitatu_user_id": "2"}))
+
+    client = FitatuApiClient.from_session()
+    with patch(HTTP, side_effect=[_reply({}, status=401), _reply({"token": "new-bearer"}), _reply({})]) as http:
+        client.request("GET", "/users/2")
+
+    assert http.call_args_list[1].kwargs["json"] == {"refresh_token": "env-refresh"}
+    assert client.auth.bearer_token == "new-bearer" and client.token_store is None
+    assert json.loads(file.read_text(encoding="utf-8"))["bearer_token"] == "old-bearer"
+    assert FitatuApiClient.from_session(file).auth.fitatu_user_id == "1"  # a path given still wins
+
+
+@pytest.mark.parametrize("value", ['{"bearer_token": "secret-tok', '["secret-tok"]'])
+def test_a_broken_session_json_does_not_echo_it(value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FITATU_SESSION_JSON", value)
+    with pytest.raises(FitatuAuthError, match=r"\$FITATU_SESSION_JSON") as excinfo:
+        FitatuApiClient.from_session()
+    assert "secret-tok" not in str(excinfo.value)
+
+
+def test_client_profile_takes_the_keys_the_environment_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FITATU_CLIENT_PROFILE", json.dumps({"app_version": "4.99.0", "api_secret": "new-secret"}))
+    client = FitatuApiClient(FitatuAuthContext(bearer_token="t"))
+    with patch(HTTP, return_value=_reply({})) as http:
+        client.request("GET", "/ping")
+
+    headers = http.call_args.kwargs["headers"]
+    assert (headers["app-version"], headers["api-secret"], headers["api-key"]) == ("4.99.0", "new-secret", WEB_CLIENT_PROFILE["api_key"])
+    assert WEB_CLIENT_PROFILE["app_version"] != "4.99.0"  # the constant itself is untouched
+
+
+@pytest.mark.parametrize("value", ["not json", '["x"]', '{"api_secrt": "x"}', '{"api_secret": 5}', '{"api_secret": "x\\n"}'])
+def test_a_broken_client_profile_is_refused_without_echoing_it(value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FITATU_CLIENT_PROFILE", value)
+    with pytest.raises(FitatuValidationError, match="FITATU_CLIENT_PROFILE must be a JSON object") as excinfo:
+        FitatuAuthContext()
+    assert value not in str(excinfo.value)
 
 
 def test_missing_session_tells_how_to_create_one() -> None:
@@ -129,6 +180,24 @@ def test_refresh_rejected_because_another_process_won_the_race_uses_its_tokens(t
 
     assert _urls(http) == ["1234567", "refresh", "1234567"]
     assert (client.auth.bearer_token, client.auth.refresh_token) == ("their-bearer", "their-refresh")
+
+
+def test_tokens_of_another_account_in_the_file_are_neither_used_nor_overwritten(tmp_path: Path) -> None:
+    mine = _jwt({"id": 1234567, "exp": 4102444800})
+    path = _write_session(tmp_path / "session.json", bearer_token=mine)
+    client = FitatuApiClient.from_session(path)
+    # `fitatu-api login` for another account, to the same file, while this client runs.
+    theirs = _jwt({"id": 7654321, "exp": 4102444800})
+    FitatuTokenStore(path).save(bearer_token=theirs, refresh_token="their-refresh", fitatu_user_id="7654321")
+    refreshed = _reply({"token": _jwt({"id": 1234567, "exp": 4102448400})})
+
+    with patch(HTTP, side_effect=[_reply({}, status=401), refreshed, _reply({})]) as http:
+        client.request("GET", "/users/1234567")
+
+    assert http.call_args_list[1].kwargs["json"] == {"refresh_token": "old-refresh"}
+    assert theirs not in str(http.call_args_list)
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert (saved["bearer_token"], saved["fitatu_user_id"]) == (theirs, "7654321")
 
 
 def test_a_client_that_does_not_persist_keeps_its_own_newer_tokens(tmp_path: Path) -> None:

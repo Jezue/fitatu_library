@@ -33,28 +33,33 @@ replayed by the offline tests (`tests/fixtures/api_recording.json`, see
   `deletedAt`. The day GET lists them under `activityPlan` in a longer read shape; sending that
   read shape back is rejected field by field (202 with `errorMessage`). An activity is deleted by
   sending it in the write shape with `deletedAt`.
+- The day's note travels in the same sync as `note` (text, null to delete it) with `tagsIds`,
+  the ids of its tags. A payload without them, such as one with only `dietPlan` or only
+  `activities`, or a row deletion, keeps the note, its tags and the day's water (checked live
+  2026-10-14, not recorded).
 
 What the library does with that:
 
 - an add sends only the new row; an update re-sends the changed row in full, so the fields you
   do not touch (including `eaten`) keep their values;
 - a removal re-sends the row with `deletedAt`;
-- updates, moves, replacements, removals and activity writes read the day again afterwards and
-  report the outcome in `ok`;
+- updates, moves, copies, replacements, removals and activity writes read the day again
+  afterwards and report the outcome in `ok`;
 - `sync_days()` is marked safe to repeat (it upserts by id), so the client retries it on a
   network error, 429 or 5xx like a read.
 
-## Ids: `item_id`, `row_id`, `rowId`
+## Ids: `item_id` and `row_id`
 
 | Name | Where | Meaning |
 |---|---|---|
 | `planDayDietItemId` | raw day payload | The id of a food row. |
 | `uuid` | raw `activityPlan` entry | The id of a logged activity. |
 | `item_id` | argument of update, move, replace, remove | A row that is already on the day: its `planDayDietItemId` (an activity's `uuid` for `remove_activity`). |
-| `row_id` | optional argument of every add | The id to give a new row. Pass your own UUID v1 to make the add safe to repeat. |
-| `rowId` | results of the adds, `move_day_item`, `replace_day_item_with_custom_item`, `add_activity` and `remove_activity` | The id of the row the call wrote (for a move or replace, the new row). |
-| `itemId`, `removedId` | results of `update_day_item` (`itemId`), `remove_day_item` and `rollback_added_item` (`removedId`), `remove_day_items_by_kind` (`attempts[].itemId`) | The id of the row the call changed or deleted. These results have no `rowId`. |
-| `row_id` | day summaries (`FitatuTools.get_day`, `FitatuLibrary.get_day_summary_via_api`) | The row's `planDayDietItemId` (an activity's `uuid` under `activities`). |
+| `row_id` | optional argument of every add and of `copy_meal` | The id to give a new row (for `add_foods_to_day_meal` and a copy, the id the rows' ids are derived from). Pass your own UUID v1 to make the call safe to repeat. |
+| `row_id` | results of the adds, `move_day_item`, `replace_day_item_with_custom_item`, `add_activity` and `remove_activity` | The id of the row the call wrote (for a move or replace, the new row). |
+| `row_ids` | results of `add_foods_to_day_meal` and `copy_meal` | The ids of the rows it wrote, derived from its `row_id`. |
+| `item_id`, `removed_id` | results of `update_day_item` (`item_id`), `remove_day_item` and `rollback_added_item` (`removed_id`), `remove_day_items_by_kind` (`attempts[].item_id`, `targets[].item_id`) | The id of the row the call changed or deleted. These results have no `row_id`. |
+| `row_id` | day summaries (`FitatuTools.get_day`, the deprecated `FitatuLibrary.get_day_summary_via_api`) | The row's `planDayDietItemId` (an activity's `uuid` under `activities`). |
 
 A `productId` is accepted as `item_id` only when exactly one row of the given `meal_type` has
 it. With the same product logged twice the call raises `FitatuValidationError` listing the
@@ -62,7 +67,9 @@ candidates, so pass the `planDayDietItemId`.
 
 A `planDayDietItemId` is found in any meal; `meal_type` only has to be a meal the day has.
 
-Raw payloads use the API's camelCase keys; summaries built by the library use snake_case.
+Every result and summary the library builds has snake_case keys. The Fitatu payloads inside them
+(the rows sent or read, such as `added_item`, `before` or `removed`, and `sync_response`) are passed
+through as the API sends them, with camelCase keys (`planDayDietItemId`, `measureQuantity`).
 
 ## Reading a day
 
@@ -94,7 +101,8 @@ query=...)` (the first row of a meal whose name contains the text),
 | `add_product_to_day_meal_with_unit(..., product_id, amount, unit, strict_measure=True, ...)` | A product by unit (`g`, `ml`, `sztuka`, `porcja`, ...), converted to one of its measures. |
 | `add_recipe_to_day_meal(..., recipe_id, food_type="RECIPE", measure_id=39, measure_quantity=1, ...)` | A recipe (39 is the portion measure). |
 | `add_custom_item_to_day_meal(..., name, calories, protein_g, fat_g, carbs_g, eaten=False, source="API", row_id=None)` | A row with a name and the nutrition of the whole amount (kcal and grams). |
-| `add_search_result_to_day_meal(..., phrase, index=0, measure_quantity=1, measure_amount=None, measure_unit=None, ...)` | Hit `index` of a food search: a PRODUCT hit by `productId`, a RECIPE hit by `recipeId`. Other hit types raise. |
+| `add_search_result_to_day_meal(..., phrase, index=0, measure_quantity=1, measure_amount=None, measure_unit=None, ...)` | Hit `index` of a food search: a PRODUCT hit by `productId`, a RECIPE hit by `recipeId`. Other hit types raise, and so does a hit that names no measure when no `measure_unit` is given (the sync would take any measure id). |
+| `add_foods_to_day_meal(user_id, day, *, meal_type, items, eaten=False, source="API", row_id=None)` | Several products and recipes in one sync. Each item holds the arguments of the product add (`product_id`, `measure_id`, `measure_quantity`) or, with a `recipe_id`, of the recipe add; `eaten` applies to every row. |
 
 Every add reads the day first (the meal must exist, else `FitatuNotFoundError`), sends one row
 and returns:
@@ -102,16 +110,22 @@ and returns:
 ```python
 {
     "ok": True,                  # the sync accepted the row (a rejection raises)
-    "rowId": "...",              # the new row's planDayDietItemId
+    "row_id": "...",             # the new row's planDayDietItemId
     "meal": "breakfast",
-    "productId": 24881865,       # or "recipeId" and "foodType", or "name" for a custom row
-    "addedItem": {...},          # the row as sent (no name or nutrition for catalog rows)
-    "syncResponse": [{"date": "...", "revision": "...", "errorMessage": None}],
+    "product_id": 24881865,      # or "recipe_id" and "food_type", or "name" for a custom row
+    "added_item": {...},         # the row as sent (raw, camelCase; no name or nutrition for catalog rows)
+    "sync_response": [{"date": "...", "revision": "...", "errorMessage": None}],  # raw
 }
 ```
 
-The unit and search variants add `measureResolution` (the measure chosen and how), the search
-variant adds `searchItem`.
+The unit and search variants add `measure_resolution` (the measure chosen and how: `measure_id`,
+`measure_name`, `measure_quantity`, `requested_amount`, `requested_unit`, `strategy`,
+`strict_measure`, `warnings`), the search variant adds `search_item` (`name`, `type`, `food_id`,
+`id`, `measure_id`). `add_foods_to_day_meal` returns `row_ids` and `added_items` (in the
+order of `items`) in place of `row_id` and `added_item`. It checks every item, the meal and the ids
+before anything is sent, and an item's error names its index (`items[1]: ...`). Its `row_id`
+seeds the rows' ids as in `copy_meal` below, so a repeat with the same `row_id` and items writes
+the same rows again.
 
 ### Making an add safe to repeat
 
@@ -142,7 +156,7 @@ saved and the row has changed since (e.g. marked eaten on the phone), so do not 
 Never pass a row id read from the day to an add; to change a row, use `update_day_item()`.
 
 `rollback_added_item(user_id, day, *, meal_type, item_id)` deletes the row an add returned
-(`item_id=added["rowId"]`) and only that row; for a row that never landed it returns the
+(`item_id=added["row_id"]`) and only that row; for a row that never landed it returns the
 "not found" removal result below.
 
 ## Updates
@@ -154,25 +168,40 @@ in full. `patch` sets other row fields in camelCase; it may not set `planDayDiet
 Quantities must be greater than 0.
 
 The result has `ok` (the re-read row shows every change), `meal` (where the row is),
-`requestedMeal`, `itemId`, `productId`, `before`, `after`, `updates`, `validation` (per field,
-whether the re-read matches) and `syncResponse`. A row that is not on the day raises
+`requested_meal`, `item_id`, `product_id`, `before`, `after` (the raw row before and after),
+`updates` (the row fields sent, by their API names, e.g. `measureQuantity`), `validation` (per
+such field, whether the re-read matches) and `sync_response`. A row that is not on the day raises
 `FitatuNotFoundError`; its message lists the day's rows.
 
-## Moves and replacements
+## Moves, copies and replacements
 
 `move_day_item(user_id, from_day, *, from_meal_type, item_id, to_day=None, to_meal_type=None)`
 deletes the row and adds a copy with a new id, in one sync (two days in one payload when the
 day changes). The target meal is checked on the target day before anything is sent. The result
-has `ok` (the copy is there and the original is gone), `rowId` (the copy), `fromDate`, `toDate`,
-`fromMeal`, `toMeal`, `removedId`, `addedItem`, `deleteMarker`, `syncPayload`, `syncResponse`.
+has `ok` (the copy is there and the original is gone), `row_id` (the copy), `operation`,
+`from_date`, `to_date`, `from_meal`, `to_meal`, `removed_id`, `added_item`, `delete_marker`,
+`sync_payload`, `sync_response`.
 
 `replace_day_item_with_custom_item(user_id, day, *, meal_type, item_id, name, calories,
 protein_g, fat_g, carbs_g, source="API")` swaps a row for a custom row in one sync; the new row
 keeps the old one's `eaten`. The result
-has `ok`, `rowId` (the new row), `date`, `meal`, `removedId`, `replacementItem`,
-`deleteMarker`, `syncPayload`, `syncResponse`.
+has `ok`, `row_id` (the new row), `operation`, `date`, `meal`, `removed_id`, `replacement_item`,
+`delete_marker`, `sync_payload`, `sync_response`.
 
-Both payloads are unit-tested against the fake server; neither is in the recording.
+`copy_meal(user_id, from_day, *, from_meal_type, to_day, to_meal_type=None, item_ids=None,
+eaten=None, row_id=None)` copies the rows of a meal (or only those in `item_ids`) to another
+meal and/or day in one sync; `to_meal_type` defaults to the source meal, and the target must
+differ from the source. Each copy is rebuilt in the write shape of an add: a product or recipe
+from its food, measure and quantity, a custom row from its name and nutrition. Rows of any
+other type (e.g. `RECIPE_AI`) are not copied and come back in `skipped`. A copy keeps its row's
+`eaten` unless `eaten` is given. `row_id` seeds the copies' ids: the first copy gets it, and each
+next one differs from it only in the UUID's clock sequence, so a repeat with the same `row_id`
+writes the same rows again. As for the adds, an id that another row of the target day already
+has raises `FitatuValidationError` before anything is sent. The result has `ok` (a re-read shows
+every copy), `row_ids`, `operation`, `from_date`, `to_date`, `from_meal`, `to_meal`, `added_items`,
+`skipped` and `sync_response`.
+
+These payloads are unit-tested against the fake server; none is in the recording.
 
 ## Removals
 
@@ -183,11 +212,11 @@ the day again:
 {
     "ok": True,                       # the row is gone from the re-read day
     "meal": "breakfast",              # the meal the row was in
-    "removedId": "...",
-    "removedIdAbsentAfterSync": True,
-    "cleanupMode": "removed",         # "none" when not deleted
-    "removed": {...},                 # the row as it was
-    "syncResponse": [...],
+    "removed_id": "...",
+    "removed_absent_after_sync": True,
+    "cleanup_mode": "removed",        # "none" when not deleted
+    "removed": {...},                 # the row as it was (raw)
+    "sync_response": [...],
 }
 ```
 
@@ -200,11 +229,11 @@ The result is then:
     "reason": "item_not_found",
     "message": "item not found: '...'; rows on this day: <id> (<meal>, '<name>', measureQuantity=1); ...",
     "meal": "breakfast",
-    "removedId": None,
-    "removedIdAbsentAfterSync": False,
-    "cleanupMode": "none",
+    "removed_id": None,
+    "removed_absent_after_sync": False,
+    "cleanup_mode": "none",
     "removed": None,
-    "syncResponse": None,
+    "sync_response": None,
 }
 ```
 
@@ -219,14 +248,18 @@ row_ids=None, max_items=None, dry_run=False)` deletes every matching row in one 
   Neither, or both, raises `FitatuValidationError` before the day is read;
 - `row_ids` limits the targets to those `planDayDietItemId` values, e.g. the rows you added;
   every requested id that is not a target (not on the day, of another kind or meal, or past
-  `max_items`) is listed in `missingRowIds` and makes `ok` False;
+  `max_items`) is listed in `missing_row_ids` and makes `ok` False;
 - `max_items` caps the number of targets;
-- `dry_run=True` sends nothing and returns `{ok, dryRun: True, requestedKind, targetedCount,
-  missingRowIds, meal, targets}`.
+- `dry_run=True` sends nothing and returns `{ok, dry_run: True, requested_kind, targeted_count,
+  missing_row_ids, meal, targets}`.
 
-Otherwise the result is `{ok, requestedKind, targetedCount, removedCount, failedCount,
-missingRowIds, meal, attempts, syncResponse}`, with one `attempts` entry per target:
-`{seq, meal, itemId, requestedKind, resolvedKind, ok, cleanupMode}`.
+Otherwise the result is `{ok, requested_kind, targeted_count, removed_count, failed_count,
+missing_row_ids, meal, targets, attempts, sync_response}`, with one `attempts` entry per target:
+`{seq, meal, item_id, requested_kind, resolved_kind, ok, cleanup_mode}`. `targets` are the rows as
+`list_day_items_for_removal()` gives them: `{meal, meal_name, item_id, product_id, food_type, source,
+resolved_kind, reason, item}`, `item` being the row as the day GET returned it.
+`classify_day_item_for_removal()` returns `{found, requested_item_id, resolved_kind, reason, meal,
+item}`.
 
 | `item_kind` | Rows |
 |---|---|
@@ -242,7 +275,7 @@ and `list_day_items_for_removal()` show how a row is classified.
 preview = client.planner.remove_day_items_by_kind(
     user_id, date.today(), item_kind="auto", meal_type="snack", dry_run=True
 )
-print([row["itemId"] for row in preview["targets"]])
+print([row["item_id"] for row in preview["targets"]])
 ```
 
 ## Activities
@@ -252,28 +285,34 @@ hits = client.activities.search("bieganie", limit=5)  # activityId, name, energy
 logged = client.planner.add_activity(
     user_id, date.today(), activity_id=hits[0]["activityId"], minutes=30, energy=300
 )
-client.planner.remove_activity(user_id, date.today(), item_id=logged["rowId"])
+client.planner.remove_activity(user_id, date.today(), item_id=logged["row_id"])
 ```
 
 `add_activity(user_id, day, *, activity_id, minutes, energy, row_id=None)` logs minutes of a
 catalog activity. The server stores `energy` (kcal) exactly as sent and does not compute it;
 the catalog's `energy` is an estimate for the effort in `measuresDescription`, and
 `activities.search(phrase, bmr=..., sex=...)` returns values computed for the user. `row_id`
-becomes the activity's `uuid` and works as for food rows. The result is `{ok, rowId,
-addedActivity, syncResponse}`, `ok` from a re-read.
+becomes the activity's `uuid` and works as for food rows. The result is `{ok, row_id,
+added_activity, sync_response}`, `ok` from a re-read.
 
 `remove_activity(user_id, day, *, item_id)` re-sends the activity in the write shape with
-`deletedAt`: `{ok, rowId, removed, syncResponse}`, or for an id that is not an activity of that
-day `{ok: False, rowId, reason: "item_not_found", message, removed: None, syncResponse: None}`.
+`deletedAt`: `{ok, row_id, removed, sync_response}`, or for an id that is not an activity of that
+day `{ok: False, row_id, reason: "item_not_found", message, removed: None, sync_response: None}`.
 Only the first simple measure is carried over; an activity logged with advanced measures only
 would be rejected (`FitatuPlannerSyncError`).
+
+## The day's note
+
+`set_note(user_id, day, *, note)` replaces the note (`None` or `""` deletes it), sending the tags the
+day already has: `{ok, note, previous, sync_response}`, `ok` from a re-read and `previous` the note
+before. `get_day()` returns the note as `note` and its tags as `tagsIds`.
 
 ## Errors
 
 | Error | When |
 |---|---|
 | `FitatuValidationError` | A bad argument (date, meal name, quantity, `item_kind`, scope, `patch` key, a `row_id` that is not a UUID v1 or belongs to another row, an ambiguous `productId`), raised before anything is sent. |
-| `FitatuNotFoundError` | The meal is not on the day; the row is not on the day (update, move, replace, classify); no search hit at `index`. The message lists what the day has. Removals return `reason: "item_not_found"` instead. |
+| `FitatuNotFoundError` | The meal is not on the day; the row is not on the day (update, move, replace, classify, copy); a meal to copy has no rows; no search hit at `index`. The message lists what the day has. Removals return `reason: "item_not_found"` instead. |
 | `FitatuPlannerSyncError` | The sync answered 202 but rejected a day; nothing was saved for it. `exc.results` has the per-day list. |
 
 Other API errors are described in the

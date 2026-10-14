@@ -1,0 +1,52 @@
+{
+  "_comment": "Made-up data for FitatuTools.demo() and fitatu-mcp --demo. Nutrition per 100 g (products) or per portion (recipes). Day offsets count from today.",
+  "user_id": "1000001",
+  "meals": {
+    "breakfast": ["Śniadanie", "08:00", 25],
+    "second_breakfast": ["Drugie śniadanie", "11:00", 10],
+    "lunch": ["Lunch", "13:00", 10],
+    "dinner": ["Obiad", "16:00", 30],
+    "snack": ["Kolacja", "19:00", 20],
+    "supper": ["Przekąska", "21:00", 5]
+  },
+  "targets": {"energy": 2000, "protein": [90, 110], "fat": [60, 74], "carbohydrate": [225, 275], "bmr": 1600, "tmr": 2100},
+  "products": {
+    "2000001": {"name": "Jajko kurze", "nutrition": [140, 12.5, 9.7, 0.6, 0, 0.6, 0.3], "measures": [[46, "piece", 60]]},
+    "2000002": {"name": "Płatki owsiane", "nutrition": [370, 13, 7, 60, 10, 1, 0], "measures": [[52, "tablespoon", 10]]},
+    "2000003": {"name": "Mleko 2%", "nutrition": [50, 3.4, 2, 4.8, 0, 4.8, 0.1], "measures": [[40, "glass", 250]], "liquid": true, "barcode": "5900000000017"},
+    "2000004": {"name": "Banan", "nutrition": [97, 1.1, 0.3, 22.8, 1.7, 12.2, 0], "measures": [[46, "piece", 120]]},
+    "2000005": {"name": "Chleb pszenny", "nutrition": [265, 8, 3.2, 49, 2.7, 4, 1.2], "measures": [[47, "slice", 35]]},
+    "2000006": {"name": "Pierś z kurczaka", "nutrition": [110, 23, 1.5, 0, 0, 0, 0.2], "measures": [[39, "portion", 150]]},
+    "2000007": {"name": "Ryż biały", "nutrition": [350, 7, 0.7, 78, 1.3, 0.1, 0], "measures": [[39, "portion", 100]]},
+    "2000008": {"name": "Jogurt naturalny", "brand": "Mleczarnia", "nutrition": [60, 4.3, 3, 4.7, 0, 4.7, 0.1], "measures": [[39, "portion", 150]], "barcode": "5900000000024"},
+    "2000009": {"name": "Kawa czarna", "nutrition": [2, 0.1, 0, 0.3, 0, 0, 0], "measures": [[41, "cup", 250]], "liquid": true},
+    "2000010": {"name": "Jabłko", "nutrition": [52, 0.3, 0.2, 13.8, 2.4, 10.4, 0], "measures": [[46, "piece", 180]]},
+    "2000011": {"name": "Masło", "nutrition": [735, 0.7, 82.5, 0.7, 0, 0.7, 0], "measures": [[53, "teaspoon", 5]]},
+    "2000012": {"name": "Ser żółty", "nutrition": [350, 26, 27, 1, 0, 1, 1.6], "measures": [[47, "slice", 20]]},
+    "2000013": {"name": "Pomidor", "nutrition": [18, 0.9, 0.2, 3.9, 1.2, 2.6, 0], "measures": [[46, "piece", 150]]},
+    "2000014": {"name": "Twaróg półtłusty", "nutrition": [133, 18.7, 4.7, 3.7, 0, 3.7, 0.1], "measures": [[39, "portion", 100]]}
+  },
+  "recipes": {
+    "3000001": {"name": "Owsianka z bananem", "weight": 350, "nutrition": [380, 12, 8, 65, 7, 18, 0.2]},
+    "3000002": {"name": "Spaghetti bolognese", "weight": 400, "nutrition": [560, 30, 18, 70, 5, 8, 2.1]},
+    "3000003": {"name": "Mój koktajl bananowy", "weight": 370, "nutrition": [240, 10, 5, 40, 2, 30, 0.3], "own": true, "items": [[2000004, 46, 1], [2000003, 40, 1]]}
+  },
+  "activities": {
+    "4000001": ["Bieganie", 340, "5 km w 00:30:00"],
+    "4000002": ["Jazda na rowerze", 260, "15 km w 01:00:00"],
+    "4000003": ["Spacer", 150, "60 min"]
+  },
+  "favorites": [["PRODUCT", 2000002], ["RECIPE", 3000001]],
+  "days": {
+    "-2": {"breakfast": [["PRODUCT", 2000001, 46, 2, true], ["PRODUCT", 2000005, 47, 2, true]], "dinner": [["RECIPE", 3000002, 39, 1, true]], "snack": [["PRODUCT", 2000008, 39, 1, true], ["PRODUCT", 2000004, 46, 1, true]]},
+    "-1": {"breakfast": [["RECIPE", 3000001, 39, 1, true], ["PRODUCT", 2000009, 41, 1, true]], "dinner": [["PRODUCT", 2000006, 39, 1, true], ["PRODUCT", 2000007, 39, 1, true]], "snack": [["PRODUCT", 2000014, 39, 1.5, true], ["PRODUCT", 2000013, 46, 1, true]]},
+    "0": {"breakfast": [["PRODUCT", 2000001, 46, 2, true], ["PRODUCT", 2000005, 47, 1, true], ["PRODUCT", 2000011, 53, 1, true]], "dinner": [["PRODUCT", 2000006, 39, 1, false], ["PRODUCT", 2000007, 39, 1, false]]}
+  },
+  "day_activities": {"-1": [[4000001, 30, 340]]},
+  "water": {"glass_ml": 250, "target_ml": 2000, "days": {"0": 750, "-1": 1750}},
+  "weights": {"-28": 82.0, "-21": 81.6, "-14": 81.1, "-7": 80.9, "-1": 80.5},
+  "sizes": {"-28": {"waist": 92}, "-1": {"waist": 90}},
+  "habits": [[1, "Pij 8 szklanek wody", 21, false], [2, "Jedz 5 porcji warzyw", 30, false], [3, "Bez słodyczy", 14, true]],
+  "user_habits": {"1": ["-2", "-2", "-1"]},
+  "good_days": ["-2", "-1"]
+}

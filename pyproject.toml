@@ -4,40 +4,52 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fitatu-api"
-version = "0.5.0"
+dynamic = ["version"]
 description = "Unofficial Python API client for Fitatu — built for AI agents and automation."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
   { name = "Adam Gajewski" }
 ]
-keywords = ["fitatu", "api", "nutrition", "meal-planner", "python"]
+keywords = ["fitatu", "calorie", "nutrition", "meal-planner", "api", "mcp", "llm", "ai-agents"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Software Development :: Libraries :: Python Modules",
+  "Typing :: Typed",
 ]
 dependencies = [
   "requests>=2.31.0",
+  # zoneinfo has no time zone database on Windows; get_today needs the account's zone.
+  "tzdata; sys_platform == 'win32'",
 ]
 
 [project.scripts]
 fitatu-api = "fitatu_api.__main__:main"
+fitatu-mcp = "fitatu_api.mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/Jezue/fitatu_library"
+Documentation = "https://github.com/Jezue/fitatu_library/tree/main/docs"
+Source = "https://github.com/Jezue/fitatu_library"
 Issues = "https://github.com/Jezue/fitatu_library/issues"
 Changelog = "https://github.com/Jezue/fitatu_library/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
+# fitatu-mcp, the MCP server: written for the 2.x API and tested with 2.3.
+mcp = [
+  "mcp>=2.3,<3",
+]
 dev = [
+  "mcp>=2.3,<3",
   "hatch>=1.12",
   "mypy>=1.11",
   "build>=1.2",
@@ -49,6 +61,10 @@ dev = [
   "codespell>=2.3",
 ]
 
+[tool.hatch.version]
+# Bump __version__ there: it is the only place the version is set.
+path = "src/fitatu_api/__init__.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/fitatu_api"]
 
@@ -59,7 +75,10 @@ include = [
   "/README.md",
   "/LICENSE",
   "/CHANGELOG.md",
+  "/CONTRIBUTING.md",
+  "/SECURITY.md",
   "/docs",
+  "/server.json",
 ]
 
 [tool.hatch.envs.default]

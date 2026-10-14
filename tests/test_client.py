@@ -121,6 +121,14 @@ class ApiClientTests(unittest.TestCase):
         self.assertEqual(result["ok"], True)
         req.assert_called_once_with("DELETE", "/products/123")
 
+    def test_delete_recipe_calls_delete_endpoint(self) -> None:
+        client = self._make_client()
+        with patch.object(client, "request", return_value=[]) as req:  # the live reply: 200 []
+            result = client.delete_recipe(123)
+
+        self.assertEqual(result, {})
+        req.assert_called_once_with("DELETE", "/recipes/123")
+
     def test_set_product_proposal_calls_proposals_endpoint(self) -> None:
         client = self._make_client()
         with patch.object(client, "request", return_value={"id": 9}) as req:
@@ -228,8 +236,8 @@ class ApiClientTests(unittest.TestCase):
             )
 
         self.assertEqual(result["ok"], True)
-        self.assertEqual(result["matchedCount"], 2)
-        self.assertEqual(result["deletedProductIds"], ["2"])
+        self.assertEqual(result["matched_count"], 2)
+        self.assertEqual(result["deleted_product_ids"], ["2"])
         delete_product.assert_called_once_with("2")
 
     def test_cleanup_duplicate_user_products_accepts_custom_predicate(self) -> None:
@@ -251,8 +259,8 @@ class ApiClientTests(unittest.TestCase):
                 dry_run=False,
             )
 
-        self.assertEqual(result["matchedCount"], 1)
-        self.assertEqual(result["deletedCount"], 0)
+        self.assertEqual(result["matched_count"], 1)
+        self.assertEqual(result["deleted_count"], 0)
         delete_product.assert_not_called()
 
     def _cleanup(self, products: list[dict], **kwargs: object) -> tuple[dict, Mock]:
@@ -274,8 +282,8 @@ class ApiClientTests(unittest.TestCase):
         result, delete = self._cleanup(rows, keep_product_id=1)
 
         delete.assert_not_called()
-        self.assertEqual((result["dryRun"], result["matchedCount"]), (True, 2))
-        self.assertEqual((result["toDeleteProductIds"], result["deletedProductIds"]), (["2"], []))
+        self.assertEqual((result["dry_run"], result["matched_count"]), (True, 2))
+        self.assertEqual((result["to_delete_product_ids"], result["deleted_product_ids"]), (["2"], []))
 
     def test_cleanup_needs_a_known_keep_id_when_several_match(self) -> None:
         rows = [{"foodId": n, "type": "PRODUCT", "brand": "P"} for n in (1, 2)]
@@ -292,7 +300,7 @@ class ApiClientTests(unittest.TestCase):
         delete.assert_not_called()
 
         result, _ = self._cleanup(rows, keep_product_id=1, dry_run=False, max_deletions=11)
-        self.assertEqual(result["deletedCount"], 11)
+        self.assertEqual(result["deleted_count"], 11)
 
     def test_cleanup_stops_on_auth_and_rate_limit_errors(self) -> None:
         rows = [{"foodId": n, "type": "PRODUCT", "brand": "P"} for n in (1, 2, 3, 4)]
@@ -305,8 +313,8 @@ class ApiClientTests(unittest.TestCase):
 
         delete = Mock(side_effect=[FitatuApiError("x", status_code=500), {}, {}])
         result, _ = self._cleanup(rows, keep_product_id=1, dry_run=False, delete=delete)
-        self.assertEqual((result["ok"], result["deletedProductIds"]), (False, ["3", "4"]))
-        self.assertEqual(result["errors"][0]["productId"], "2")
+        self.assertEqual((result["ok"], result["deleted_product_ids"]), (False, ["3", "4"]))
+        self.assertEqual(result["errors"][0]["product_id"], "2")
 
     def test_search_user_food_accepts_iso_date_strings(self) -> None:
         client = self._make_client()
@@ -442,7 +450,7 @@ class ApiClientTests(unittest.TestCase):
                 return_value={"token": "new-token", "refreshToken": "new-refresh"},
             ):
                 result = client.refresh_access_token()
-            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result, client.describe_auth_state())
             self.assertEqual(client.auth.refresh_token, "new-refresh")
             self.assertIn("new-token", store_path.read_text(encoding="utf-8"))
             self.assertIn("new-refresh", store_path.read_text(encoding="utf-8"))
@@ -460,7 +468,7 @@ class ApiClientTests(unittest.TestCase):
             allow_refresh_on_401=False,
         )
         self.assertEqual((client.auth.bearer_token, client.auth.refresh_token), ("new-token", "new-refresh"))
-        self.assertEqual(set(result), {"status", "state"})
+        self.assertEqual(result, client.describe_auth_state())
         self.assertNotIn("new-token", json.dumps(result))
         self.assertNotIn("new-refresh", json.dumps(result))
 
@@ -485,23 +493,41 @@ class ApiClientTests(unittest.TestCase):
         self.assertEqual(http.call_count, 3)
         self.assertEqual(client.auth.bearer_token, "fresh")
 
-    def test_refresh_returns_error_when_refresh_token_missing(self) -> None:
+    def test_refresh_without_a_refresh_token_is_an_auth_error(self) -> None:
         client = self._make_client()
         client.auth.refresh_token = None
 
-        result = client.refresh_access_token()
+        with self.assertRaises(FitatuAuthError) as caught:
+            client.refresh_access_token()
 
-        self.assertEqual(result["status"], "error")
-        self.assertIn("missing refresh_token", result["message"])
+        self.assertIn("missing refresh_token", str(caught.exception))
 
-    def test_refresh_returns_error_when_response_has_no_token(self) -> None:
+    def test_a_rejected_refresh_token_is_an_auth_error_for_400_too(self) -> None:
+        for status in (400, 401):
+            client = self._make_client()
+            rejected = Mock(status_code=status, text='{"message": "Invalid refresh token"}', headers={})
+            with self.subTest(status=status), patch("fitatu_api.client.requests.Session.request", return_value=rejected):
+                with self.assertRaises(FitatuAuthError) as caught:
+                    client.refresh_access_token()
+                self.assertEqual(caught.exception.status_code, status)
+
+    def test_a_refresh_that_fails_otherwise_raises_its_own_error(self) -> None:
+        client = self._make_client()  # a refresh is a POST, so a 503 is not retried
+        down = Mock(status_code=503, text="", headers={})
+        with patch("fitatu_api.client.requests.Session.request", return_value=down):
+            with self.assertRaises(FitatuApiError) as caught:
+                client.refresh_access_token()
+        self.assertNotIsInstance(caught.exception, FitatuAuthError)
+        self.assertEqual(caught.exception.status_code, 503)
+
+    def test_refresh_raises_when_response_has_no_token(self) -> None:
         client = self._make_client()
 
         with patch.object(client, "request", return_value={"status": "ok"}):
-            result = client.refresh_access_token()
+            with self.assertRaises(FitatuApiError) as caught:
+                client.refresh_access_token()
 
-        self.assertEqual(result["status"], "error")
-        self.assertIn("token not found", result["message"])
+        self.assertIn("token not found", str(caught.exception))
 
     def test_clear_auth_clears_tokens_and_store(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -650,20 +676,22 @@ class CredentialSafetyTests(unittest.TestCase):
         with patch("requests.adapters.HTTPAdapter.send", side_effect=redirect) as send:
             with self.assertRaises(FitatuApiError) as login:
                 FitatuApiClient.login("me@example.com", "hunter2-password")
-            refresh = self._client().refresh_access_token()
+            with self.assertRaises(FitatuApiError) as refresh:
+                self._client().refresh_access_token()
 
         self.assertEqual(
             [call.args[0].url for call in send.call_args_list],
             ["https://pl-pl.fitatu.com/api/login", "https://pl-pl.fitatu.com/api/token/refresh"],
         )
         self.assertEqual(login.exception.status_code, 307)
-        self.assertEqual((refresh["status"], refresh["status_code"]), ("error", 307))
+        self.assertEqual(refresh.exception.status_code, 307)
 
     def test_path_ids_must_be_numeric(self) -> None:
         client = self._client()
         with patch.object(client, "request") as request:
             for call in (
                 lambda: client.delete_product("../users/123/measurements/2020-01-01"),
+                lambda: client.delete_recipe("1/../../users/1"),
                 lambda: client.get_product_details("12/../../users/1"),
                 lambda: client.set_product_raw_ingredients("x1", "rice"),
                 lambda: client.get_recipe("recipe-of-the-day"),
@@ -746,17 +774,18 @@ class ErrorModelTests(unittest.TestCase):
     def test_http_error_message_without_codename_uses_the_body_message(self) -> None:
         response = Mock(status_code=404, text='{"message": "Measurement not found"}', headers={})
         with patch("fitatu_api.client.requests.Session.request", return_value=response):
-            with self.assertRaises(FitatuApiError) as ctx:
+            with self.assertRaises(FitatuNotFoundError) as ctx:
                 self._client().request("GET", "/users/1/measurements/2020-01-01")
 
         self.assertEqual(str(ctx.exception), "GET /users/1/measurements/2020-01-01 -> 404: Measurement not found")
+        self.assertEqual(ctx.exception.status_code, 404)
 
     def test_validation_errors_are_api_errors_and_value_errors(self) -> None:
-        for error_type in (FitatuValidationError, FitatuNotFoundError):
-            with self.subTest(error_type=error_type.__name__):
-                error = error_type("bad")
-                self.assertIsInstance(error, FitatuApiError)
-                self.assertIsInstance(error, ValueError)
+        self.assertIsInstance(FitatuValidationError("bad"), FitatuApiError)
+        self.assertIsInstance(FitatuValidationError("bad"), ValueError)
+        # Not a ValueError: a server 404 is one too, and nothing was wrong with the arguments.
+        self.assertIsInstance(FitatuNotFoundError("gone"), FitatuApiError)
+        self.assertNotIsInstance(FitatuNotFoundError("gone"), ValueError)
         with self.assertRaises(FitatuValidationError):
             self._client().search_food("banan", limit=0)
 
@@ -824,7 +853,7 @@ class AuthStoreTests(unittest.TestCase):
             self.assertEqual(store.load(), {})
 
     def test_token_store_expands_home_for_reads_too(self) -> None:
-        with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {"HOME": home}):
+        with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {"HOME": home, "USERPROFILE": home}):
             session = Path(home) / ".fitatu" / "session.json"
             session.parent.mkdir()
             session.write_text('{"fitatu_user_id": "1", "base_url": "https://de-de.fitatu.com/api"}', encoding="utf-8")
@@ -1091,6 +1120,25 @@ class TokenLifetimeTests(unittest.TestCase):
             self.assertEqual(client.request("GET", "/ping"), {"ok": True})
         self.assertEqual(http.call_args.kwargs["headers"]["authorization"], f"Bearer {expiring}")
 
+    def test_a_fresh_token_that_looks_expired_turns_refreshing_ahead_off_once(self) -> None:
+        # The clock runs more than an hour fast: the token Fitatu just issued already looks expired.
+        stale = _jwt({"id": 1, "exp": int(time.time()) - 600})
+        client = FitatuApiClient(auth=FitatuAuthContext(bearer_token=stale, refresh_token="r"))
+        replies = [_json_response(200, {"token": stale}), _json_response(200, {}), _json_response(200, {})]
+
+        with self.assertLogs("fitatu_api.client", level="WARNING") as logs, patch(
+            "fitatu_api.client.requests.Session.request", side_effect=replies
+        ) as http:
+            client.request("GET", "/a")
+            client.request("GET", "/b")
+
+        self.assertEqual([c.kwargs["url"].rsplit("/", 1)[-1] for c in http.call_args_list], ["refresh", "a", "b"])
+        self.assertEqual([json.loads(r.getMessage())["event"] for r in logs.records], ["fitatu.auth.clock_skew"])
+        # A 401 still refreshes.
+        with patch("fitatu_api.client.requests.Session.request", side_effect=[_json_response(401, {}), *replies[:2]]) as http:
+            client.request("GET", "/c")
+        self.assertEqual([c.kwargs["url"].rsplit("/", 1)[-1] for c in http.call_args_list], ["c", "refresh", "c"])
+
     def test_no_second_refresh_when_another_call_already_refreshed(self) -> None:
         client = FitatuApiClient(auth=FitatuAuthContext(bearer_token="new", refresh_token="r"))
         with patch.object(client, "_refresh") as refresh:
@@ -1129,6 +1177,53 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(ctx.exception.retry_after, 120.0)
         self.assertIn("retry after 120 s", str(ctx.exception))
 
+    def test_retries_and_their_outcome_are_logged_without_secrets(self) -> None:
+        client = FitatuApiClient(auth=FitatuAuthContext(bearer_token="secret-bearer"), retry_base_delay_seconds=0.5)
+        replies = [
+            requests.ConnectionError("https://pl-pl.fitatu.com/api/search?phrase=private"),
+            Mock(status_code=503, text="", headers={}),
+            _json_response(200, {}),
+        ]
+        with self.assertLogs("fitatu_api.client", level="DEBUG") as logs, patch(
+            "fitatu_api.client.requests.Session.request", side_effect=replies
+        ), patch("fitatu_api.client.time.sleep") as sleep:
+            client.request("GET", "/ping")
+            with patch("fitatu_api.client.requests.Session.request", side_effect=requests.Timeout("t")):
+                with self.assertRaises(FitatuConnectionError):
+                    client.request("POST", "/ping", json_data={})  # a write: one attempt
+
+        events = [json.loads(record.getMessage()) for record in logs.records]
+        retries = [(e["attempt"], e["delay_seconds"], e["reason"]) for e in events if e["event"] == "fitatu.request.retry"]
+        self.assertEqual(retries, [(1, 0.5, "network error: ConnectionError"), (2, 1.0, "status 503")])
+        self.assertEqual([c.args for c in sleep.call_args_list], [(0.5,), (1.0,)])
+        ok, error = (e for e in events if e["event"] in ("fitatu.request.ok", "fitatu.request.error"))
+        self.assertEqual((ok["attempt"], error["attempt"], error["reason"]), (3, 1, "network error: Timeout"))
+        self.assertTrue(isinstance(ok["elapsed_ms"], int) and isinstance(error["elapsed_ms"], int))
+        self.assertNotIn("secret-bearer", "\n".join(logs.output))
+        self.assertNotIn("private", "\n".join(logs.output))
+
+    def test_a_request_that_failed_for_good_is_a_warning_and_a_4xx_only_debug(self) -> None:
+        client = self._client()
+        replies = [Mock(status_code=503, text="", headers={})] * 3 + [Mock(status_code=404, text="", headers={})]
+        with self.assertLogs("fitatu_api.client", level="DEBUG") as logs, patch(
+            "fitatu_api.client.requests.Session.request", side_effect=replies
+        ):
+            with self.assertRaises(FitatuApiError):
+                client.request("GET", "/a")
+            with self.assertRaises(FitatuNotFoundError):
+                client.request("GET", "/b")  # e.g. a measurement that is not there, which callers expect
+        errors = [(r.levelname, json.loads(r.getMessage())["status_code"]) for r in logs.records if "fitatu.request.error" in r.getMessage()]
+        self.assertEqual(errors, [("WARNING", 503), ("DEBUG", 404)])
+
+    def test_cloudflare_520_to_524_are_retried_like_502(self) -> None:
+        for status in (520, 521, 522, 523, 524):
+            with self.subTest(status=status), patch(
+                "fitatu_api.client.requests.Session.request",
+                side_effect=[Mock(status_code=status, text="", headers={}), _json_response(200, [])],
+            ) as http:
+                self.assertEqual(self._client().request("GET", "/ping"), [])
+                self.assertEqual(http.call_count, 2)
+
     def test_short_retry_after_is_honoured(self) -> None:
         limited = Mock(status_code=429, text="", headers={"retry-after": "2"})
         with patch(
@@ -1136,6 +1231,43 @@ class RetryTests(unittest.TestCase):
         ), patch("fitatu_api.client.time.sleep") as sleep:
             self.assertEqual(self._client().request("GET", "/ping"), [])
         sleep.assert_called_once_with(2.0)
+
+    def test_a_time_limit_skips_the_retries_that_would_end_past_it(self) -> None:
+        client = self._client()
+        limited = Mock(status_code=429, text="", headers={"retry-after": "20"})
+        with patch("fitatu_api.client.requests.Session.request", return_value=limited) as http, patch(
+            "fitatu_api.client.time.sleep"
+        ) as sleep, client.time_limit(10), self.assertRaises(FitatuRateLimitError) as ctx:
+            client.request("GET", "/ping")
+        sleep.assert_not_called()
+        self.assertEqual((http.call_count, ctx.exception.retry_after), (1, 20.0))
+        # A retry whose wait fits is still made, and each request's timeout is cut to the time left.
+        replies = [Mock(status_code=503, text="", headers={}), _json_response(200, [])]
+        with patch("fitatu_api.client.requests.Session.request", side_effect=replies) as http:
+            with client.time_limit(5):
+                self.assertEqual(client.request("GET", "/ping"), [])
+        self.assertTrue(all(0 < call.kwargs["timeout"] <= 5 for call in http.call_args_list) and http.call_count == 2)
+        with patch("fitatu_api.client.requests.Session.request", return_value=_json_response(200, [])) as http:
+            client.request("GET", "/ping")  # the limit ended with its block
+        self.assertEqual(http.call_args.kwargs["timeout"], 25)
+
+    def test_a_retry_that_would_have_almost_no_time_left_is_not_made(self) -> None:
+        client = self._client()
+        busy = Mock(status_code=503, text="", headers={"retry-after": "1"})
+        with patch("fitatu_api.client.requests.Session.request", return_value=busy) as http, patch(
+            "fitatu_api.client.time.sleep"
+        ) as sleep, client.time_limit(2.5), self.assertRaises(FitatuApiError) as ctx:
+            client.request("GET", "/ping")
+        # 1 s of waiting would leave the retry 1.5 s: the 503 is reported, not the retry's timeout.
+        sleep.assert_not_called()
+        self.assertEqual((http.call_count, ctx.exception.status_code), (1, 503))
+
+    def test_no_request_is_sent_once_the_time_limit_is_up(self) -> None:
+        client = self._client()
+        with patch("fitatu_api.client.requests.Session.request") as http, client.time_limit(0):
+            with self.assertRaisesRegex(FitatuConnectionError, "GET /ping -> not sent: the time limit"):
+                client.request("GET", "/ping")
+        http.assert_not_called()
 
     def test_one_session_is_reused_and_closed(self) -> None:
         client = self._client()
