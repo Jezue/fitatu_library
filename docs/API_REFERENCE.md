@@ -186,7 +186,7 @@ service.
 | `FitatuConnectionError` | stable | No HTTP response (DNS, timeout, reset). |
 | `FitatuMaintenanceError` | stable | Fitatu's technical break; `display_from`, `display_to`. |
 | `FitatuPlannerSyncError` | stable | The day sync rejected a day (HTTP 202); `results`. |
-| `describe_error(exc)` | stable | Any exception as a JSON-safe dict with `error_type`, `retryable` and `hint`. |
+| `describe_error(exc, *, user_id=None)` | stable | Any exception as a JSON-safe dict with `error_type`, `retryable` and `hint`; the user id in its `message` is `<user>`. |
 
 ## Naming
 

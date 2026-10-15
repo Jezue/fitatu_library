@@ -169,6 +169,16 @@ def test_an_error_envelope_fits_the_output_schema_too(tools: FitatuTools) -> Non
         assert not [error.message for error in Draft202012Validator(schemas[name]).iter_errors(result.structured_content)], name
 
 
+def test_an_error_envelope_does_not_show_the_user_id(tools: FitatuTools) -> None:
+    fake = FakeFitatuServer(SEED)
+    fake.free = True  # get_top_foods is Premium-only: 403 on GET /diet-plan/{user id}/summary-product/...
+    fake.routes[("GET", f"/users/{RECORDED_USER_ID}/subscriptions")] = {"subscriptions": []}
+    tools.client.request = fake.request  # type: ignore[method-assign]
+    result = _session(build_server(lambda: tools), {"get_top_foods": ARGUMENTS["get_top_foods"]})[2]["get_top_foods"]
+    assert _envelope(result)["error"]["status_code"] == 403 and "/diet-plan/<user>/" in result.content[0].text
+    assert RECORDED_USER_ID not in result.content[0].text
+
+
 def test_read_only_lists_and_runs_only_the_read_tools(tools: FitatuTools) -> None:
     calls = {"get_day": {"date": DAY}, "add_custom_item": ARGUMENTS["add_custom_item"]}
     instructions, listed, results = _session(build_server(lambda: tools, read_only=True), calls)

@@ -1196,7 +1196,7 @@ class FitatuTools:
             with self.client.time_limit(self.call_timeout):
                 return {"ok": True, "data": getattr(self, name)(**args)}
         except Exception as exc:
-            error = describe_error(exc)
+            error = describe_error(exc, user_id=self.client.auth.fitatu_user_id)
             log_caught(logger, name, exc, error)
             if error["hint"] == FORBIDDEN_HINT:
                 error["hint"] = self._forbidden_hint()

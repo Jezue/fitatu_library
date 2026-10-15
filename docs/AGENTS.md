@@ -338,6 +338,9 @@ whether a re-read confirmed the effect; food adds, `log_weight`, `log_measuremen
 }
 ```
 
+A `message` that names a route has the account's user id as `<user>`, e.g.
+`GET /diet-plan/<user>/summary-product/protein/custom -> 403`; no result carries the id.
+
 An add-type call (`add_food`, `add_foods`, `add_custom_item`, `copy_meal`, `add_activity`) that
 fails after something may have been sent also has `retry_row_id`: the `row_id` to repeat it
 with (rule 2 of [Writing safely](#writing-safely)). The rows below say "an add" for these.

@@ -42,6 +42,7 @@ from .exceptions import (
     FitatuAuthError,
     FitatuValidationError,
     describe_error,
+    redact_user_id,
 )
 from .service_modules import SummaryModule
 
@@ -338,7 +339,7 @@ def _doctor(args: argparse.Namespace) -> int:
     def report(level: str, check: str, text: str) -> None:
         nonlocal failed
         failed = failed or level == "FAIL"
-        line = _shown(text).replace(f"/{user_id}", "/<user id>") if user_id else _shown(text)  # e.g. GET /users/{id} -> 401
+        line = redact_user_id(_shown(text), user_id)  # e.g. GET /users/<user> -> 401
         print(f"{level:<5} {check + ':':<12}{line}")
 
     try:
