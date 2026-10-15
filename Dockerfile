@@ -1,7 +1,7 @@
 # fitatu-mcp over Streamable HTTP, for n8n or another computer: docs/AGENTS.md#remote-http-and-docker.
 # docker build -t fitatu-mcp . && docker run -e FITATU_MCP_TOKEN -v fitatu-data:/data -p 127.0.0.1:8765:8765 fitatu-mcp
 # The base image is pinned to a digest; Dependabot (.github/dependabot.yml) proposes updates.
-FROM python:3.13-slim@sha256:7c61056e61ac89e852de05f3dc6fa51a6dd2181797bceed46aa725dd7cb2cd3b
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 \
     FITATU_SESSION=/data/session.json
 WORKDIR /src
