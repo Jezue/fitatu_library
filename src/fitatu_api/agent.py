@@ -76,6 +76,7 @@ _FREE_PROGRESS_DAYS = 31  # without Premium a request per day: a month stays wel
 _PREMIUM_RECHECK = 600  # seconds a refusal for want of Premium is trusted: a plan bought meanwhile shows within 10 minutes
 _SHOPPING_DAYS = 14  # get_shopping_list reads every day and every recipe: two weeks stay well within call_timeout
 _ROW_ID = {"type": "string", "description": "row_id of a food row on that day, from get_day (meals[].items[].row_id)."}
+_PCT = {"type": "integer", "minimum": 1, "maximum": 98}  # Fitatu refuses a macro of 0 g (checked live)
 
 def _new_row_id_schema(to_change: str) -> dict[str, Any]:
     return {
@@ -639,6 +640,35 @@ TOOLS: list[dict[str, Any]] = [
         idempotent=True,
     ),
     _tool(
+        "set_targets",
+        "Set the daily goals",
+        "Change the user's daily goals from today on; earlier days keep theirs. energy_kcal sets a manual "
+        "calorie goal. protein_pct, fat_pct and carbohydrate_pct set the macro split as whole percent of the "
+        "energy, all three summing to 100; the grams follow from the energy. With energy_kcal alone the "
+        "current split stays, or 20/30/50 when the account has none (say so); the percentages alone keep "
+        "the current energy, as a manual goal. automatic true goes back to the goal Fitatu calculates from "
+        "the user's profile, with no energy_kcal or percentages. water_glass_ml is the glass size water is "
+        "counted in (get_water's glass_ml). Returns the goals now in effect as get_targets gives them, plus "
+        "automatic, glass_ml and previous: the arguments that put back what this call changed, with no "
+        "water_glass_ml when there was no glass size (that cannot be put back). data.ok says Fitatu's "
+        "reply shows the change.",
+        {
+            "energy_kcal": {
+                "type": "integer",
+                "minimum": 500,
+                "maximum": 8000,
+                "description": "Daily calorie goal in kcal; makes the goal manual. Convert kJ first: 1 kcal = 4.184 kJ.",
+            },
+            "protein_pct": {**_PCT, "description": "Protein's share of the energy goal in whole percent; with fat_pct and carbohydrate_pct, summing to 100."},
+            "fat_pct": {**_PCT, "description": "Fat's share of the energy goal in whole percent (not body fat)."},
+            "carbohydrate_pct": {**_PCT, "description": "Carbohydrate's share of the energy goal in whole percent."},
+            "automatic": {"type": "boolean", "description": "true: back to the goal Fitatu calculates. Only true, and not with energy_kcal or the percentages."},
+            "water_glass_ml": {"type": "integer", "minimum": 50, "maximum": 2000, "description": "Size of one glass in ml."},
+        },
+        destructive=True,
+        idempotent=True,
+    ),
+    _tool(
         "set_note",
         "Write the day's note",
         "Replace the user's note for a diary day (get_day's note) with note; an empty note deletes it. "
@@ -775,10 +805,10 @@ other tool, get_progress and get_report included, works on any account.
 - Log food (and set copy_meal's eaten) with eaten true when the user ate it or just asks to log it; \
 false only when they plan ahead.
 - A result's top-level ok only says the call ran: say something changed only when data.ok is true.
-- The destructive tools ({_DESTRUCTIVE}) overwrite or delete what is logged. A direct request is \
-consent ("I weigh 81.2 kg", "move the yogurt to lunch", a yes to your list): do it without asking \
-again. Ask first only when you inferred the change or it would touch more than the user named. The \
-host may still ask the user to confirm the call.
+- The destructive tools ({_DESTRUCTIVE}) overwrite or delete what is logged, or the goals. A \
+direct request is consent ("I weigh 81.2 kg", "move the yogurt to lunch", a yes to your list): do \
+it without asking again. Ask first only when you inferred the change or it would touch more than \
+the user named. The host may still ask the user to confirm the call.
 - Before remove_items, call preview_removal. If it lists exactly the foods the user named, remove \
 them; otherwise tell the user which foods would go and wait for a yes.
 - When an add or copy_meal fails with a retry_row_id in its error, repeat it with that row_id, \
@@ -786,7 +816,7 @@ never without it.
 - Undo: remove rows you just added or copied by their row_ids; add a removed row again with \
 add_food from its meal, food_id, food_type, measure_id, measure_quantity and eaten (food_id null: \
 add_custom_item from its meal, name, energy, protein, fat, carbohydrate and eaten); call \
-update_item, set_note or update_recipe with its result's previous.
+update_item, set_note, update_recipe or set_targets with its result's previous.
 - When the user gives only kcal for a custom item, estimate its protein, fat and carbohydrate and \
 say they are estimates.
 - Units: energy in kcal; nutrients and weight in g; water in ml. log_weight takes kg; \
@@ -950,6 +980,11 @@ def _measure_macros(details: dict[str, Any], food_type: str, measure: dict[str, 
 
 
 _PROGRESS = ("energy", "protein", "fat", "carbohydrate")  # the nutrients with daily goals
+_KCAL_PER_G = {"protein": 4, "fat": 9, "carbohydrate": 4}
+# A manual goal needs a split (Fitatu refuses one without; checked live): for an account without one, as a
+# free account's automatic goal is, this one, inside the ranges that goal allows (protein 12-20 %, fat 25-30 %,
+# carbohydrate 45-70 %).
+_SPLIT = {"protein": 20, "fat": 30, "carbohydrate": 50}
 
 
 def _rounded(value: Any) -> float | None:
@@ -1017,6 +1052,18 @@ class DailyTargets(TypedDict):
     carbohydrate: dict[str, float | None]
     bmr: float | None
     tmr: float | None
+
+
+class TargetsResult(DailyTargets):
+    """set_targets' result: the goals in effect from today on as get_targets gives them, the goal's mode
+    (``automatic``), the glass size (``glass_ml``), ``previous`` (set_targets' arguments that put back what
+    the call changed; no ``water_glass_ml`` when the account had no glass size, which cannot be put back)
+    and ``ok`` (Fitatu's reply shows the change)."""
+
+    automatic: bool
+    glass_ml: int | None
+    previous: dict[str, Any]
+    ok: bool
 
 
 class AddResult(TypedDict):
@@ -1803,6 +1850,66 @@ class FitatuTools:
         day = as_date(date, "date")
         self.client.water.set_day(self._user_id, day, water_ml)
         return {"date": day.isoformat(), "water_ml": water_ml, "ok": True}
+
+    def set_targets(
+        self,
+        energy_kcal: int | None = None,
+        protein_pct: int | None = None,
+        fat_pct: int | None = None,
+        carbohydrate_pct: int | None = None,
+        automatic: bool | None = None,
+        water_glass_ml: int | None = None,
+    ) -> TargetsResult:
+        split = {macro: pct for macro, pct in (("protein", protein_pct), ("fat", fat_pct), ("carbohydrate", carbohydrate_pct)) if pct is not None}
+        if automatic is False:
+            raise FitatuValidationError("automatic takes only true, which goes back to Fitatu's calculated goal; a manual goal is energy_kcal and/or the percentages")
+        if automatic and (energy_kcal is not None or split):
+            raise FitatuValidationError("automatic true goes back to Fitatu's calculated goal: pass it without energy_kcal and the percentages")
+        if split and (len(split) < 3 or sum(split.values()) != 100):
+            given = ", ".join(f"{macro}_pct {pct}" for macro, pct in split.items())
+            raise FitatuValidationError(f"protein_pct, fat_pct and carbohydrate_pct go together and must sum to 100, got {given}")
+        if energy_kcal is None and not split and not automatic and water_glass_ml is None:
+            raise FitatuValidationError("pass energy_kcal, the three percentages, automatic true and/or water_glass_ml")
+        day = self.get_today()["date"]
+        settings = self.client.user_settings.get_new(self._user_id, day)
+        diet = as_dict(settings.get("userDietSettings")) or {}
+        glass = (as_dict(settings.get("waterSettings")) or {}).get("unitCapacity") or None  # 0 is no size, as in get_water
+        current = {macro: diet.get(f"{macro}Percentage") for macro in _SPLIT}
+        changes: dict[str, Any] = {}
+        if automatic:
+            changes = {"manualEnergyTarget": False}  # Fitatu works the energy out again (and drops a free account's split)
+        elif energy_kcal is not None or split:
+            kcal = energy_kcal if energy_kcal is not None else diet["energy"]
+            pcts: dict[str, Any] = split or (current if None not in current.values() else _SPLIT)
+            changes = {"manualEnergyTarget": True, "energy": kcal}
+            for macro, pct in pcts.items():
+                # Fitatu checks the grams against the percentages, within 1 g (checked live).
+                changes |= {f"{macro}Percentage": pct, f"{macro}Weight": round(kcal * pct / 100 / _KCAL_PER_G[macro])}
+        # Only what this call changes, so undoing it leaves later changes alone.
+        previous: dict[str, Any] = {}
+        if changes:
+            previous = (
+                {"energy_kcal": diet.get("energy"), **{f"{macro}_pct": pct for macro, pct in current.items()}}
+                if diet.get("manualEnergyTarget") is True
+                else {"automatic": True}
+            )
+        if water_glass_ml is not None and glass:  # no size (0) cannot be sent back: water_glass_ml is at least 50
+            previous["water_glass_ml"] = glass
+        body: dict[str, Any] = {"userId": int(self._user_id), "updatedAt": None}
+        if changes:
+            # The whole userDietSettings with the changes, as the app sends it: Fitatu refuses a part (checked live).
+            body["userDietSettings"] = {**diet, **changes}
+        if water_glass_ml is not None:
+            body["waterSettings"] = {"unitCapacity": water_glass_ml}
+        # The reply is the whole new settings, as a GET then gives them (checked live); read them if it is empty.
+        new = self.client.user_settings.update_new(self._user_id, body) or self.client.user_settings.get_new(self._user_id, day)
+        new_diet = as_dict(new.get("userDietSettings")) or {}
+        new_glass = (as_dict(new.get("waterSettings")) or {}).get("unitCapacity") or None
+        ok = all(new_diet.get(key) == value for key, value in changes.items()) and (water_glass_ml is None or new_glass == water_glass_ml)
+        return cast(
+            TargetsResult,
+            {**daily_targets(new, day), "automatic": new_diet.get("manualEnergyTarget") is not True, "glass_ml": new_glass, "previous": previous, "ok": ok},
+        )
 
     def set_note(self, date: str, note: str | None) -> dict[str, Any]:
         day = as_date(date, "date")

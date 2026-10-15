@@ -62,6 +62,7 @@ def demo_arguments(tools: FitatuTools) -> dict[str, dict[str, Any]]:
         "log_weight": {"date": day, "weight_kg": 80.2},
         "log_measurements": {"date": day, "waist": 89.5},
         "set_water": {"date": day, "water_ml": 1000},
+        "set_targets": {"energy_kcal": 1800, "protein_pct": 30, "fat_pct": 30, "carbohydrate_pct": 40, "water_glass_ml": 300},
         "set_note": {"date": day, "note": "Trening rano"},
         "add_activity": {"date": day, "activity_id": 4000003, "minutes": 45, "energy_kcal": 110},
         "remove_activity": {"date": yesterday, "row_id": activity},
@@ -96,6 +97,18 @@ def test_writes_stay_in_one_demo_and_the_numbers_follow_the_catalog() -> None:
     snack = next(meal for meal in tools.get_day(day)["meals"] if meal["meal_key"] == "snack")
     assert snack["meal_name"] == "Kolacja"  # renamed slots, as users have them
     assert tools.call("get_progress", {"from_date": day, "to_date": day})["data"]["days"][0]["energy"]["logged"] == tools.get_day(day)["totals"]["energy"]
+
+
+def test_goals_set_in_the_demo_show_in_its_targets_progress_and_water() -> None:
+    tools = FitatuTools.demo()
+    day = tools.get_today()["date"]
+    assert tools.set_targets(energy_kcal=1800, protein_pct=30, fat_pct=30, carbohydrate_pct=40, water_glass_ml=300)["ok"]
+    targets = tools.get_targets(day)
+    assert targets["energy"] == 1800 and targets["protein"] == {"grams": 135, "percent": 30}
+    assert tools.get_progress(day, day)["days"][0]["energy"]["target"] == 1800
+    assert tools.get_water(day)["glass_ml"] == 300
+    back = tools.set_targets(automatic=True)
+    assert back["ok"] and back["automatic"] and back["energy"] == 2000
 
 
 def test_the_demo_refuses_what_fitatu_would_and_names_what_it_does_not_serve() -> None:

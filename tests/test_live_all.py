@@ -34,6 +34,9 @@ What a run changes on the account, and how it is put back:
 With FITATU_LIVE_RUN_WRITE_ACCOUNT=1 also:
 
 - the water glass size in settings: changed, then set back to the value read before;
+- the daily goals and the glass size (`set_targets`): a manual goal, then the automatic one,
+  then the settings read before are sent back whole. Fitatu keeps them as a new version from
+  today, equal to the old one.
 - a product in Fitatu's shared food catalog and a private recipe: created, then deleted;
 - a private recipe made with the tools: created, logged on FITATU_LIVE_DAY, removed and
   deleted. Recipes are deleted softly: Fitatu keeps them, marked deleted, out of your foods.
@@ -772,6 +775,31 @@ class TestAccountWrites:
         finally:
             client.user_settings.update_water_settings(user_id, unit_capacity=original)
             assert unit_capacity() == original, f"cleanup failed: set the water glass size back to {original} ml"
+
+    def test_goals_set_and_put_back(self, tools: FitatuTools, client: FitatuApiClient, user_id: str) -> None:
+        today = date.fromisoformat(tools.get_today()["date"])
+        week_ago = today - timedelta(days=7)  # not yesterday: Fitatu's today may be a UTC one
+        before = client.user_settings.get_new(user_id, today)
+        earlier = client.user_settings.get_new(user_id, week_ago)["userDietSettings"]
+        glass = 300 if (before.get("waterSettings") or {}).get("unitCapacity") != 300 else 250
+        try:
+            manual = _ok(tools.call("set_targets", {"energy_kcal": 1800, "protein_pct": 30, "fat_pct": 25, "carbohydrate_pct": 45, "water_glass_ml": glass}))
+            assert manual["ok"] and not manual["automatic"] and manual["energy"] == 1800, "the manual goal was not set"
+            assert manual["protein"] == {"grams": 135, "percent": 30} and manual["glass_ml"] == glass, "the split or the glass was not set"
+            assert _ok(tools.call("get_targets", {"date": today.isoformat()}))["energy"] == 1800, "get_targets does not show the new goal"
+            assert client.user_settings.get_new(user_id, week_ago)["userDietSettings"] == earlier, "an earlier day's goals changed"
+            back = _ok(tools.call("set_targets", {"automatic": True}))
+            calculated = client.user_settings.get_new(user_id, today)["calculatedValues"]["calculatedEnergy"]
+            assert back["ok"] and back["automatic"] and back["energy"] == calculated, "the automatic goal did not come back"
+        finally:
+            # The saved object, not set_targets(**previous): it puts back the exact grams and a null split too.
+            client.user_settings.update_new(
+                user_id, {"userId": int(user_id), "updatedAt": None, "userDietSettings": before["userDietSettings"], "waterSettings": before["waterSettings"]}
+            )
+            after = client.user_settings.get_new(user_id, today)
+            assert (after["userDietSettings"], after["waterSettings"]) == (before["userDietSettings"], before["waterSettings"]), (
+                "cleanup failed: set the goals and the glass size back by hand"
+            )
 
     def test_create_and_delete_product(self, client: FitatuApiClient) -> None:
         created = client.create_product(

@@ -14,6 +14,14 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Claude Code), the rules for using the tools well, common tasks, free vs Premium accounts and
   what to do on each error. A test checks it against the format and that it names only real
   tools.
+- `set_targets` tool: change the daily goals from today on. It can set a manual calorie goal,
+  the macro split in whole percent (the grams follow from the energy, as Fitatu requires them to
+  match), go back to Fitatu's automatic goal, and set the glass size water is counted in. It
+  sends the whole current `userDietSettings` back with the changes, as the app does (Fitatu
+  refuses a partial one). It returns the goals Fitatu answered with, plus `previous`, the
+  arguments that put back what it changed. Checked live on an account without Premium
+  (2026-10-15): manual goals and a custom split work there too, and earlier days keep their
+  goals. `fitatu-mcp --read-only` does not serve it.
 
 ## [0.5.1] - 2026-10-15
 

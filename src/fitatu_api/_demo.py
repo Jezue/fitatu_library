@@ -71,6 +71,9 @@ class DemoBackend:
                 activity = {"uuid": _new_row_id(), "activityId": activity_id, "energy": energy, "simpleMeasure": {"measureId": 1, "value": minutes}}
                 self._store_activity(self._day(offset), activity)
         self.water = {self._day(offset): ml for offset, ml in _DATA["water"]["days"].items()}
+        self.targets = dict(_DATA["targets"])
+        self.glass_ml: int = _DATA["water"]["glass_ml"]
+        self.manual: dict[str, Any] | None = None  # the manual goal's userDietSettings fields, as sent
         self.notes: dict[str, dict[str, Any]] = {}  # note and tagsIds per day, as the sync sent them
         self.measurements: dict[str, dict[str, Any]] = {}
         for offset, weight in _DATA["weights"].items():
@@ -327,13 +330,32 @@ class DemoBackend:
             self.favorites.discard((kind, int(food_id)))
 
     def settings(self, **_: Any) -> dict[str, Any]:
-        targets = _DATA["targets"]
+        targets = self.targets
         diet = {"energy": targets["energy"]}
         for macro, kcal in (("protein", 4), ("fat", 9), ("carbohydrate", 4)):
             grams = sum(targets[macro]) / 2
             diet |= {f"{macro}Weight": grams, f"{macro}Percentage": round(grams * kcal * 100 / targets["energy"])}
+        diet |= {"manualEnergyTarget": self.manual is not None, **(self.manual or {})}
         since = (self.today - dt.timedelta(days=30)).isoformat()
-        return {"date": f"{since}T00:00:00+00:00", "userDietSettings": diet, "calculatedValues": {"BMR": targets["bmr"], "TMR": targets["tmr"]}}
+        return {
+            "date": f"{since}T00:00:00+00:00",
+            "userDietSettings": diet,
+            "calculatedValues": {"BMR": targets["bmr"], "TMR": targets["tmr"]},
+            "waterSettings": {"unitCapacity": self.glass_ml},
+        }
+
+    def set_settings(self, *, body: dict[str, Any], **_: Any) -> dict[str, Any]:
+        # shortcut: a change applies to every day, past ones too (Fitatu keeps earlier days' goals); version the goals by day if a demo task needs that.
+        diet = body.get("userDietSettings")
+        if diet is not None:
+            keys = ("energy", *(f"{macro}{part}" for macro in ("protein", "fat", "carbohydrate") for part in ("Percentage", "Weight")))
+            self.manual = {key: diet[key] for key in keys} if diet.get("manualEnergyTarget") else None
+            self.targets = dict(_DATA["targets"])
+            if self.manual:  # a manual split's macro goals are one number each, as on a free account (checked live)
+                self.targets |= {"energy": diet["energy"], **{m: [diet[f"{m}Weight"]] * 2 for m in ("protein", "fat", "carbohydrate")}}
+        if body.get("waterSettings"):
+            self.glass_ml = int(body["waterSettings"]["unitCapacity"])
+        return self.settings()
 
     def _range(self, params: dict[str, Any]) -> list[str]:
         start, end = dt.date.fromisoformat(params["fromDate"]), dt.date.fromisoformat(params["toDate"])
@@ -347,9 +369,9 @@ class DemoBackend:
         days = self._range(params)
         reply: dict[str, Any] = {"measures": {day: self._logged(day, nutrient) for day in days}}
         if nutrient == "energy":
-            reply["targets"] = dict.fromkeys(days, _DATA["targets"]["energy"])
+            reply["targets"] = dict.fromkeys(days, self.targets["energy"])
         else:
-            low, high = _DATA["targets"][nutrient]
+            low, high = self.targets[nutrient]
             reply["targetRanges"] = dict.fromkeys(days, {"min": low, "max": high})
         return reply
 
@@ -359,7 +381,7 @@ class DemoBackend:
         for field in MACRO_FIELDS:
             logged = [value for day in days if (value := self._logged(day, field)) is not None]
             eaten = [value for day in days if (value := self._logged(day, field, eaten_only=True)) is not None]
-            goal = _DATA["targets"].get(field)
+            goal = self.targets.get(field)
             low, high = (None, goal) if field == "energy" else (goal or [None, None])
             reply[field] = {
                 "current": round(sum(logged), 2) if logged else None,
@@ -422,7 +444,7 @@ class DemoBackend:
 
     def get_water(self, *, day: str, **_: Any) -> dict[str, Any]:
         water = _DATA["water"]
-        return {"water": {"waterConsumption": self.water.get(day, 0), "target": water["target_ml"]}, "settings": {"waterUnitCapacity": water["glass_ml"]}}
+        return {"water": {"waterConsumption": self.water.get(day, 0), "target": water["target_ml"]}, "settings": {"waterUnitCapacity": self.glass_ml}}
 
     def set_water(self, *, day: str, body: dict[str, Any], **_: Any) -> None:
         self.water[day] = int(body["waterConsumption"])
@@ -473,6 +495,7 @@ _ROUTES = [
     ("GET", rf"/users/{_U}/favorite/foods", "favorite_foods"),
     ("PUT", rf"/users/{_U}/favorite/food/(?P<kind>PRODUCT|RECIPE)/(?P<food_id>\d+)", "set_favorite"),
     ("GET", rf"/users/{_U}/settings-new/{_D}", "settings"),
+    ("PATCH", rf"/users/{_U}/settings-new", "set_settings"),
     ("GET", rf"/v2/diet-plan/{_U}/summary/custom", "summary"),
     ("GET", rf"/v2/diet-plan/{_U}/summary/(?P<nutrient>\w+)/custom", "by_day"),
     ("GET", rf"/activity-plan/{_U}/summary/custom", "activity_summary"),

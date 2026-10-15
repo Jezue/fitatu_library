@@ -74,7 +74,7 @@ copies from `from_date` / `from_meal` to `to_date` / `to_meal`; `move_item` move
 use only their own names. Every key a tool returns is snake_case.
 
 **Kind** is `readOnlyHint`. **Destructive** (`destructiveHint`) means the call can overwrite or
-delete diary data: the host asks the user before running it (see [Who confirms](#who-confirms)). **Idempotent** (`idempotentHint`) means
+delete diary data or the goals (`set_targets`): the host asks the user before running it (see [Who confirms](#who-confirms)). **Idempotent** (`idempotentHint`) means
 repeating the same call has no further effect.
 
 | Tool | What it does | Kind | Destructive | Idempotent |
@@ -112,6 +112,7 @@ repeating the same call has no further effect.
 | `log_weight` | Save the body weight for a day in kg, replacing that day's weight and keeping its other measurements. | write | yes | yes |
 | `log_measurements` | Save body sizes (neck, chest, waist, stomach, hips, thigh, calf, biceps) in the user's size unit, read from the profile, and/or `fat_percentage` for a day, replacing only the values given and keeping the day's others and its weight. | write | yes | yes |
 | `set_water` | Set the day's water total in ml (replaces it, does not add). | write | yes | yes |
+| `set_targets` | Change the daily goals from today on (earlier days keep theirs): a manual `energy_kcal`, the macro split in whole percent (`protein_pct`, `fat_pct`, `carbohydrate_pct`, summing to 100; the grams follow from the energy), `automatic: true` for the goal Fitatu calculates, and/or `water_glass_ml`. With only `energy_kcal` the current split is kept, or 20/30/50 when the account has none. Returns the goals now in effect as `get_targets` does, with `automatic`, `glass_ml` and `previous`, the arguments that put back what the call changed (no `water_glass_ml` when the account had no glass size, `get_water`'s `glass_ml` null: undo leaves the new glass). 2 requests. | write | yes | yes |
 | `set_note` | Replace the day's note (`""` deletes it), keeping its tags and the rest of the day; returns the `previous` note (`""` when there was none), to put it back. See [Day notes](#day-notes). | write | yes | yes |
 | `add_activity` | Log a catalog activity with minutes and the kcal burned; returns its `row_id`. | write | no | no |
 | `remove_activity` | Delete a logged activity by its `row_id`. | write | yes | yes |
@@ -144,6 +145,12 @@ Every tool but `get_top_foods` works on an account without Fitatu Premium (check
   `get_progress` reads there gives the same goals as each day's summary (checked live
   2026-10-15; the live tests compare the two). A free account's meals in `get_day` have
   `recommended_percent` null.
+- `set_targets` works on a free account too (checked live 2026-10-15): Fitatu takes a manual
+  goal and a macro split without Premium. A free account's automatic goal has no split
+  (`get_targets` gives `percent` and `grams` null), so a manual goal set with only `energy_kcal`
+  gets 20/30/50. With a split set, its macro goals in `get_progress` are single numbers
+  (`target_min` equal to `target_max`) instead of a range; `automatic: true` brings the range
+  back.
 - Catalog recipes that `search_recipes` marks `premium` can still be read with
   `get_food_measures`.
 
@@ -164,7 +171,7 @@ a person.
 | `FitatuApiClient.login()`, `refresh_access_token()` | Take a password or mint new session tokens. |
 | `FitatuApiClient.request()`, `planner.sync_days()`, `planner.sync_single_day()` | Raw requests and raw day payloads skip every check the tools make. |
 | `create_product()`, `delete_product()`, `set_product_proposal()`, `set_product_raw_ingredients()`, `cleanup_duplicate_user_products()`, `create_recipe()`, `update_recipe()`, `delete_recipe()`, their `*_via_api` wrappers (deprecated with `FitatuLibrary`), and `add_user_dish_via_api()` (the wrapper of `create_recipe()`) | Write to the food catalog (products, change proposals for catalog products, recipes that can be shared) or change and delete products and recipes by id without checking whose they are. The `create_recipe`, `update_recipe` and `delete_recipe` tools are the safe way: private recipes of the user only. |
-| `user_settings.update_profile()`, `update_new()`, `update_water_settings()` | Change account settings, not the diary. |
+| `user_settings.update_profile()`, `update_new()`, `update_water_settings()` | Change account settings, not the diary: `update_new()` writes any part of them (body data, meal schema, fasting) unchecked. The `set_targets` tool is the safe way to change the goals and the glass size. |
 | `measurements.delete_day()`, `planner.remove_day_items_by_kind(all_meals=True)` without `row_ids` | Delete a whole day's measurements or every row of a day. `remove_items` always names its rows. |
 | `FitatuLibrary.export_diary_via_api(path=..., overwrite=True)` (deprecated) | Writes or replaces a local file at any path the process can write, with content a model can partly choose (custom row names). Let host code pick the path. |
 
@@ -201,8 +208,9 @@ a person.
    activities and `set_note` it is the outcome of a re-read. Food adds, `log_weight`, `log_measurements`,
    `set_water`, `set_favorite` and `delete_recipe` are not read back, and `create_recipe` and
    `update_recipe` read the recipe back only for `per_serving`: their `ok` only says the server
-   accepted the value. A `measure_id` the food does not have is refused before the add
-   (that check reads the food once; the error lists its measures).
+   accepted the value. `set_targets`' `ok` says the settings Fitatu answered with (the whole new
+   settings, as a re-read gives them) show the change. A `measure_id` the food does not have is
+   refused before the add (that check reads the food once; the error lists its measures).
    Before telling the user something changed, check `ok` and, when the food, measure or amount
    matters, call `get_day` again.
 6. **Totals, not deltas.** `set_water` replaces the day's total: read `get_water` and send the
@@ -221,7 +229,8 @@ a person.
    `food_id`, `food_type`, `measure_id`, `eaten` and its `measure_quantity` as `quantity` (a
    custom row has no `food_id`: `add_custom_item` with its `meal`, name, `eaten` and the
    `energy`, `protein`, `fat` and `carbohydrate` the removed row carries). `update_item` and `update_recipe` are undone by calling them again with the `previous` they returned, and
-   `move_item` by moving the new row back, `set_note` by calling it with the `previous` note. A row added again gets a new `row_id`.
+   `move_item` by moving the new row back, `set_note` by calling it with the `previous` note, `set_targets` by calling
+   it with its `previous` (empty when it only set a glass size the account did not have). A row added again gets a new `row_id`.
 
 ## Private recipes
 
@@ -315,7 +324,7 @@ MCP host asks only about `remove_items` itself. (Before `preview_removal`, the p
 `call()` returns `{"ok": true, "data": ...}` or `{"ok": false, "error": {...}}`. The envelope's
 `ok` says whether the call ran. For updates, moves, removals and activity writes, `data.ok` says
 whether a re-read confirmed the effect; food adds, `log_weight`, `log_measurements`, `set_water`,
-`set_favorite`, `create_recipe`, `update_recipe` and `delete_recipe` report `data.ok` once the server accepted the value, without a re-read. The error is `describe_error()` of the exception:
+`set_favorite`, `create_recipe`, `update_recipe` and `delete_recipe` report `data.ok` once the server accepted the value, without a re-read; `set_targets`' `data.ok` says the settings Fitatu answered with show the change. The error is `describe_error()` of the exception:
 
 ```json
 {
@@ -537,7 +546,9 @@ error that names it. As it is:
 - `get_water`, `set_water`, `get_recent_foods`, `get_favorite_foods`, `set_favorite`,
   `get_my_foods`, `create_recipe`, `update_recipe`, `delete_recipe`, `search_recipes`,
   `get_fasting`, `get_habits` and `get_good_days` need `fake.routes` (`tests/test_agent.py` has
-  replies for them).
+  replies for them);
+- `set_targets` needs `fake.routes` for today's `settings-new` GET and the PATCH
+  (`tests/test_agent.py` has replies).
 
 It does not fill in nutrition, so a catalog food it stores shows as 'Unknown' with 0 kcal.
 
@@ -670,7 +681,7 @@ turns into `--read-only`; the host runs it with `uv run`, which installs `fitatu
 the bundle's version from PyPI, so build it only for a released version. Log in first with
 `fitatu-api login` (or `uvx --from fitatu-api fitatu-api login`). The manifest validates
 against the MCPB 0.4 schema, and the bundle was installed through the Claude Desktop UI and
-answered tool calls with the default settings (40 tools, 23 with *Read only*). Claude Desktop does
+answered tool calls with the default settings (the 40 tools of 0.5.1, 23 with *Read only*). Claude Desktop does
 not replace an installed extension with a bundle of the same version: uninstall it first
 (*Settings > Extensions*), then open the new `.mcpb`.
 
@@ -704,7 +715,7 @@ What the server does:
   with `isError` when `ok` is false, so [Results and errors](#results-and-errors) applies as
   written. Every tool has an `outputSchema` for that envelope (`ok`, `data`, `error`), with
   `data` in the shape of the tool's return type: the TypedDicts `DaySummary`, `DailyTargets`,
-  `FoodHit`, `AddResult` and `RemoveResult` for the main tools, a plain object or list for the
+  `TargetsResult`, `FoodHit`, `AddResult` and `RemoveResult` for the main tools, a plain object or list for the
   others; `fitatu_api.mcp_server.output_schema(name)` returns it. Hosts check results against
   it, and the tests check every tool's result. `isError` is about the envelope: a removal whose rows were already gone is not an
   error, and the model still checks `data.ok`.

@@ -10,7 +10,8 @@
 
 An unofficial Python client for the API of [Fitatu](https://www.fitatu.com), the calorie
 counter, built to be driven by AI agents and scripts. It reads and writes the food diary,
-activities, body measurements and water, and reads goals, summaries and the food catalog.
+activities, body measurements and water, reads and sets goals, and reads summaries and the food
+catalog.
 `FitatuTools` turns the diary into tools a language model can call. The session handling
 follows [python-garminconnect](https://github.com/cyberjunky/python-garminconnect): log in once,
 keep one session file, let the client refresh it.
@@ -70,7 +71,7 @@ How writes, row ids and removals work: [docs/PLANNER.md](https://github.com/Jezu
 
 ## For AI agents
 
-`FitatuTools` exposes 40 tools (read the day, search food, log food, weight, water,
+`FitatuTools` exposes 41 tools (read the day, search food, log food, weight, water,
 workouts and private recipes, ...) with JSON Schema inputs and read-only / destructive / idempotent annotations.
 `call()` never raises: it returns `{"ok": true, "data": ...}` or `{"ok": false, "error":
 {"error_type", "message", "retryable", "hint", ...}}`, so the model can read what went wrong.
@@ -161,7 +162,7 @@ Claude Desktop, uvx and what the server does:
 | Water | `client.water` | `get_water`, `set_water` |
 | Summary and export | `client.summary`: range totals, nutrient per day, top products, diary export | `get_range_summary`, `get_progress`, `get_top_foods`, `get_report`, `get_shopping_list` (worked out from the planned rows) |
 | Fasting and habits | `client.fasting` (schemes, eating periods per day), `client.habits` (catalog, the user's habits, good days); read only | `get_fasting`, `get_habits`, `get_good_days` |
-| Goals and settings | `client.user_settings`: targets, BMR/TMR, profile | `get_targets` |
+| Goals and settings | `client.user_settings`: targets, BMR/TMR, profile | `get_targets`, `set_targets` (the manual or automatic goal, macro split, glass size) |
 | Catalog writes | `create_product`, `create_recipe(shared=True)`, `delete_product`, `set_product_proposal`, duplicate cleanup | none, on purpose |
 
 `FitatuLibrary`, which wraps most of these as `*_via_api` methods that return `{"status": ...}`
@@ -175,7 +176,7 @@ instead of raising, is deprecated and will be removed in 1.0: for results that n
 |---|---|---|
 | Diary: read, log, update, move, copy, remove food, notes, activities, water, weight, body measurements | ✅ | ✅ |
 | Search, barcode, food measures, recipe search, private recipes, favourites, recent foods | ✅ | ✅ |
-| Goals (`get_targets`), progress (`get_progress`), reports (`get_report`), range totals (`get_range_summary`) | ✅ (progress: a request per day, at most 31 days) | ✅ |
+| Goals: read and set (`get_targets`, `set_targets`), progress (`get_progress`), reports (`get_report`), range totals (`get_range_summary`) | ✅ (progress: a request per day, at most 31 days) | ✅ |
 | Weight history, fasting and habits (read), shopping list | ✅ | ✅ |
 | Top foods (`get_top_foods`, `summary.get_top_products()`) | ❌ 403: "needs Fitatu Premium" | ✅ |
 | Diary export (`fitatu-api export`, `summary.export_diary()`) | ❌ 403: "needs Fitatu Premium" | ✅ |
@@ -192,7 +193,9 @@ Nearly everything works on an account without Fitatu Premium. Fitatu answers 403
 refused, they read each day's own summary instead (a request per day, at most 31 days), and
 `get_report` gives `top_foods` null with a `top_foods_note`. A free account's macro goals are a
 range (`target_min` below `target_max`); on a Premium account a one-day summary gave the two
-equal (the day-by-day route `get_progress` reads there agrees, checked live). `fitatu-api doctor`
+equal (the day-by-day route `get_progress` reads there agrees, checked live). It takes a manual
+goal and its own macro split too (`set_targets`, checked live 2026-10-15); with a split, its
+macro goals are single numbers. `fitatu-api doctor`
 says whether the account has a premium plan. See
 [Free and Premium accounts](https://github.com/Jezue/fitatu_library/blob/main/docs/AGENTS.md#free-and-premium-accounts)
 in docs/AGENTS.md for the tools.
@@ -379,7 +382,7 @@ again afterwards to set `ok`. Requests per agent tool call, before retries and t
 |---|---|
 | 0 | `get_today` |
 | 1 | the other read tools; `set_water`; `set_favorite`; `preview_removal` and `remove_items` with `dry_run`; `delete_recipe` of a recipe already deleted |
-| 2 | `get_range_summary`, `get_fasting` (3 when the settings name the scheme by id), `get_habits`, `find_by_barcode` (1 without a product hit), `add_food` for a recipe in portions, `add_custom_item`, `log_weight`, `delete_recipe`; `add_foods`, plus 1 for each item with `unit` or `measure_id`; `create_recipe`, plus 1 for each ingredient |
+| 2 | `get_range_summary`, `get_fasting` (3 when the settings name the scheme by id), `get_habits`, `find_by_barcode` (1 without a product hit), `add_food` for a recipe in portions, `add_custom_item`, `log_weight`, `delete_recipe`, `set_targets`; `add_foods`, plus 1 for each item with `unit` or `measure_id`; `create_recipe`, plus 1 for each ingredient |
 | 3 | `add_food` with `unit` or `measure_id` (reads the food first), `log_measurements` (reads the size unit from the profile), `copy_meal` within a day, `remove_items`, `add_activity`, `remove_activity`, `set_note`; `update_recipe`, plus 1 for each new ingredient |
 | 4 | `update_item`, `move_item` within a day, `copy_meal` to another day |
 | 5 | `get_progress` (any range up to 62 days; without Fitatu Premium, see below) |
@@ -454,9 +457,10 @@ day on or before today is refused. Water and the note on that day are set back, 
 and measurements written on `FITATU_LIVE_MEASUREMENT_DAY` are deleted. `-k ReadOnly` runs only
 the tests that read.
 Logging catalog foods adds them to the account's recent foods, which is not undone. With
-`FITATU_LIVE_RUN_WRITE_ACCOUNT=1` the suite also changes and restores the water glass size and
-creates, then deletes, a catalog product and two private recipes (one through the tools, logged
-on `FITATU_LIVE_DAY` and removed). Recipe deletes are soft, so like the recent foods they are
+`FITATU_LIVE_RUN_WRITE_ACCOUNT=1` the suite also changes and restores the water glass size and the
+daily goals (Fitatu keeps the restored goals as a new version from today), and creates, then
+deletes, a catalog product and two private recipes (one through the tools, logged on
+`FITATU_LIVE_DAY` and removed). Recipe deletes are soft, so like the recent foods they are
 not fully undone: both recipes stay on the account, marked deleted and hidden from your foods
 and searches. The full list is in the module docstring of `tests/test_live_all.py`. Never point `FITATU_LIVE_DAY` at a day with entries you care about.
 
