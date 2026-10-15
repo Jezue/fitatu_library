@@ -7,6 +7,14 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `skills/fitatu-diary/SKILL.md`: an [Agent Skills](https://agentskills.io) skill for Hermes
+  Agent and other hosts that read the format: how to set up `fitatu-mcp` (Hermes `config.yaml`,
+  Claude Code), the rules for using the tools well, common tasks, free vs Premium accounts and
+  what to do on each error. A test checks it against the format and that it names only real
+  tools.
+
 ## [0.5.1] - 2026-10-15
 
 ### Fixed

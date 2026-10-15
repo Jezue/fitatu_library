@@ -79,6 +79,7 @@ include = [
   "/SECURITY.md",
   "/docs",
   "/server.json",
+  "/skills",
 ]
 
 [tool.hatch.envs.default]

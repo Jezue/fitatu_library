@@ -77,3 +77,17 @@ def test_server_json_is_this_version_and_the_readme_claims_its_name() -> None:
     assert (server["version"], [package["version"] for package in server["packages"]]) == (__version__, [__version__])
     # The MCP Registry accepts the PyPI package only when its README carries this line.
     assert f"<!-- mcp-name: {server['name']} -->" in (ROOT / "README.md").read_text(encoding="utf-8")
+
+
+def test_the_hermes_skill_follows_the_agent_skills_spec_and_names_real_tools() -> None:
+    skill = ROOT / "skills" / "fitatu-diary" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+    front, body = text.split("---\n")[1], text.split("---\n", 2)[2]
+    fields = {key: value.strip() for key, _, value in (line.partition(":") for line in front.splitlines() if line[:1].isalpha())}
+    # agentskills.io: name = parent directory, lowercase, hyphens, no "--", 64 chars; description <= 1024
+    assert fields["name"] == skill.parent.name
+    assert re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", fields["name"]) and len(fields["name"]) <= 64
+    assert 0 < len(fields["description"]) <= 1024 and len(fields["compatibility"]) <= 500
+    assert len(body.splitlines()) < 500
+    named = set(re.findall(r"`((?:get|add|set|remove|search|find|log|copy|move|update|create|delete|preview)_[a-z_]+)`", body))
+    assert named and named <= {tool["name"] for tool in TOOLS}
