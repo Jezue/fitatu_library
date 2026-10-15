@@ -139,8 +139,7 @@ claude mcp add fitatu --scope user -- fitatu-mcp   # fitatu-mcp --read-only: the
 
 Without an account, `fitatu-mcp --demo` (or `FitatuTools.demo()`) serves a small made-up diary
 kept in memory. For Claude Desktop, each [GitHub release](https://github.com/Jezue/fitatu_library/releases/latest)
-has `fitatu-<version>.mcpb`, installed with a double click (it starts with `uv run` the way the
-host does; installing it through the Claude Desktop UI is not tested yet). Without installing anything, `uvx --from "fitatu-api[mcp]" fitatu-mcp` runs the server. It is
+has `fitatu-<version>.mcpb`, installed with a double click (log in with `fitatu-api login` first). Without installing anything, `uvx --from "fitatu-api[mcp]" fitatu-mcp` runs the server. It is
 listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as
 `io.github.Jezue/fitatu-api` (`server.json`).
 
