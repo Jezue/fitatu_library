@@ -6,6 +6,7 @@ import inspect
 import json
 import logging
 import re
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -617,6 +618,33 @@ def test_report_without_premium_has_progress_and_no_top_foods(tools: FitatuTools
     fake.routes[("GET", f"/users/{RECORDED_USER_ID}/subscriptions")] = {"subscriptions": []}
     error = tools.call("get_top_foods", ARGUMENTS["get_top_foods"])["error"]
     assert (error["error_type"], error["status_code"]) == ("forbidden", 403) and error["hint"].startswith("A premium feature")
+
+
+def test_a_refusal_for_want_of_premium_is_not_trusted_for_good(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    # The MCP server keeps one FitatuTools for its whole life, and the user may buy Premium meanwhile.
+    fake.free = True
+    fake.routes[("GET", f"/v2/diet-plan/{RECORDED_USER_ID}/summary/custom")] = range_summary
+    assert data(tools, "get_report", **ARGUMENTS["get_report"])["top_foods"] is None
+    fake.free = False
+    data(tools, "get_top_foods", **ARGUMENTS["get_top_foods"])  # a Premium route answers: the refusal is forgotten
+    report = data(tools, "get_report", **ARGUMENTS["get_report"])
+    assert report["top_foods"] is not None and report["top_foods_note"] is None
+    # Otherwise it holds for 10 minutes, then the Premium route is asked again.
+    fake.free = True
+    data(tools, "get_progress", from_date=DAY, to_date=DAY)
+    fake.free = False
+    fake.requests.clear()
+    data(tools, "get_progress", from_date=DAY, to_date=DAY)
+    assert [r["path"].split("/")[-2] for r in fake.requests] == ["summary"]
+    with patch("fitatu_api.agent.time.monotonic", return_value=time.monotonic() + 601):
+        data(tools, "get_progress", from_date=DAY, to_date=DAY)
+    assert fake.requests[1]["path"].endswith("/summary/carbohydrate/custom")
+    # A 403 on an account with an active plan is not about Premium either.
+    tools._without_premium = True
+    fake.free = True
+    fake.routes[("GET", f"/users/{RECORDED_USER_ID}/subscriptions")] = {"subscriptions": [{"startDate": "2020-01-01", "endDate": None}]}
+    assert tools.call("get_top_foods", ARGUMENTS["get_top_foods"])["error"]["hint"].startswith("Not a premium matter")
+    assert tools._without_premium is False
 
 
 def test_a_firewall_403_is_not_taken_for_an_account_without_premium(tools: FitatuTools, fake: FakeFitatuServer) -> None:

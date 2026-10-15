@@ -21,6 +21,7 @@ import datetime as dt
 import json
 import logging
 import math
+import time
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict, cast
@@ -72,6 +73,7 @@ _LIMIT = {"type": "integer", "minimum": 1, "maximum": 50, "default": 10, "descri
 _ROW_IDS = {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "row_ids from get_day."}
 _PROGRESS_DAYS = 62  # get_progress has an entry per day: a year of them is ~130k characters
 _FREE_PROGRESS_DAYS = 31  # without Premium a request per day: a month stays well within call_timeout
+_PREMIUM_RECHECK = 600  # seconds a refusal for want of Premium is trusted: a plan bought meanwhile shows within 10 minutes
 _SHOPPING_DAYS = 14  # get_shopping_list reads every day and every recipe: two weeks stay well within call_timeout
 _ROW_ID = {"type": "string", "description": "row_id of a food row on that day, from get_day (meals[].items[].row_id)."}
 
@@ -1066,8 +1068,18 @@ class FitatuTools:
         self.client = client
         self._allowed = tuple(tool["name"] for tool in _selected(tools))
         self.call_timeout = call_timeout
-        # Set by the first 403 from a Premium-only route get_progress uses; from then on it reads day by day.
-        self._without_premium = False
+        self._premium_refused_until = 0.0  # time.monotonic() until which _without_premium holds
+
+    @property
+    def _without_premium(self) -> bool:
+        """Whether Fitatu refused a Premium-only route get_progress uses in the last 10 minutes; while
+        it holds, get_progress and get_report read day by day and get_report skips the top foods."""
+        return time.monotonic() < self._premium_refused_until
+
+    @_without_premium.setter
+    def _without_premium(self, refused: bool) -> None:
+        # Not for good: the MCP server keeps one FitatuTools while the user may buy Premium.
+        self._premium_refused_until = time.monotonic() + _PREMIUM_RECHECK if refused else 0.0
 
     @classmethod
     def from_session(
@@ -1162,6 +1174,7 @@ class FitatuTools:
         except FitatuApiError:
             return FORBIDDEN_HINT
         if premium["active"]:
+            self._without_premium = False
             return "Not a premium matter, as the account has premium: a used-up AI quota (see codename) or a wrong API key. Tell the user."
         return "A premium feature: the account has no active premium plan, so Fitatu refuses it. Tell the user; do not retry."
 
@@ -1209,7 +1222,7 @@ class FitatuTools:
         """:meth:`get_progress` for a range of any length; without Premium, of up to 31 days.
 
         With Premium: one request per nutrient and one for the totals, whatever the range. Without
-        it (the first macro route answers 403, and the instance remembers that): one range summary
+        it (the first macro route answers 403, and the instance remembers that for 10 minutes): one range summary
         per day, which also gives each day's eaten, and one for the totals. Each request counts
         against the call's time limit (``call_timeout``) like any other.
         """
@@ -1252,7 +1265,7 @@ class FitatuTools:
 
     def _daily_by_nutrient(self, start: dt.date, end: dt.date, dates: list[str]) -> list[dict[str, Any]] | None:
         """Each day's logged (``current``) and goals (``min``, ``max``) in the range summary's shape, from
-        the Premium routes; None when Fitatu refuses them for want of Premium, which the instance remembers."""
+        the Premium routes; None when Fitatu refuses them for want of Premium, which the instance remembers for 10 minutes."""
         replies = {}
         try:
             for nutrient in reversed(_PROGRESS):  # a macro first: without Premium it answers 403, energy does not
@@ -1277,6 +1290,7 @@ class FitatuTools:
     def get_top_foods(self, from_date: str, to_date: str, nutrient: str = "energy", limit: int = 10) -> dict[str, Any]:
         start, end = as_date(from_date, "from_date"), as_date(to_date, "to_date")
         reply = self.client.summary.get_top_products(self._user_id, nutrient, start, end, limit=limit)
+        self._without_premium = False  # a Premium-only route answered: the account has Premium now
         foods = []
         for row in as_dict_list(reply.get("list")):
             amount = as_dict(row.get("amount")) or {}  # numbers as strings, e.g. {"current": "54.05", "per100": "47.00"}
@@ -1309,9 +1323,9 @@ class FitatuTools:
                 "end": {"date": last, "value": weights[last]},
                 "change": round(weights[last] - weights[first], 2),
             }
-        # _progress found out whether the account has Premium, which the top foods need.
+        # _progress found out whether Fitatu refuses the Premium routes, which the top foods need.
         top_foods: dict[str, Any] | None = None
-        note: str | None = "The top foods need Fitatu Premium, which this account does not have."
+        note: str | None = "Fitatu refused the Premium-only summary routes; the top foods need Fitatu Premium."
         if not self._without_premium:
             top_foods, note = {nutrient: self.get_top_foods(start, end, nutrient, 5)["foods"] for nutrient in ("energy", "protein")}, None
         return {

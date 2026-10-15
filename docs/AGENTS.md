@@ -134,8 +134,9 @@ Every tool but `get_top_foods` works on an account without Fitatu Premium (check
   it, `get_progress` reads each day's own summary instead, which any account may read and
   which has the same goals: a request per day, so at most 31 days (a longer range is a
   `validation` error that points to `get_range_summary`), and each day has `eaten` too.
-  `FitatuTools` remembers the refusal, so only its first such call spends a request on the
-  Premium route.
+  `FitatuTools` remembers the refusal for 10 minutes, so only its first such call in that time
+  spends a request on the Premium route. A plan bought while `fitatu-mcp` runs shows within
+  those 10 minutes, without a restart, and at once after a `get_top_foods` that succeeds.
 - `get_report` reads its progress the same way, and gives `top_foods` null with a
   `top_foods_note` saying that the top foods need Premium.
 - A free account's macro goals are a range (`target_min` below `target_max`; `left` counts

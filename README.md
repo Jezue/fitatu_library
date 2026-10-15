@@ -372,7 +372,7 @@ again afterwards to set `ok`. Requests per agent tool call, before retries and t
 | 5 | `get_progress` (any range up to 62 days; without Fitatu Premium, see below) |
 | 6 | `move_item` to another day |
 | 8 | `get_report` (one more for every further 41 weigh-ins in the range) |
-| 1 a day | `get_shopping_list`, plus 1 for each recipe planned in the range; `get_progress` and `get_report` without Fitatu Premium, plus 1 for the range (none for a single day) and `get_report`'s weigh-ins, and the first such call on a `FitatuTools` 1 more, which Fitatu refuses |
+| 1 a day | `get_shopping_list`, plus 1 for each recipe planned in the range; `get_progress` and `get_report` without Fitatu Premium, plus 1 for the range (none for a single day) and `get_report`'s weigh-ins, and the first such call on a `FitatuTools` in 10 minutes 1 more, which Fitatu refuses |
 
 ## Privacy & logging
 

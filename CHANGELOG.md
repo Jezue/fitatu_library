@@ -18,7 +18,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   macros' day-by-day route they read is Premium-only (checked live 2026-10-15). When it is
   refused, they read each day's own range summary instead, which every account may read and
   which gives the same goals (a macro's as a range on a free account) and each day's `eaten`
-  too; `FitatuTools` remembers the refusal and goes straight to it on later calls. Without
+  too; `FitatuTools` remembers the refusal for 10 minutes and goes straight to it on later calls
+  (a `get_top_foods` that succeeds ends it, so a plan bought meanwhile shows). Without
   Premium this covers at most 31 days (a request per day), and a longer range is a validation
   error that points to `get_range_summary`. `get_report` gives `top_foods` null with a
   `top_foods_note` instead of failing, as the top foods are Premium-only too.
