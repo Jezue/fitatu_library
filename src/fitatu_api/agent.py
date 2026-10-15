@@ -54,6 +54,9 @@ logger = logging.getLogger(__name__)
 
 MEALS = ("breakfast", "second_breakfast", "lunch", "dinner", "snack", "supper")
 FOOD_TYPES = ("PRODUCT", "RECIPE")
+# The catalog's diet tags, sent as tag.<name> (each checked live 2026-10-15); several must all apply.
+_DIETS = ("diabetic", "gluten_free", "high_fibre", "high_protein", "keto", "lactose_free", "less_sugar",
+          "low_cholesterol", "low_fat", "low_fodmap_ibs", "vegan", "vegetarian", "without_milk")
 _GOALS: dict[Any, str] = {-1: "lose", 0: "maintain", 1: "gain"}  # userDietSettings.weightChangeDirection
 _SEXES: dict[Any, str] = {1: "male", 2: "female"}  # userSettings.sex; 0 is not known, 9 not applicable
 # the catalogs Fitatu's search took live (2026-10-15); others are refused with a 400
@@ -329,18 +332,60 @@ TOOLS: list[dict[str, Any]] = [
         "search_recipes",
         "Search recipe ideas",
         "Search the Fitatu recipe catalog for meal ideas, e.g. phrase 'kurczak' with max_energy_kcal 500 for "
-        "a chicken dinner of at most 500 kcal. Each hit is shaped like a search_food hit of type RECIPE "
-        "(food_id, name, energy_kcal and measure of one portion) plus cooking_time and preparation_time as "
-        "the catalog gives them, rating, and premium: whether the app keeps the recipe for Fitatu Premium "
-        "(get_food_measures reads it on any account). Log one with add_food: food_type RECIPE, quantity "
+        "a chicken dinner of at most 500 kcal, or diets ['vegan'], meal 'breakfast' and max_cooking_time 10 "
+        "for a quick vegan breakfast. The filters are per portion and all apply together. Each hit is shaped "
+        "like a search_food hit of type RECIPE (food_id, name, energy_kcal and measure of one portion) plus "
+        "cooking_time and preparation_time as the catalog gives them, rating, and premium: whether the app "
+        "keeps the recipe for Fitatu Premium (get_recipe and get_food_measures read it on any account). "
+        "get_recipe gives a hit's ingredients and steps. Log one with add_food: food_type RECIPE, quantity "
         "the portions.",
         {
             "phrase": {"type": "string", "description": "Words to look for, e.g. 'kurczak' or 'sałatka'; omit it to browse."},
             "max_energy_kcal": {"type": "number", "exclusiveMinimum": 0, "description": "Only recipes of at most this many kcal per portion."},
+            "min_protein_g": {"type": "integer", "minimum": 1, "description": "Only recipes with at least this many g of protein per portion."},
+            "max_carbohydrate_g": {"type": "integer", "minimum": 0, "description": "Only recipes with at most this many g of carbohydrate per portion."},
+            "max_cooking_time": {
+                "type": "integer",
+                "enum": [10, 30],
+                "description": "Only recipes with a cooking_time of at most 10 or 30 minutes, the catalog's two time filters.",
+            },
+            "diets": {
+                "type": "array",
+                "items": {"type": "string", "enum": list(_DIETS)},
+                "description": "Diets every hit must fit, e.g. ['vegan', 'gluten_free'].",
+            },
+            "meal": {
+                "type": "string",
+                "enum": list(MEALS),
+                "description": "Only recipes the catalog suggests for this meal type (dinner is obiad, supper kolacja).",
+            },
             "limit": _LIMIT,
         },
         read_only=True,
         open_world=True,
+    ),
+    _tool(
+        "get_recipe",
+        "Read a recipe",
+        "Read one recipe in full, from the catalog or the user's own: name, servings (how many servings the "
+        "ingredients make), ingredients for the whole recipe (food_id, food_type, quantity and measure_id as "
+        "create_recipe and update_recipe take them, plus name, measure_name and weight_g), description (the "
+        "steps), per_serving (its portion measure as get_food_measures lists it: weight_g, energy_kcal, "
+        "protein_g, fat_g and carbohydrate_g of one serving; null when it has none), cooking_time and "
+        "preparation_time in minutes as the catalog gives them, meals (the meal types it suits), tags (e.g. "
+        "vegan, keto, polish), rating, premium, deleted, and own: whether it is the user's private recipe, "
+        "which update_recipe and delete_recipe take. Premium recipes read on any account.",
+        {
+            "recipe_id": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "food_id of a RECIPE hit (search_recipes, search_food, get_my_foods, get_favorite_foods, "
+                "get_recent_foods), create_recipe's recipe_id or a get_day row's recipe_id; never a product's id.",
+            }
+        },
+        ("recipe_id",),
+        read_only=True,
+        open_world=True,  # reads the shared catalog, like get_food_measures
     ),
     _tool(
         "find_by_barcode",
@@ -943,10 +988,12 @@ def _checked_arguments(schema: dict[str, Any], arguments: Any) -> dict[str, Any]
                 raise FitatuValidationError(f"{exc}; for today or a day counted from it, call get_today") from None
         if "items" in prop and not all(_is_json(item, prop["items"]["type"]) for item in value):
             raise FitatuValidationError(f"{key} must be a list of JSON {prop['items']['type']}s, got {value!r}")
+        if "enum" in prop.get("items", {}) and (wrong := [item for item in value if item not in prop["items"]["enum"]]):
+            raise FitatuValidationError(f"{key} must list only {', '.join(map(str, prop['items']['enum']))}; got {wrong!r}")
         if "enum" in prop and value not in prop["enum"]:
             # 'Obiad' is a user's name for one of their meals, not a word to translate into a key
             look_up = "; match the user's words against get_day's meal_name and pass that meal's meal_key" if prop["enum"] == list(MEALS) else ""
-            raise FitatuValidationError(f"{key} must be one of {', '.join(prop['enum'])}; got {value!r}{look_up}")
+            raise FitatuValidationError(f"{key} must be one of {', '.join(map(str, prop['enum']))}; got {value!r}{look_up}")
         if "minimum" in prop and value < prop["minimum"]:
             raise FitatuValidationError(f"{key} must be at least {prop['minimum']}, got {value!r}")
         if "maximum" in prop and value > prop["maximum"]:
@@ -1022,6 +1069,21 @@ def _measure_macros(details: dict[str, Any], food_type: str, measure: dict[str, 
         except (KeyError, TypeError, ValueError, ZeroDivisionError):
             pass
     return dict.fromkeys(("protein_g", "fat_g", "carbohydrate_g"))
+
+
+def _measures(details: dict[str, Any], food_type: str) -> list[dict[str, Any]]:
+    """A food's measures (its details) as get_food_measures lists them."""
+    return [
+        {
+            "measure_id": measure.get("id"),
+            "name": measure.get("name"),
+            "weight_g": measure.get("weightPerUnit"),
+            "capacity_ml": measure.get("capacityPerUnit"),
+            "energy_kcal": measure.get("energyPerUnit"),
+            **_measure_macros(details, food_type, measure),
+        }
+        for measure in as_dict_list(details.get("measures"))
+    ]
 
 
 _PROGRESS = ("energy", "protein", "fat", "carbohydrate")  # the nutrients with daily goals
@@ -1515,7 +1577,27 @@ class FitatuTools:
     def search_food(self, phrase: str, limit: int = 10, locale: str | None = None) -> list[FoodHit]:
         return _foods(self.client.search_food(phrase, limit=limit, locale=locale))
 
-    def search_recipes(self, phrase: str = "", max_energy_kcal: float | None = None, limit: int = 10) -> list[RecipeHit]:
+    def search_recipes(
+        self,
+        phrase: str = "",
+        max_energy_kcal: float | None = None,
+        min_protein_g: int | None = None,
+        max_carbohydrate_g: int | None = None,
+        max_cooking_time: int | None = None,
+        diets: list[str] | None = None,
+        meal: str | None = None,
+        limit: int = 10,
+    ) -> list[RecipeHit]:
+        hits = self.client.search_recipes(
+            phrase,
+            max_energy=max_energy_kcal,
+            min_protein=min_protein_g,
+            max_carbohydrate=max_carbohydrate_g,
+            max_cooking_time=max_cooking_time,
+            tags=[f"tag.{diet}" for diet in diets or ()],
+            meals=[meal] if meal else (),
+            limit=limit,
+        )
         return [
             {
                 **_food(hit),
@@ -1524,9 +1606,46 @@ class FitatuTools:
                 "rating": hit.get("rating"),
                 "premium": hit.get("premiumInRecipesCatalog"),
             }
-            for hit in self.client.search_recipes(phrase, max_energy=max_energy_kcal, limit=limit)
+            for hit in hits
             if hit.get("type") == "RECIPE"
         ]
+
+    def get_recipe(self, recipe_id: int) -> dict[str, Any]:
+        recipe = self.client.get_recipe(recipe_id)
+        # Fitatu serves anyone's private recipe by id, with its author: only the catalog's and the user's own are read.
+        if recipe.get("private") is True and recipe.get("shared") is not True and str(recipe.get("userId")) != self._user_id:
+            raise FitatuNotFoundError(
+                f"recipe {recipe_id} is not a catalog recipe or one of the user's; take a recipe_id from search_recipes, get_my_foods or get_day"
+            )
+        rating = as_dict((as_dict(recipe.get("rating")) or {}).get("rating")) or {}  # {"userVote", "rating": {"rate", "votes"}}
+        return {
+            "recipe_id": recipe_id,
+            "name": recipe.get("name"),
+            "servings": int(float(recipe.get("serving") or 1)),  # as update_recipe's previous gives it
+            "ingredients": [
+                {
+                    "food_id": item.get("itemId"),
+                    "food_type": item.get("type") or "PRODUCT",
+                    "name": item.get("name"),
+                    "quantity": float(item.get("measureQuantity") or 0),  # strings, e.g. "125.00"
+                    "measure_id": item.get("measureId"),
+                    "measure_name": item.get("measureName"),
+                    "weight_g": None if item.get("measureWeight") is None else round(float(item.get("measureQuantity") or 0) * float(item["measureWeight"]), 1),
+                }
+                for item in as_dict_list(recipe.get("items"))
+            ],
+            "description": recipe.get("recipeDescription") or "",
+            "per_serving": next((measure for measure in _measures(recipe, "RECIPE") if measure["measure_id"] == _PORTION), None),
+            "cooking_time": recipe.get("cookingTime"),
+            "preparation_time": recipe.get("preparationTime"),
+            "meals": recipe.get("mealSchema") or [],
+            # tag.* names; a community recipe's free-text tags are left out
+            "tags": [str(tag["name"]).removeprefix("tag.") for tag in as_dict_list(recipe.get("tags")) if str(tag.get("name")).startswith("tag.")],
+            "rating": rating.get("rate"),
+            "premium": recipe.get("premiumInRecipesCatalog"),
+            "deleted": recipe.get("deleted") is True,
+            "own": self._is_own(recipe),
+        }
 
     def find_by_barcode(self, barcode: str) -> FoodHit:
         if not (barcode.isascii() and barcode.isdigit() and 8 <= len(barcode) <= 14):
@@ -1541,22 +1660,7 @@ class FitatuTools:
     def get_food_measures(self, food_id: int, food_type: str) -> dict[str, Any]:
         client = self.client
         details = client.get_recipe(food_id) if food_type == "RECIPE" else client.get_product_details(food_id)
-        return {
-            "food_id": food_id,
-            "type": food_type,
-            "name": details.get("name"),
-            "measures": [
-                {
-                    "measure_id": measure.get("id"),
-                    "name": measure.get("name"),
-                    "weight_g": measure.get("weightPerUnit"),
-                    "capacity_ml": measure.get("capacityPerUnit"),
-                    "energy_kcal": measure.get("energyPerUnit"),
-                    **_measure_macros(details, food_type, measure),
-                }
-                for measure in as_dict_list(details.get("measures"))
-            ],
-        }
+        return {"food_id": food_id, "type": food_type, "name": details.get("name"), "measures": _measures(details, food_type)}
 
     def get_recent_foods(self, meal: str, limit: int = 10) -> list[FoodHit]:
         # The route has no limit and answers with up to 200 foods (checked live).
@@ -2024,11 +2128,14 @@ class FitatuTools:
             measures = []
         return next((measure for measure in measures if measure["measure_id"] == _PORTION), None)
 
+    def _is_own(self, recipe: dict[str, Any]) -> bool:
+        # A catalog recipe can say private: true while shared and someone else's (the recorded one does).
+        return recipe.get("private") is True and recipe.get("shared") is False and str(recipe.get("userId")) == self._user_id
+
     def _own_recipe(self, recipe_id: int, change: str) -> dict[str, Any]:
         """The recipe, read once, when it is a private recipe of this user; any other is refused."""
         recipe = self.client.get_recipe(recipe_id)
-        # A catalog recipe can say private: true while shared and someone else's (the recorded one does).
-        if recipe.get("private") is not True or recipe.get("shared") is not False or str(recipe.get("userId")) != self._user_id:
+        if not self._is_own(recipe):
             raise FitatuValidationError(
                 f"recipe {recipe_id} is not a private recipe of this user; only those can be {change} (get_my_foods lists them)"
             )

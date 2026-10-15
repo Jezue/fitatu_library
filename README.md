@@ -71,7 +71,7 @@ How writes, row ids and removals work: [docs/PLANNER.md](https://github.com/Jezu
 
 ## For AI agents
 
-`FitatuTools` exposes 43 tools (read the day, search food, log food, weight, water,
+`FitatuTools` exposes 44 tools (read the day, search food, log food, weight, water,
 workouts and private recipes, ...) with JSON Schema inputs and read-only / destructive / idempotent annotations.
 `call()` never raises: it returns `{"ok": true, "data": ...}` or `{"ok": false, "error":
 {"error_type", "message", "retryable", "hint", ...}}`, so the model can read what went wrong.
@@ -156,7 +156,7 @@ Claude Desktop, uvx and what the server does:
 |---|---|---|
 | Food diary | `client.planner`: read a day, add products, recipes, custom rows and search hits, update, move, copy, remove; the day's note | `get_day`, `add_food`, `add_foods`, `add_custom_item`, `update_item`, `move_item`, `copy_meal`, `preview_removal`, `remove_items`, `set_note` |
 | Activities | `planner.add_activity` / `remove_activity`, `client.activities` (catalog, search, recent) | `search_activity`, `add_activity`, `remove_activity` |
-| Foods | `search_food`, `get_product_details`, `get_recipe`, recipe catalog and its search, `client.foods` (favourites, recent) | `search_food`, `search_recipes`, `find_by_barcode`, `get_food_measures`, `get_recent_foods`, `get_favorite_foods`, `set_favorite` |
+| Foods | `search_food`, `get_product_details`, `get_recipe`, recipe catalog and its search, `client.foods` (favourites, recent) | `search_food`, `search_recipes`, `get_recipe`, `find_by_barcode`, `get_food_measures`, `get_recent_foods`, `get_favorite_foods`, `set_favorite` |
 | The user's own foods | `search_user_food`, `create_recipe`, `update_recipe`, `delete_recipe` | `get_my_foods`; `create_recipe`, `update_recipe` and `delete_recipe` for private recipes only, the user's own |
 | Measurements | `client.measurements`: weight and body sizes per day, history, charts | `get_weight_history`, `get_body_measurements`, `get_measurement_history`, `log_weight`, `log_measurements` |
 | Water | `client.water` | `get_water`, `set_water` |
@@ -175,7 +175,7 @@ instead of raising, is deprecated and will be removed in 1.0: for results that n
 | | Free account | Premium |
 |---|---|---|
 | Diary: read, log, update, move, copy, remove food, notes, activities, water, weight, body measurements | ✅ | ✅ |
-| Search, barcode, food measures, recipe search, private recipes, favourites, recent foods | ✅ | ✅ |
+| Search, barcode, food measures, recipe search and recipes in full (premium catalog recipes too), private recipes, favourites, recent foods | ✅ | ✅ |
 | Goals: read and set (`get_targets`, `set_targets`), progress (`get_progress`), reports (`get_report`), range totals (`get_range_summary`) | ✅ (progress: a request per day, at most 31 days) | ✅ |
 | Weight and body measurement history, profile, fasting and habits (read), shopping list | ✅ | ✅ |
 | Top foods (`get_top_foods`, `summary.get_top_products()`) | ❌ 403: "needs Fitatu Premium" | ✅ |

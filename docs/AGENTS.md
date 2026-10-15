@@ -19,7 +19,7 @@ with FitatuTools.from_session() as tools:  # the `fitatu-api login` session file
   a diary day"), `description`, `input_schema`, `annotations` (`readOnlyHint`,
   `destructiveHint`, `idempotentHint`, and `openWorldHint`, true only for the tools that read the
   shared food and activity catalogs, which anyone can add to: `search_food`, `search_recipes`,
-  `find_by_barcode`, `get_food_measures`, `search_activity`). `READ_ONLY_TOOLS` names the ones whose `readOnlyHint`
+  `get_recipe`, `find_by_barcode`, `get_food_measures`, `search_activity`). `READ_ONLY_TOOLS` names the ones whose `readOnlyHint`
   is true.
 - `anthropic_tools()` returns them in the Anthropic Messages API `tools` format,
   `openai_tools()` in the OpenAI function-calling format, both without `title`, which those
@@ -90,7 +90,8 @@ repeating the same call has no further effect.
 | `get_report` | A weekly or monthly report: per nutrient the range's `logged` and `eaten` totals and `daily` (`logged` averaged over the `days_logged`, next to the average daily goal); `weight` (first and last weigh-in of the range and the `change`, null without one); `top_foods`, the 5 with the most energy and the 5 with the most protein. 8 requests, one more for every further 41 weigh-ins in the range. Without Fitatu Premium the progress is read day by day as in `get_progress` (at most 31 days), and `top_foods` is null with a `top_foods_note` saying why. | read | no | yes |
 | `get_shopping_list` | A shopping list for up to 14 days, worked out here from the rows planned and not ticked as eaten (Fitatu has no route for it): `products` summed per product and measure, with `quantity` and `weight_g`, the ingredients of each planned recipe included for its portions; `recipes` lists those recipes (`expanded` false when the recipe could not be read, e.g. a deleted one); `other_items` the custom rows as they are. It knows nothing of the user's stock or pack sizes. It should start at today ("this week" is today to Sunday), as past rows not ticked as eaten were usually eaten anyway. One request per day and one per recipe. | read | no | yes |
 | `search_food` | Catalog search; each hit has `food_id`, `type` (PRODUCT or RECIPE), name, brand, its default measure, `times_used` (how often the user logged it, when the server says) and `favorite`. `locale` searches another country's catalog (15 that Fitatu takes, e.g. `de_DE`); the user's own logged foods show up there too, and every hit can be logged. | read | no | yes |
-| `search_recipes` | Recipe catalog search for meal ideas, by words and/or `max_energy_kcal` per portion ("a dinner under 500 kcal with chicken"); hits are shaped like `search_food` RECIPE hits (energy and measure of one portion) plus `cooking_time`, `preparation_time`, `rating` and `premium`, whether the app keeps the recipe for Fitatu Premium (`get_food_measures` reads it on any account). | read | no | yes |
+| `search_recipes` | Recipe catalog search for meal ideas, by words and per-portion filters (`max_energy_kcal`, `min_protein_g`, `max_carbohydrate_g`, `max_cooking_time` of 10 or 30 minutes, `diets`, which must all apply, and `meal`): "a quick vegan breakfast", "a dinner under 500 kcal with chicken". Hits are shaped like `search_food` RECIPE hits (energy and measure of one portion) plus `cooking_time`, `preparation_time`, `rating` and `premium`, whether the app keeps the recipe for Fitatu Premium (`get_recipe` and `get_food_measures` read it on any account). | read | no | yes |
+| `get_recipe` | One catalog recipe or one of the user's own in full: `servings`, `ingredients` for the whole recipe (`food_id`, `food_type`, `quantity` and `measure_id` as `create_recipe` takes them, plus name, `measure_name` and `weight_g`), `description` (the steps), `per_serving` (the portion measure as `get_food_measures` lists it), `cooking_time`, `preparation_time`, `meals`, `tags`, `rating`, `premium`, `deleted` and `own` (whether `update_recipe` and `delete_recipe` take it). Another user's private recipe is `not_found`, and the author's name and id are never returned. | read | no | yes |
 | `find_by_barcode` | The catalog product with a barcode (8 to 14 digits), in the shape of a search hit: the first product hit of a search for the digits, confirmed by its details' `barcode`; otherwise `not_found`, and the model searches by name. | read | no | yes |
 | `get_food_measures` | The measures a food can be logged in (`measure_id`, name, weight or capacity, energy, protein, fat and carbohydrate of one measure; a macro is null when the details do not give it). | read | no | yes |
 | `get_recent_foods` | Foods recently logged in a meal, shaped like search hits. | read | no | yes |
@@ -154,8 +155,8 @@ Every tool but `get_top_foods` works on an account without Fitatu Premium (check
   gets 20/30/50. With a split set, its macro goals in `get_progress` are single numbers
   (`target_min` equal to `target_max`) instead of a range; `automatic: true` brings the range
   back.
-- Catalog recipes that `search_recipes` marks `premium` can still be read with
-  `get_food_measures`.
+- Catalog recipes that `search_recipes` marks `premium` can still be read in full, ingredients
+  and steps included, with `get_recipe` and `get_food_measures` (checked live 2026-10-15).
 
 Outside the tools, `summary.get_nutrient_by_day()` for protein, fat and carbohydrate,
 `summary.get_top_products()` and `summary.export_diary()` (`fitatu-api export`) are

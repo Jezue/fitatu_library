@@ -28,10 +28,25 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   identifies the user.
 - `search_food` takes `locale` to search another country's catalog (the 15 Fitatu took, checked
   live 2026-10-15).
+- `get_recipe` tool: one recipe in full, from the catalog or the user's own: servings,
+  ingredients with amounts, the steps, the portion's nutrition, cooking time, meal types, tags,
+  rating, and whether it is the user's own (which `update_recipe` and `delete_recipe` take).
+  Premium catalog recipes read on a free account too. Another user's private recipe is refused
+  as `not_found`: Fitatu serves any recipe by id, so the tool checks whose it is, and it never
+  returns the author's name or id.
+- `search_recipes` filters: `min_protein_g`, `max_carbohydrate_g`, `max_cooking_time` (10 or 30
+  minutes, the catalog's two steps), `diets` (all must apply) and `meal`, per portion as Fitatu
+  applies them (checked live 2026-10-15). `client.search_recipes()` takes them as
+  `min_protein`, `max_carbohydrate`, `max_cooking_time`, `tags` and `meals`.
 
 ### Changed
 
 - `measurements.get_body_part_history()` takes `fat_percentage` (the route's `fatPercentage`).
+
+### Fixed
+
+- `search_recipes` with a decimal `max_energy_kcal` (e.g. 499.5) failed with a 400: Fitatu takes
+  whole kcal only, so it is rounded down now.
 
 ## [0.5.1] - 2026-10-15
 

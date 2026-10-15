@@ -115,6 +115,7 @@ ARGUMENTS: dict[str, dict[str, Any]] = {
     "get_shopping_list": {"from_date": DAY, "to_date": NEXT_DAY},
     "search_food": {"phrase": "jajko kurze", "limit": 2},
     "search_recipes": {"phrase": "kurczak", "max_energy_kcal": 500},
+    "get_recipe": {"recipe_id": RECIPE_ID},
     "find_by_barcode": {"barcode": BARCODE},
     "get_food_measures": {"food_id": PRODUCT_ID, "food_type": "PRODUCT"},
     "get_recent_foods": {"meal": "breakfast"},
@@ -171,7 +172,7 @@ READS = {"get_today", "get_day", "get_targets", "get_range_summary", "get_progre
 READS |= {"get_recent_foods", "get_top_foods", "get_report", "get_shopping_list"}
 READS |= {"get_favorite_foods", "get_my_foods", "get_weight_history", "get_body_measurements", "get_water", "search_activity"}
 READS |= {"preview_removal", "search_recipes", "get_fasting", "get_habits", "get_good_days"}
-READS |= {"get_profile", "get_measurement_history"}
+READS |= {"get_profile", "get_measurement_history", "get_recipe"}
 
 
 def fake_with_every_reply() -> FakeFitatuServer:
@@ -338,7 +339,7 @@ def test_annotations_mark_reads_and_what_can_overwrite_the_diary() -> None:
 
 def test_only_the_shared_catalog_tools_are_open_world() -> None:
     open_world = {tool["name"] for tool in TOOLS if tool["annotations"]["openWorldHint"]}
-    assert open_world == {"search_food", "search_recipes", "find_by_barcode", "get_food_measures", "search_activity"}
+    assert open_world == {"search_food", "search_recipes", "get_recipe", "find_by_barcode", "get_food_measures", "search_activity"}
 
 
 def test_provider_formats_carry_the_same_tools() -> None:
@@ -750,6 +751,57 @@ def test_search_recipes_sends_the_energy_filter_and_flags_premium_recipes(tools:
     assert {key: params[key] for key in ("phrase", "limit", "hasFilters", "maxEnergy")} == {"phrase": "kurczak", "limit": 5, "hasFilters": "true", "maxEnergy": 500}
     data(tools, "search_recipes")  # browsing: no filter, so the server is told there is none
     assert (fake.requests[-1]["params"]["hasFilters"], "maxEnergy" in fake.requests[-1]["params"]) == ("false", False)
+
+
+def test_search_recipes_sends_whole_number_filters_and_refuses_the_ones_fitatu_lacks(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    filters = {"max_energy_kcal": 499.5, "min_protein_g": 30, "max_carbohydrate_g": 0, "max_cooking_time": 30, "diets": ["vegan", "gluten_free"], "meal": "dinner"}
+    data(tools, "search_recipes", phrase="kurczak", **filters)
+    params = fake.requests[-1]["params"]
+    assert {key: params[key] for key in ("hasFilters", "maxEnergy", "minProtein", "maxCarbohydrate", "maxCookingTime", "tags[]", "meals[]")} == {
+        "hasFilters": "true",
+        "maxEnergy": 499,  # Fitatu answers 400 to a decimal
+        "minProtein": 30,
+        "maxCarbohydrate": 0,
+        "maxCookingTime": 30,
+        "tags[]": ["tag.vegan", "tag.gluten_free"],
+        "meals[]": ["dinner"],
+    }
+    assert type(params["maxEnergy"]) is int
+    data(tools, "search_recipes", diets=[])  # no diet, no filter
+    assert fake.requests[-1]["params"]["hasFilters"] == "false" and "tags[]" not in fake.requests[-1]["params"]
+    fake.requests.clear()
+    assert tools.call("search_recipes", {"max_cooking_time": 20})["error"]["message"] == "max_cooking_time must be one of 10, 30; got 20"
+    assert "paleo" in tools.call("search_recipes", {"diets": ["vegan", "paleo"]})["error"]["message"]
+    assert "at least 1" in tools.call("search_recipes", {"min_protein_g": 0})["error"]["message"]
+    assert error_type(tools, "search_recipes", {"min_protein_g": 30.5}) == "validation"
+    assert fake.requests == []
+
+
+def test_get_recipe_gives_ingredients_steps_and_the_portion_and_refuses_someone_elses_private_recipe(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    recipe = data(tools, "get_recipe", recipe_id=RECIPE_ID)  # a community recipe: private, but shared
+    assert (recipe["name"], recipe["servings"], recipe["own"], recipe["deleted"], recipe["rating"]) == ("Gorąca czekolada", 1, False, False, 3.33)
+    assert recipe["ingredients"][0] == {
+        "food_id": 14440, "food_type": "PRODUCT", "name": "Mąka ziemniaczana", "quantity": 1.0, "measure_id": 19, "measure_name": "teaspoon", "weight_g": 8.0
+    }
+    assert recipe["ingredients"][3]["weight_g"] == 110.0  # half a 220 g glass
+    assert recipe["description"].startswith("1. ") and recipe["cooking_time"] == 5 and recipe["meals"][0] == "second_breakfast"
+    assert (recipe["per_serving"]["measure_id"], recipe["per_serving"]["energy_kcal"], recipe["per_serving"]["protein_g"]) == (39, 125.91, 6.66)
+    assert recipe["tags"] == [] and not {"username", "userId", "photos"} & set(recipe)  # the author stays out
+    assert [r["path"] for r in fake.requests] == [f"/recipes/{RECIPE_ID}"]
+    assert data(tools, "get_recipe", recipe_id=MY_RECIPE_ID)["own"] is True
+    fake.routes[("GET", "/recipes/7000003")] = {
+        **recorded("recipe_details"), "id": 7000003, "tags": [{"name": "tag.vegan"}, {"name": "pesto"}], "private": False, "shared": False
+    }
+    assert data(tools, "get_recipe", recipe_id=7000003)["tags"] == ["vegan"]  # a catalog recipe; free-text tags are left out
+    fake.routes[("GET", "/recipes/7000004")] = {**recorded("recipe_details"), "name": "Cudzy przepis", "shared": False, "userId": 1}
+    error = tools.call("get_recipe", {"recipe_id": 7000004})["error"]
+    assert error["error_type"] == "not_found" and "Cudzy" not in json.dumps(error)
+
+    def gone(params: Any) -> Any:
+        raise FitatuNotFoundError("GET /recipes/999999999 -> 404", status_code=404)
+
+    fake.routes[("GET", "/recipes/999999999")] = gone
+    assert error_type(tools, "get_recipe", {"recipe_id": 999999999}) == "not_found"
 
 
 def test_fasting_is_each_fasting_day_against_its_windows(tools: FitatuTools, fake: FakeFitatuServer) -> None:

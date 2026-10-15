@@ -937,7 +937,7 @@ class TestFacadeWritePlanner:
 
 class TestToolsReadOnly:
     def test_every_read_tool(
-        self, tools: FitatuTools, client: FitatuApiClient, test_date: date, known_product_id: str, premium: bool
+        self, tools: FitatuTools, client: FitatuApiClient, test_date: date, known_product_id: str, known_recipe_id: str, premium: bool
     ) -> None:
         today = date.today()
         barcode = client.get_product_details(known_product_id).get("barcode")
@@ -953,6 +953,7 @@ class TestToolsReadOnly:
             "get_shopping_list": {"from_date": test_date.isoformat(), "to_date": test_date.isoformat()},
             "search_food": {"phrase": "jajko", "limit": 3},
             "search_recipes": {"phrase": "kurczak", "max_energy_kcal": 500, "limit": 3},
+            "get_recipe": {"recipe_id": int(known_recipe_id)},
             "find_by_barcode": {"barcode": str(barcode or "5901234123457")},
             "get_food_measures": {"food_id": int(known_product_id), "food_type": "PRODUCT"},
             "get_recent_foods": {"meal": "breakfast"},
@@ -1272,6 +1273,15 @@ class TestNewReadOnlyEndpoints:
         hits = client.search_recipes("kurczak", max_energy=500, limit=10)
         assert hits, "no recipe for 'kurczak' up to 500 kcal"
         assert all(hit.get("type") == "RECIPE" and float(hit["energy"]) <= 500 for hit in hits), "a hit is not a recipe of at most 500 kcal a portion"
+
+    def test_recipe_search_filters_apply_per_portion(self, client: FitatuApiClient) -> None:
+        hits = client.search_recipes("", min_protein=20, max_cooking_time=10, tags=["tag.vegetarian"], meals=["breakfast"], limit=5)
+        assert hits, "no quick vegetarian breakfast with 20 g of protein"
+        assert all((hit.get("cookingTime") or 0) <= 10 for hit in hits), "a hit cooks for more than 10 minutes"
+        recipe = client.get_recipe(hits[0]["foodId"])
+        assert float(recipe["protein"]) >= 20, "the first hit has less than 20 g of protein a portion"
+        assert "tag.vegetarian" in {tag.get("name") for tag in recipe.get("tags") or []}, "the first hit is not tagged vegetarian"
+        assert "breakfast" in (recipe.get("mealSchema") or []), "the first hit is not a breakfast"
 
     def test_daily_targets_via_facade(self, facade: FitatuLibrary) -> None:
         result = facade.get_daily_targets_via_api()

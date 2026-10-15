@@ -98,9 +98,11 @@ current split, or uses 20/30/50 when there is none - say so. Undo with its `prev
 
 **Workouts:** `search_activity`, then `add_activity` with the minutes and kcal burned.
 
-**Recipes and shopping:** `search_recipes` (with `max_energy_kcal` for "dinner under 500
-kcal"), `create_recipe` for the user's own private recipe, `get_shopping_list` for planned
-days (from today to Sunday for "this week").
+**Recipes and shopping:** `search_recipes` (`max_energy_kcal`, `min_protein_g`,
+`max_carbohydrate_g`, `max_cooking_time`, `diets`, `meal`: "a quick vegan breakfast", "dinner
+under 500 kcal"), `get_recipe` for a recipe's ingredients and steps, `create_recipe` for the
+user's own private recipe, `get_shopping_list` for planned days (from today to Sunday for "this
+week").
 
 ## Free and Premium accounts
 

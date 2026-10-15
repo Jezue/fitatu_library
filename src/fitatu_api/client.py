@@ -10,7 +10,7 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -1302,6 +1302,11 @@ class FitatuApiClient:
         phrase: str = "",
         *,
         max_energy: float | None = None,
+        min_protein: int | None = None,
+        max_carbohydrate: int | None = None,
+        max_cooking_time: int | None = None,
+        tags: Sequence[str] = (),
+        meals: Sequence[str] = (),
         locale: str | None = None,
         limit: int = 10,
         page: int = 1,
@@ -1310,16 +1315,31 @@ class FitatuApiClient:
 
         Hits are shaped like :meth:`search_food` rows of ``type`` RECIPE (``foodId``, ``energy``
         and ``measure`` of one portion) plus ``premiumInRecipesCatalog``, ``rating``,
-        ``cookingTime`` and ``preparationTime``; some are premium recipes. ``max_energy`` keeps
-        recipes of at most that many kcal per portion. The server applies a filter only with
-        ``hasFilters=true``, which is sent with it (checked live 2026-10-14).
+        ``cookingTime`` and ``preparationTime``; some are premium recipes. The filters are per
+        portion and whole numbers: ``max_energy`` kcal (rounded down), ``min_protein`` and
+        ``max_carbohydrate`` g. ``max_cooking_time`` works in two steps: 10 to 29 keeps recipes of
+        up to 10 minutes, 30 or more up to 30, less than 10 nothing. ``tags`` are the catalog's
+        ``tag.*`` names (e.g. ``tag.vegan``) and must all apply; ``meals`` (meal keys) any of them.
+        Checked live 2026-10-15; ``hasFilters=true`` goes with any filter, as the app sends it.
         """
         validate_positive_int(limit, "limit")
         validate_positive_int(page, "page")
+        for value, name in ((min_protein, "min_protein"), (max_carbohydrate, "max_carbohydrate"), (max_cooking_time, "max_cooking_time")):
+            if value is not None:
+                validate_non_negative_int(value, name)
         params: dict[str, Any] = {"page": page, "limit": limit, "locale": locale or self.auth.app_search_locale, "phrase": phrase}
-        params["hasFilters"] = "false" if max_energy is None else "true"
-        if max_energy is not None:
-            params["maxEnergy"] = max_energy
+        filters = {
+            "maxEnergy": None if max_energy is None else int(max_energy),  # Fitatu answers 400 to a decimal (checked live 2026-10-15)
+            "minProtein": min_protein,
+            "maxCarbohydrate": max_carbohydrate,
+            "maxCookingTime": max_cooking_time,
+            # PHP-style list keys, as the app sends them; a bare tags= or meal= is ignored.
+            "tags[]": list(tags),
+            "meals[]": list(meals),
+        }
+        filters = {key: value for key, value in filters.items() if value is not None and value != []}
+        params["hasFilters"] = "true" if filters else "false"
+        params.update(filters)
         return as_dict_list(self.request("GET", "/search/catalog/recipes", params=params))
 
     def get_recipe(self, recipe_id: int | str) -> dict[str, Any]:

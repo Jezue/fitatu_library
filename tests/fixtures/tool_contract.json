@@ -147,11 +147,30 @@
   },
   "search_recipes": {
     "parameters": {
+      "diets": "array",
       "limit": "integer",
+      "max_carbohydrate_g": "integer",
+      "max_cooking_time": "integer",
       "max_energy_kcal": "number",
+      "meal": "string",
+      "min_protein_g": "integer",
       "phrase": "string"
     },
     "required": [],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  "get_recipe": {
+    "parameters": {
+      "recipe_id": "integer"
+    },
+    "required": [
+      "recipe_id"
+    ],
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,

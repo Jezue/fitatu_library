@@ -35,7 +35,8 @@ def demo_arguments(tools: FitatuTools) -> dict[str, dict[str, Any]]:
         "get_report": {"from_date": month_ago, "to_date": day},
         "get_shopping_list": {"from_date": day, "to_date": day},
         "search_food": {"phrase": "jajka"},
-        "search_recipes": {"max_energy_kcal": 400},
+        "search_recipes": {"max_energy_kcal": 400, "meal": "breakfast", "max_cooking_time": 10},
+        "get_recipe": {"recipe_id": 3000001},
         "find_by_barcode": {"barcode": "5900000000017"},
         "get_food_measures": {"food_id": 3000001, "food_type": "RECIPE"},
         "get_recent_foods": {"meal": "breakfast"},
@@ -120,6 +121,13 @@ def test_the_demo_profile_follows_a_weigh_in_for_today_and_the_sizes_come_newest
     assert profile["weight_kg"] == 80.5 and profile["goal"] == "lose" and profile["premium"]["active"]
     tools.log_weight(tools.get_today()["date"], 79.9)
     assert tools.get_profile()["weight_kg"] == 79.9
+
+
+def test_the_demo_recipe_search_filters_and_get_recipe_tells_the_users_own() -> None:
+    tools = FitatuTools.demo()
+    assert [hit["name"] for hit in tools.search_recipes(diets=["high_protein"], meal="dinner")] == ["Spaghetti bolognese"]
+    assert tools.search_recipes(diets=["vegan"]) == [] and tools.search_recipes(max_cooking_time=10, min_protein_g=20) == []
+    assert tools.get_recipe(3000003)["own"] is True and tools.get_recipe(3000001)["own"] is False
 
 
 def test_the_demo_refuses_what_fitatu_would_and_names_what_it_does_not_serve() -> None:

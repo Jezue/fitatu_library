@@ -103,6 +103,8 @@ class DemoBackend:
         self._add_food("RECIPE", recipe_id, recipe, base=recipe["weight"], measures=measures)
         # Its products as [product_id, measure_id, quantity], for the servings it makes.
         self.foods["RECIPE", recipe_id] |= {"items": recipe.get("items", []), "serving": recipe.get("serving", 1), "description": recipe.get("description")}
+        # What the catalog search filters on: tags as bare names (vegan for tag.vegan).
+        self.foods["RECIPE", recipe_id] |= {"cooking_time": recipe.get("cooking_time"), "meals": recipe.get("meals", []), "tags": recipe.get("tags", [])}
 
     # -- the shapes the API sends ----------------------------------------------------
     def _measure(self, food: dict[str, Any], measure_id: Any) -> dict[str, Any] | None:
@@ -194,7 +196,15 @@ class DemoBackend:
                     "measureQuantity": f"{quantity:.2f}",
                 }
             )
-        return {"serving": recipe["serving"], "items": items, "recipeDescription": recipe["description"], "mealSchema": [], "cookingTime": None, "tags": None}
+        return {
+            "serving": recipe["serving"],
+            "items": items,
+            "recipeDescription": recipe["description"],
+            "mealSchema": recipe["meals"],
+            "cookingTime": recipe["cooking_time"],
+            "tags": [{"name": f"tag.{tag}"} for tag in recipe["tags"]] or None,
+            "premiumInRecipesCatalog": False,
+        }
 
     # -- requests --------------------------------------------------------------------
     def request(self, method: str, path: str, params: dict[str, Any] | None = None, json_data: Any = None) -> Any:
@@ -264,11 +274,21 @@ class DemoBackend:
         return [self._hit(food) for food in hits][: int(params.get("limit", 20))]
 
     def search_recipes(self, *, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
-        top = float(params["maxEnergy"]) if params.get("hasFilters") == "true" and "maxEnergy" in params else float("inf")
+        def fits(recipe: dict[str, Any]) -> bool:  # per portion, as a recipe's nutrition is
+            nutrition, inf = recipe["nutrition"], float("inf")
+            return (
+                nutrition["energy"] <= float(params.get("maxEnergy", inf))
+                and nutrition["protein"] >= float(params.get("minProtein", 0))
+                and nutrition["carbohydrate"] <= float(params.get("maxCarbohydrate", inf))
+                and (recipe["cooking_time"] or 0) <= float(params.get("maxCookingTime", inf))  # the tool sends only 10 or 30
+                and {f"tag.{tag}" for tag in recipe["tags"]} >= set(params.get("tags[]", []))
+                and (not params.get("meals[]") or bool(set(recipe["meals"]) & set(params["meals[]"])))
+            )
+
         recipes = [food for food in self.foods.values() if food["type"] == "RECIPE" and not food["own"] and not food["deleted"]]
-        hits = [self._hit(food) for food in recipes if _matches(str(params.get("phrase") or ""), food["name"])]
-        extra = {"premiumInRecipesCatalog": False, "rating": None, "cookingTime": None, "preparationTime": None}
-        return [{**hit, **extra} for hit in hits if hit["energy"] <= top][: int(params.get("limit", 20))]
+        hits = [food for food in recipes if _matches(str(params.get("phrase") or ""), food["name"]) and fits(food)]
+        extra = {"premiumInRecipesCatalog": False, "rating": None, "preparationTime": None}
+        return [{**self._hit(food), **extra, "cookingTime": food["cooking_time"]} for food in hits][: int(params.get("limit", 20))]
 
     def food(self, *, kind: str, food_id: str, **_: Any) -> dict[str, Any]:
         food = self.foods.get((kind, int(food_id)))

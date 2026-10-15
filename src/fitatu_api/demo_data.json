@@ -28,8 +28,8 @@
     "2000014": {"name": "Twaróg półtłusty", "nutrition": [133, 18.7, 4.7, 3.7, 0, 3.7, 0.1], "measures": [[39, "portion", 100]]}
   },
   "recipes": {
-    "3000001": {"name": "Owsianka z bananem", "weight": 350, "nutrition": [380, 12, 8, 65, 7, 18, 0.2]},
-    "3000002": {"name": "Spaghetti bolognese", "weight": 400, "nutrition": [560, 30, 18, 70, 5, 8, 2.1]},
+    "3000001": {"name": "Owsianka z bananem", "weight": 350, "nutrition": [380, 12, 8, 65, 7, 18, 0.2], "cooking_time": 10, "meals": ["breakfast", "second_breakfast"], "tags": ["vegetarian", "high_fibre"], "items": [[2000002, 52, 5], [2000003, 40, 1], [2000004, 46, 1]], "description": "1. Ugotuj płatki na mleku.\n2. Dodaj pokrojonego banana."},
+    "3000002": {"name": "Spaghetti bolognese", "weight": 400, "nutrition": [560, 30, 18, 70, 5, 8, 2.1], "cooking_time": 30, "meals": ["lunch", "dinner"], "tags": ["high_protein", "italian"]},
     "3000003": {"name": "Mój koktajl bananowy", "weight": 370, "nutrition": [240, 10, 5, 40, 2, 30, 0.3], "own": true, "items": [[2000004, 46, 1], [2000003, 40, 1]]}
   },
   "activities": {
