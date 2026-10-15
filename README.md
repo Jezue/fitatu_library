@@ -167,6 +167,24 @@ instead of raising, is deprecated and will be removed in 1.0: for results that n
 `FitatuTools` (`{"ok": true, "data": ...}`), otherwise the client. Every public call with its stability is listed in
 [docs/API_REFERENCE.md](https://github.com/Jezue/fitatu_library/blob/main/docs/API_REFERENCE.md).
 
+### Free and Premium accounts
+
+Nearly everything works on an account without Fitatu Premium. Fitatu answers 403 without it to
+(checked live 2026-10-15):
+
+- `summary.get_nutrient_by_day()` for protein, fat and carbohydrate (energy works on any account);
+- `summary.get_top_products()`, and so the `get_top_foods` tool;
+- `summary.export_diary()`, and so `fitatu-api export`, which then says so in one line.
+
+`get_progress` and `get_report` work on every account: when the macros' day-by-day route is
+refused, they read each day's own summary instead (a request per day, at most 31 days), and
+`get_report` gives `top_foods` null with a `top_foods_note`. A free account's macro goals are a
+range (`target_min` below `target_max`); on a Premium account a one-day summary gave the two
+equal (not checked yet for the day-by-day route `get_progress` reads there). `fitatu-api doctor`
+says whether the account has a premium plan. See
+[Free and Premium accounts](https://github.com/Jezue/fitatu_library/blob/main/docs/AGENTS.md#free-and-premium-accounts)
+in docs/AGENTS.md for the tools.
+
 ## Command line
 
 `fitatu-api` (also `python -m fitatu_api`) works on the session file, `$FITATU_SESSION` or
@@ -180,7 +198,7 @@ fitatu-api logout           # deletes the session file after asking (--yes: with
 fitatu-api tools            # the agent tools: name, read / write / destructive, what it does
 fitatu-api tools --json     # the same tools in the Anthropic API format, anthropic_tools()
 fitatu-api call get_day '{"date": "2026-10-14"}'
-fitatu-api export --from 2026-10-01 --to 2026-10-14 --format csv -o diary.csv
+fitatu-api export --from 2026-10-01 --to 2026-10-14 --format csv -o diary.csv  # needs Fitatu Premium
 ```
 
 `status` prints where the session comes from (the file and its permissions, or
@@ -352,10 +370,10 @@ again afterwards to set `ok`. Requests per agent tool call, before retries and t
 | 2 | `get_range_summary`, `get_fasting` (3 when the settings name the scheme by id), `get_habits`, `find_by_barcode` (1 without a product hit), `add_food` for a recipe in portions, `add_custom_item`, `log_weight`, `delete_recipe`; `add_foods`, plus 1 for each item with `unit` or `measure_id`; `create_recipe`, plus 1 for each ingredient |
 | 3 | `add_food` with `unit` or `measure_id` (reads the food first), `log_measurements` (reads the size unit from the profile), `copy_meal` within a day, `remove_items`, `add_activity`, `remove_activity`, `set_note`; `update_recipe`, plus 1 for each new ingredient |
 | 4 | `update_item`, `move_item` within a day, `copy_meal` to another day |
-| 5 | `get_progress` (any range up to 62 days) |
+| 5 | `get_progress` (any range up to 62 days; without Fitatu Premium, see below) |
 | 6 | `move_item` to another day |
 | 8 | `get_report` (one more for every further 41 weigh-ins in the range) |
-| 1 a day | `get_shopping_list`, plus 1 for each recipe planned in the range |
+| 1 a day | `get_shopping_list`, plus 1 for each recipe planned in the range; `get_progress` and `get_report` without Fitatu Premium, plus 1 for the range (none for a single day) and `get_report`'s weigh-ins, and the first such call on a `FitatuTools` in 10 minutes 1 more, which Fitatu refuses |
 
 ## Privacy & logging
 

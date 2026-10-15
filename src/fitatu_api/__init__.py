@@ -1,6 +1,6 @@
 """Public package exports for fitatu-api."""
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 from .agent import FitatuTools
 from .auth import FitatuAuthContext, FitatuTokenStore

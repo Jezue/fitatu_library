@@ -66,13 +66,14 @@ PROMPTS: dict[str, dict[str, Any]] = {
     "przeglad_tygodnia": {
         "title": "Przegląd tygodnia",
         "description": "Review this week, Monday to today: daily averages against the goals, the days that "
-        "stood out, the weight change and the top foods.",
+        "stood out, the weight change and, with Fitatu Premium, the top foods.",
         "arguments": [],
         "text": "Zrób przegląd mojego tygodnia w Fitatu, od poniedziałku do dzisiaj (dzisiejszą datę daje "
         "get_today). Wywołaj get_report dla tego zakresu i get_progress, żeby zobaczyć poszczególne dni. "
         "Napisz po polsku: średnie dzienne kalorii i makroskładników wobec celów, które dni odbiegały "
-        "najbardziej, zmianę wagi, jeśli jest, i produkty, które dały najwięcej kalorii i białka. Zakończ "
-        "jedną konkretną wskazówką na resztę tygodnia albo następny.",
+        "najbardziej, zmianę wagi, jeśli jest, i produkty, które dały najwięcej kalorii i białka (jeśli "
+        "top_foods jest null, powiedz, że to wymaga Fitatu Premium). Zakończ jedną konkretną wskazówką na "
+        "resztę tygodnia albo następny.",
         "default": {},
     },
     "zaloguj_posilek": {

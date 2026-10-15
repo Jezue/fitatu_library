@@ -117,7 +117,7 @@ def test_prompts_are_polish_slash_commands_that_name_the_tools_to_use(tools: Fit
     ]
     assert [[(a.name, bool(a.required)) for a in p.arguments or []] for p in listed] == [[("date", False)], [], [("meal", False)]]
     assert "2027-01-03" in texts["podsumowanie_dnia"] and "get_progress" in texts["podsumowanie_dnia"]
-    assert "get_report" in texts["przeglad_tygodnia"] and "poniedziałku" in texts["przeglad_tygodnia"]
+    assert "get_report" in texts["przeglad_tygodnia"] and "poniedziałku" in texts["przeglad_tygodnia"] and "Premium" in texts["przeglad_tygodnia"]
     assert "dwa jajka na śniadanie" in texts["zaloguj_posilek"] and "add_foods" in texts["zaloguj_posilek"]
     _, today = _prompts(build_server(lambda: tools), {"podsumowanie_dnia": {}, "zaloguj_posilek": {"meal": " "}})
     assert "get_today" in today["podsumowanie_dnia"] and "zapytaj mnie" in today["zaloguj_posilek"]

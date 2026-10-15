@@ -36,7 +36,13 @@ from ._shapes import as_dict
 from .agent import READ_ONLY_TOOLS, TOOLS, FitatuTools, _selected, anthropic_tools
 from .auth import FitatuAuthContext, jwt_payload, resolve_session_path, write_private_json
 from .client import FitatuApiClient
-from .exceptions import FitatuApiError, FitatuAuthError, FitatuValidationError, describe_error
+from .exceptions import (
+    FORBIDDEN_HINT,
+    FitatuApiError,
+    FitatuAuthError,
+    FitatuValidationError,
+    describe_error,
+)
 from .service_modules import SummaryModule
 
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
@@ -212,6 +218,9 @@ def _export(args: argparse.Namespace) -> int:
                 write_private_file(args.output, content, overwrite=args.overwrite)
     except (FitatuApiError, OSError) as exc:  # e.g. no session file yet, or the file appeared meanwhile
         error = describe_error(exc)
+        if error["hint"] == FORBIDDEN_HINT:  # a 403 from Fitatu itself, not from a firewall
+            print("Export failed: the diary export needs Fitatu Premium; `fitatu-api doctor` says whether this account has it.", file=sys.stderr)
+            return 1
         print(f"Export failed: {error['message']}", file=sys.stderr)
         if error["hint"]:
             print(error["hint"], file=sys.stderr)
@@ -493,7 +502,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="save the food diary of a date range as csv, xls, pdf or txt",
         description="Download Fitatu's export of the food diary for a date range and save it to a new file "
         "readable only by you (0600). An existing file is kept unless --overwrite is given; a range with "
-        "nothing logged writes no file and exits with 1. The session file is $FITATU_SESSION (or "
+        "nothing logged writes no file and exits with 1. The export needs Fitatu Premium. The session "
+        "file is $FITATU_SESSION (or "
         "$FITATU_SESSION_PATH), else ~/.fitatu/session.json.",
     )
     export.add_argument("--from", dest="from_date", required=True, metavar="DATE", help="first day, YYYY-MM-DD")

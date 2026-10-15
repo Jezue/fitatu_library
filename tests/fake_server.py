@@ -43,6 +43,8 @@ RECORDED_SEARCHES = {CALLS[name]["request"]["query"]["phrase"]: name for name in
 DAY_GET = re.compile(r"/diet-and-activity-plan/(?P<user>[^/]+)/day/(?P<day>\d{4}-\d{2}-\d{2})")
 DAY_SYNC = re.compile(r"/diet-plan/(?P<user>[^/]+)/days")
 REVISIONS = re.compile(r"/diet-plan/(?P<user>[^/]+)/days/(?P<day>\d{4}-\d{2}-\d{2})/revisions")
+# The routes Fitatu answers with 403 on an account without Premium (checked live 2026-10-15).
+PREMIUM_ONLY = re.compile(r"/v2/diet-plan/[^/]+/summary/(protein|fat|carbohydrate)/custom|/diet-plan/[^/]+/(summary-product/\w+/custom|export)")
 
 
 def recorded(name: str) -> Any:
@@ -95,6 +97,8 @@ class FakeFitatuServer:
     from ``search_results``, then ``routes`` (canned replies by ``(method, path)`` for routes
     the recording lacks), then the first recorded call with the same method and path; a
     recorded 4xx is raised as ``FitatuApiError`` with that status (a 404 as ``FitatuNotFoundError``).
+    A route's reply may be a function of the request's ``params``. With ``free`` set, the
+    Premium-only routes answer 403 as they do for an account without Premium.
     """
 
     def __init__(
@@ -105,6 +109,7 @@ class FakeFitatuServer:
         recipes: dict[str, dict[str, Any]] | None = None,
         search_results: dict[str, list[dict[str, Any]]] | None = None,
         user_id: str = RECORDED_USER_ID,
+        free: bool = False,
     ) -> None:
         skeleton = copy.deepcopy(day) if day is not None else recorded("day_empty")
         # Each meal's own fields (mealName, mealTime, ...) as seeded; the day GET returns them with its rows.
@@ -129,6 +134,7 @@ class FakeFitatuServer:
             **(search_results or {}),
         }
         self.routes: dict[tuple[str, str], Any] = {}
+        self.free = free
         self.requests: list[dict[str, Any]] = []
         self.sync_payloads: list[dict[str, Any]] = []
         self.auth = SimpleNamespace(fitatu_user_id=user_id)
@@ -149,8 +155,11 @@ class FakeFitatuServer:
             return recorded("day_revisions")
         if method == "GET" and path == "/search/new/food":
             return self.search_food(kwargs["params"]["phrase"], limit=kwargs["params"]["limit"])
+        if self.free and PREMIUM_ONLY.fullmatch(path):
+            raise FitatuApiError(f"{method} {path} -> 403", status_code=403, body='{"code": 403, "message": "Forbidden"}')
         if (method, path) in self.routes:
-            return copy.deepcopy(self.routes[method, path])
+            reply = self.routes[method, path]
+            return copy.deepcopy(reply(kwargs.get("params")) if callable(reply) else reply)
         call = next((c for c in CALLS.values() if (c["request"]["method"], c["request"]["path"]) == (method, path)), None)
         if call is None:
             raise AssertionError(f"unexpected request: {method} {path}")

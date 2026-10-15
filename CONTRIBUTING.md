@@ -45,7 +45,9 @@ pre-commit run --all-files
 Fitatu's API is unofficial and changes without notice. `scripts/check_contract.py` reads every
 route the library reads and compares the structure of each reply with the recording (or with
 `tests/fixtures/contract_shapes.json`); it prints route and key names, never values, and exits
-1 when a key is gone, a type changed or a route fails. How it compares:
+1 when a key is gone, a type changed or a route fails. On an account without Fitatu Premium it
+skips the Premium-only routes (`skipped (premium)`), and the live tests skip what needs Premium
+("needs Fitatu Premium"), so a free throwaway account checks everything else. How it compares:
 [tests/fixtures/README.md](tests/fixtures/README.md#checking-the-recording-against-the-live-api).
 
 The *Live contract* workflow (`.github/workflows/live-contract.yml`) runs it every Monday and on

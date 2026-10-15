@@ -539,7 +539,9 @@ class SummaryModule:
         ``current`` is the total of every row over the whole range, not a daily average (checked
         live 2026-10-13; the recording covers one day); ``eaten`` counts only the rows ticked as
         eaten (null when none is), and ``min``/``max`` are the goals summed over the days
-        (checked live 2026-10-14).
+        (checked live 2026-10-14). Works on every account; for a single day ``min``/``max`` are
+        that day's goals, energy's ``min`` null and a macro's a range on the free account checked live
+        2026-10-15, one number (``min`` equal to ``max``) on the Premium one.
         """
         uid = validate_numeric_id(user_id, "user_id")
         path = f"/v2/diet-plan/{uid}/summary/custom"
@@ -553,7 +555,10 @@ class SummaryModule:
         ``{measures, targetRanges}`` (``{min, max}`` per day) for protein, fat and carbohydrate.
 
         Every day of the range is a key of ``measures``; it counts every row, planned or eaten,
-        and is null on a day with nothing logged (checked live 2026-10-14).
+        and is null on a day with nothing logged (checked live 2026-10-14). Protein, fat and
+        carbohydrate are Premium only: without Fitatu Premium the API answers 403, while energy
+        works on every account (checked live 2026-10-15); :meth:`get_nutrition` of a single day
+        gives that day's goals on any account.
 
         ``nutrient`` uses the API's camelCase names: ``energy``, ``protein``, ``fat``,
         ``carbohydrate``, ``fiber``, ``sugars``, ``saturatedFat``, ``salt``, ``vitaminC``...
@@ -577,7 +582,8 @@ class SummaryModule:
 
         ``list`` rows are ``{id, name, amount: {current, per100}}`` sorted by ``current``,
         highest first, with the numbers as strings; ``per100`` is null for a custom row, whose
-        ``id`` is the row's (checked live 2026-10-14 for energy and protein).
+        ``id`` is the row's (checked live 2026-10-14 for energy and protein). Premium only: without
+        Fitatu Premium the API answers 403 (checked live 2026-10-15).
         """
         uid = validate_numeric_id(user_id, "user_id")
         params: dict[str, Any] = {**_date_range_params(from_date, to_date), **_page_params(page, limit)}
@@ -597,13 +603,19 @@ class SummaryModule:
         """Download the food diary for a date range as ``csv``, ``xls``, ``pdf`` or ``txt``.
 
         Returns the file content, or ``None`` when the range has no entries (the API
-        answers 204 in that case).
+        answers 204 in that case). Premium only: on an account without Fitatu Premium the API
+        answers 403 (checked live 2026-10-15), raised as a ``FitatuApiError`` whose message says so.
         """
         uid = validate_numeric_id(user_id, "user_id")
         if fmt not in self.EXPORT_FORMATS:
             raise FitatuValidationError(f"fmt must be one of {self.EXPORT_FORMATS}, got {fmt!r}")
         params = {"format": fmt, **_date_range_params(from_date, to_date)}
-        data = self._client.request("GET", f"/diet-plan/{uid}/export", params=params, raw=True)
+        try:
+            data = self._client.request("GET", f"/diet-plan/{uid}/export", params=params, raw=True)
+        except FitatuApiError as exc:
+            if exc.status_code != 403 or (exc.body or "").lstrip().startswith("<"):
+                raise  # an HTML page is a firewall's, not Fitatu's
+            raise FitatuApiError(f"{exc}; the diary export needs Fitatu Premium", status_code=403, body=exc.body) from exc
         return data if isinstance(data, bytes) else None
 
 

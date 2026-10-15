@@ -386,6 +386,14 @@ def test_export_reports_an_api_error(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert not (tmp_path / "x.csv").exists()
 
 
+def test_export_without_premium_says_so_in_one_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    _use_fake(monkeypatch, FakeFitatuServer(free=True))
+
+    assert main(["export", "--from", DAY, "--to", DAY, "-o", str(tmp_path / "x.csv")]) == 1
+    assert capsys.readouterr().err == "Export failed: the diary export needs Fitatu Premium; `fitatu-api doctor` says whether this account has it.\n"
+    assert not (tmp_path / "x.csv").exists()
+
+
 @pytest.mark.parametrize(
     ("flags", "options"),
     [([], {"read_only": False, "call_timeout": 45}), (["--read-only", "--call-timeout", "20"], {"read_only": True, "call_timeout": 20})],

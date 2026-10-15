@@ -7,6 +7,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-15
+
 ### Fixed
 
 - The Claude Desktop bundle found no session with its default setting: Claude Desktop passes the
@@ -14,6 +16,36 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   expands it (and falls back to `~/.fitatu/session.json` for an empty or unexpanded value), and
   `resolve_session_path()` now expands variables in `$FITATU_SESSION` too. The
   `fitatu-0.5.0.mcpb` attached to the v0.5.0 release is rebuilt with the fix.
+- `get_progress` and `get_report` failed with a 403 on an account without Fitatu Premium: the
+  macros' day-by-day route they read is Premium-only (checked live 2026-10-15). When it is
+  refused, they read each day's own range summary instead, which every account may read and
+  which gives each day's goals (a macro's as a range on a free account) and its `eaten`
+  too; `FitatuTools` remembers the refusal for 10 minutes and goes straight to it on later calls
+  (a `get_top_foods` that succeeds ends it, so a plan bought meanwhile shows). Without
+  Premium this covers at most 31 days (a request per day), and a longer range is a validation
+  error that points to `get_range_summary`; so do `get_progress`'s description and its error
+  over 62 days, which named only `get_report`. `get_report` gives `top_foods` null with a
+  `top_foods_note` instead of failing, as the top foods are Premium-only too.
+- `fitatu-api export` on an account without Fitatu Premium printed the API's 403 and a hint that
+  listed three possible causes. The diary export is Premium-only (checked live 2026-10-15), so it
+  now says that in one line; `summary.export_diary()` and `FitatuLibrary.export_diary_via_api()`
+  add it to the error's message.
+
+### Changed
+
+- The tool descriptions, `SYSTEM_PROMPT`, the `przeglad_tygodnia` MCP prompt (the top foods only
+  with Premium) and the docs say what needs Fitatu Premium: among the
+  tools only `get_top_foods`; in the client `summary.get_nutrient_by_day()` for the macros,
+  `summary.get_top_products()` and `summary.export_diary()`. README and docs/AGENTS.md have a
+  "Free and Premium accounts" section. `search_recipes` no longer says a premium catalog recipe
+  may be unreadable on a free account: its details read fine there (checked live 2026-10-15).
+- `scripts/check_contract.py` no longer reports drift on an account without Premium: it skips
+  the Premium-only routes there (`skipped (premium)`, from `user_settings.get_premium()`), and a
+  key only some accounts' replies have, such as a meal's `recommendedPercent` in the day GET, is
+  not drift when it is missing.
+- The live tests skip what needs Premium on an account without it ("needs Fitatu Premium"), check
+  that `get_top_foods` is refused there, and check on any account that `get_progress` and
+  `get_report` give goals, the latter with `top_foods` null and a note without Premium.
 
 ## [0.5.0] - 2026-10-14
 
@@ -688,5 +720,6 @@ Initial packaged repository extracted from the workspace integration code.
 - initial test suite for public API and resilience behavior
 - project metadata, MIT license, README, and contributor docs
 
-[Unreleased]: https://github.com/Jezue/fitatu_library/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Jezue/fitatu_library/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/Jezue/fitatu_library/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Jezue/fitatu_library/releases/tag/v0.5.0
