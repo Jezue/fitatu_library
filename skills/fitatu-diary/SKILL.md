@@ -2,7 +2,7 @@
 name: fitatu-diary
 description: Keep the user's Fitatu food diary (Polish calorie counter, licznik kalorii) through the fitatu-mcp tools - read a day, check calories and macros left against goals, log meals by name, barcode or as a custom item, fix or remove entries, log weight, water, body measurements and workouts, and give weekly reports. Use when the user mentions Fitatu, what they ate, calories or macros left, logging food or a meal (posiłek, kalorie, dziennik), their weight or water, or a diet report.
 license: MIT
-compatibility: Needs the fitatu-mcp MCP server (pip install "fitatu-api[mcp]", or uvx --from "fitatu-api[mcp]" fitatu-mcp) and a Fitatu session from `fitatu-api login`. Built for Hermes Agent; works in any MCP host (Claude Desktop, Claude Code, Cursor). Needs network access to Fitatu.
+compatibility: Needs the fitatu-mcp MCP server (pip install "fitatu-api[mcp]", or uvx --from "fitatu-api[mcp]" fitatu-mcp) and a Fitatu session from `fitatu-api login`. Built for Hermes Agent; works in any MCP host (Claude Desktop, Claude Code, Cursor). Over HTTP (fitatu-mcp --http, with a token) for an agent on another machine. Needs network access to Fitatu.
 metadata:
   author: Jezue
   version: "0.5.1"
@@ -34,6 +34,9 @@ user's diary as tools. This skill says how to set it up and how to use the tools
    Then `hermes mcp test fitatu` (lists the tools) and `/reload-mcp` in a running session.
    Other hosts: `claude mcp add fitatu -- uvx --from "fitatu-api[mcp]" fitatu-mcp`, or the
    same command in an `mcpServers` entry. To try it without an account: add `"--demo"`.
+   An agent on another machine (or n8n): run `fitatu-mcp --http` where the session is, with
+   `FITATU_MCP_TOKEN` set, and give the host the URL `http://<that machine>:8765/mcp` and the
+   header `Authorization: Bearer <token>` (Hermes: `url:` and `headers:` in place of `command:`).
 3. Some hosts put the server's name in front of the tool names; the names below are without
    that prefix.
 

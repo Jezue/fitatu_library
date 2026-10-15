@@ -565,7 +565,8 @@ counts as a failure: no fallback model is configured, so the score is the named 
 ## MCP
 
 `fitatu-mcp` serves the tools to MCP hosts (Claude Code, Claude Desktop, Cursor and others) over
-stdio. It needs the `mcp` extra and a session file, so install it and log in once:
+stdio, or over HTTP for n8n and other machines (see
+[Remote (HTTP) and Docker](#remote-http-and-docker)). It needs the `mcp` extra and a session file, so install it and log in once:
 
 ```bash
 pipx install "fitatu-api[mcp]"   # or pip install, in a venv
@@ -731,8 +732,9 @@ What the server does:
   (with the traceback), `auth` or `maintenance` error. `--log-level DEBUG` (in `args`) or
   `FITATU_LOG_LEVEL=DEBUG` (in `env`) adds every request (paths carry the user id and dates,
   query parameters the search phrases; never tokens) and every error a call returned.
-- **stdio only.** The process holds a live bearer token, so there is no HTTP transport:
-  whoever could reach the port could write to the account.
+- **Transports.** stdio by default. `--http` serves Streamable HTTP for clients on other machines
+  or in other containers, with a token, below. The process holds a live bearer token, so whoever
+  has the HTTP token can do what the served tools allow on the account.
 
 **Confirmations.** `fitatu-mcp` cannot ask the user anything: the host's permission prompt is
 the confirmation step of [Writing safely](#writing-safely). The annotations reach the host only
@@ -750,6 +752,85 @@ argument (meal `obiad` instead of a meal key, a missing `row_id`) comes back as 
 envelope that the model can act on. A host that checks arguments against `inputSchema` before
 sending them shows the model its own error text instead of the envelope. Either way nothing is
 sent to Fitatu, and the model corrects the call from the message.
+
+### Remote (HTTP) and Docker
+
+`fitatu-mcp --http` serves the same tools, prompts and instructions over Streamable HTTP at
+`http://HOST:PORT/mcp`, for n8n, an agent on another computer, or a phone on your network. It does not
+start without a token: put a random one in `FITATU_MCP_TOKEN` (or a file named by
+`FITATU_MCP_TOKEN_FILE`), at least 32 characters, and give it to each client as
+`Authorization: Bearer <token>`.
+
+```bash
+export FITATU_MCP_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+fitatu-mcp --http                                   # http://127.0.0.1:8765/mcp, this computer only
+fitatu-mcp --http --host 0.0.0.0 --allow-host nas.local --read-only   # the network, reads only
+```
+
+- **Who can reach it.** It listens on 127.0.0.1 unless `--host` says otherwise. It answers only to
+  the names in the client's URL that it knows: 127.0.0.1, localhost, `--host` and each `--allow-host`
+  (others get 421), and refuses requests from web pages of other sites (Origin, 403). Any request
+  without the token gets 401, and the server logs the client's address (never the token).
+- **No TLS.** The token and the diary travel in plain HTTP. Keep it on your own computer, a home
+  network or a VPN such as Tailscale; to reach it from the internet, put an HTTPS reverse proxy in
+  front (and add its name with `--allow-host`). Never forward the port as is.
+- **The token is the account.** Anyone with it can do what the served tools allow: use `--read-only`
+  or `--tools` for clients that only report. Change it by restarting with a new one.
+- **Sessions.** None: every request stands alone, so a restart breaks no client, and a client can
+  call a tool with one POST (`Content-Type: application/json`, `Accept: application/json`):
+  `{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_today", "arguments": {}}}`.
+  Calls from all clients run one at a time on one session file, as over stdio. With `--demo`, all
+  clients share one made-up diary until a restart.
+
+**Docker.** The repository's `Dockerfile` runs `fitatu-mcp --http` as a non-root user, with the
+session in the volume `/data`. Arguments after the image name go to `fitatu-mcp`.
+
+```bash
+docker build -t fitatu-mcp https://github.com/Jezue/fitatu_library.git   # or `docker build -t fitatu-mcp .` in a clone
+docker run --rm -it -v fitatu-data:/data --entrypoint fitatu-api fitatu-mcp login
+docker run -d --name fitatu-mcp --restart unless-stopped -e FITATU_MCP_TOKEN \
+  -v fitatu-data:/data -p 127.0.0.1:8765:8765 fitatu-mcp
+```
+
+Mount a directory at `/data` (a named volume as above, or a host directory that uid 10001 can
+write), never `session.json` alone: a refreshed token replaces the file, which a single mounted file
+cannot take. Or pass the session itself as `FITATU_SESSION_JSON` (`fitatu-api login --print`);
+refreshed tokens then stay in memory. Keep the container's port at 8765 and change only the host
+side of `-p`. Publish it on 127.0.0.1 as above unless other machines need it.
+
+**n8n.** Run both in one compose file, so that n8n reaches the server by its service name and no
+port is published:
+
+```yaml
+services:
+  fitatu-mcp:
+    build: https://github.com/Jezue/fitatu_library.git
+    command: ["--allow-host", "fitatu-mcp"]   # add "--read-only" for reads only
+    environment:
+      FITATU_MCP_TOKEN: ${FITATU_MCP_TOKEN}   # from .env next to this file
+    volumes: ["fitatu-data:/data"]
+    restart: unless-stopped
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    ports: ["127.0.0.1:5678:5678"]
+    volumes: ["n8n-data:/home/node/.n8n"]
+volumes:
+  fitatu-data:
+  n8n-data:
+```
+
+Log in once with `docker compose run --rm --entrypoint fitatu-api fitatu-mcp login`. In n8n, add an
+*AI Agent* and give it the *MCP Client Tool* with Endpoint `http://fitatu-mcp:8765/mcp`, Server
+Transport *HTTP Streamable*, and Authentication *Bearer Auth* with a credential holding the token.
+*Tools to Include* can narrow the tools further. Put `SYSTEM_PROMPT`
+(`python -c "from fitatu_api import SYSTEM_PROMPT; print(SYSTEM_PROMPT)"`) in the agent's system
+message: the agent works from its own instructions.
+
+**Other clients.** Claude Code:
+`claude mcp add --transport http fitatu http://nas.local:8765/mcp --header "Authorization: Bearer $FITATU_MCP_TOKEN"`.
+Hermes Agent: `url:` and `headers: {Authorization: "Bearer ..."}` in place of `command:`. claude.ai
+and the Claude mobile app do not fit: their custom connectors reach servers from Anthropic's cloud over
+public HTTPS and sign in with OAuth, not with a fixed token.
 
 ## See also
 

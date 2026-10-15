@@ -19,8 +19,8 @@ a fix and an advisory once it is understood.
 
 In scope is this library, including `fitatu-api` and `fitatu-mcp`: how it stores and sends
 tokens (the session file, its 0600 mode, the hosts that get credentials), what it logs, what the
-agent tools let a model do, and the release pipeline. A flaw in Fitatu's own service or API
-belongs to Fitatu, not here.
+agent tools let a model do, `fitatu-mcp --http`'s token and Host checks and the `Dockerfile`, and
+the release pipeline. A flaw in Fitatu's own service or API belongs to Fitatu, not here.
 
 ## Never share your session
 

@@ -14,6 +14,16 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Claude Code), the rules for using the tools well, common tasks, free vs Premium accounts and
   what to do on each error. A test checks it against the format and that it names only real
   tools.
+- `fitatu-mcp --http` (also `fitatu-api mcp --http`): the same server over Streamable HTTP, for n8n,
+  another computer or a phone on your network. It listens on 127.0.0.1:8765 unless `--host` and
+  `--port` say otherwise, does not start without a token (`FITATU_MCP_TOKEN` or the file
+  `FITATU_MCP_TOKEN_FILE`, at least 32 characters) and answers only requests that send it as
+  `Authorization: Bearer <token>`, checks the Host header (127.0.0.1, localhost, `--host` and each
+  `--allow-host`) and the Origin, and keeps no sessions, so a restart breaks no client.
+  `--read-only`, `--tools`, `--demo` and `--call-timeout` work as over stdio. No new dependency:
+  uvicorn and starlette come with `mcp`. `fitatu_api.mcp_server.http_app()` is the ASGI app.
+- `Dockerfile`: an image that runs `fitatu-mcp --http` as a non-root user, with the session in the
+  volume `/data`. CI builds it and checks that it answers; it is not published to a registry.
 
 ## [0.5.1] - 2026-10-15
 
