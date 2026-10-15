@@ -475,7 +475,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "tools",
         help="list the agent tools: name, read / write / destructive, what it does",
         description="List the tools of fitatu_api.agent (FitatuTools) with their kind: read, write, or "
-        "destructive (overwrites or deletes what is logged), and the first sentence of the description "
+        "destructive (overwrites or deletes what is logged or the goals), and the first sentence of the description "
         "the model gets.",
     )
     tools.add_argument("--json", action="store_true", help="print the tools in the Anthropic API format (anthropic_tools())")

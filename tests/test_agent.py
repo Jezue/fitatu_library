@@ -43,6 +43,7 @@ SEED = {**recorded("day_three_rows"), "activityPlan": recorded("day_after_activi
 ROWS = {meal: bucket["items"][0]["planDayDietItemId"] for meal, bucket in SEED["dietPlan"].items() if bucket["items"]}
 ACTIVITY_ROW = SEED["activityPlan"][0]["uuid"]
 NEXT_DAY = "2027-01-04"
+TODAY = datetime.now(ZoneInfo("Europe/Warsaw")).date().isoformat()  # get_today's date for the fixture's client
 
 # Checked live on 2026-10-14, not recorded yet (tests/fixtures/README.md). One nutrient day by day: every day
 # of the range is a key, null when nothing is logged; here DAY has 200 kcal eaten and 100 kcal planned.
@@ -75,6 +76,24 @@ DAY_SUMMARIES = {
         nutrient: {"current": None, "eaten": None, "min": low, "max": high}
         for nutrient, low, high in (("energy", None, 2000), ("protein", 90, 110), ("fat", 60, 74), ("carbohydrate", 225, 275))
     },
+}
+
+
+def settings_after(diet: dict[str, Any] | None = None, glass: int | None = None) -> dict[str, Any]:
+    """settings-new as the PATCH answers it: the whole new settings, as a GET then gives them (checked live
+    2026-10-15, not recorded): the recorded ones with ``diet`` and the glass changed."""
+    settings = recorded("settings_new")
+    settings["userDietSettings"] |= diet or {}
+    if glass is not None:
+        settings["waterSettings"] = {"unitCapacity": glass}
+    return settings
+
+
+MANUAL_1800 = {
+    "manualEnergyTarget": True,
+    "energy": 1800,
+    **{f"{macro}Percentage": pct for macro, pct in (("protein", 40), ("fat", 30), ("carbohydrate", 30))},
+    **{f"{macro}Weight": grams for macro, grams in (("protein", 180), ("fat", 60), ("carbohydrate", 135))},
 }
 
 
@@ -133,6 +152,7 @@ ARGUMENTS: dict[str, dict[str, Any]] = {
     "log_weight": {"date": WEIGHT_DAY, "weight_kg": 70},
     "log_measurements": {"date": WEIGHT_DAY, "waist": 79.5},
     "set_water": {"date": DAY, "water_ml": 1500},
+    "set_targets": {"energy_kcal": 1800, "protein_pct": 40, "fat_pct": 30, "carbohydrate_pct": 30},
     "set_note": {"date": DAY, "note": "Dużo wody"},
     "add_activity": {"date": DAY, "activity_id": 535, "minutes": 30, "energy_kcal": 123},
     "remove_activity": {"date": DAY, "row_id": ACTIVITY_ROW},
@@ -210,6 +230,9 @@ def fake_with_every_reply() -> FakeFitatuServer:
         {"completed": False, "enrolledDate": "2027-01-01", "habit": water, "habitItems": [{"dayNumber": 3, "date": DAY}, {"dayNumber": 1, "date": "2027-01-01"}]}
     ]
     server.routes[("GET", f"/habits/{RECORDED_USER_ID}/good-days")] = ["2026-12-30", DAY, "2027-01-01"]
+    # set_targets reads today's settings and PATCHes them; the reply is the whole new settings.
+    server.routes[("GET", f"/users/{RECORDED_USER_ID}/settings-new/{TODAY}")] = recorded("settings_new")
+    server.routes[("PATCH", f"/users/{RECORDED_USER_ID}/settings-new")] = settings_after(MANUAL_1800)
     return server
 
 
@@ -291,6 +314,7 @@ def test_annotations_mark_reads_and_what_can_overwrite_the_diary() -> None:
         "log_weight",
         "log_measurements",
         "set_water",
+        "set_targets",
         "set_note",
     }
     assert {name for name, hint in hints.items() if hint["idempotentHint"]} == READS | {
@@ -301,6 +325,7 @@ def test_annotations_mark_reads_and_what_can_overwrite_the_diary() -> None:
         "log_weight",
         "log_measurements",
         "set_water",
+        "set_targets",
         "set_note",
         "set_favorite",
     }
@@ -1199,6 +1224,74 @@ def test_log_weight_and_set_water_send_absolute_values(tools: FitatuTools, fake:
     assert fake.requests[-1]["json_data"] == {"waterConsumption": 1500}
 
 
+def test_set_targets_sends_the_whole_diet_with_the_goal_and_its_grams(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    # The recorded settings: automatic, 2000 kcal, 20/30/50 with 100/67/250 g, no glass size (0).
+    result = data(tools, "set_targets", **ARGUMENTS["set_targets"])
+    assert [(r["method"], r["path"]) for r in fake.requests] == [
+        ("GET", f"/users/{RECORDED_USER_ID}/settings-new/{TODAY}"),
+        ("PATCH", f"/users/{RECORDED_USER_ID}/settings-new"),
+    ]
+    # Fitatu refuses a part of userDietSettings (checked live): the whole one goes back with the changes.
+    diet = {**recorded("settings_new")["userDietSettings"], **MANUAL_1800}
+    assert fake.requests[-1]["json_data"] == {"userId": 1234567, "updatedAt": None, "userDietSettings": diet}
+    assert (result["energy"], result["protein"], result["automatic"], result["glass_ml"]) == (1800, {"grams": 180, "percent": 40}, False, None)
+    assert (result["date"], result["previous"], result["ok"]) == (TODAY, {"automatic": True}, True)
+
+
+def test_set_targets_keeps_the_split_or_takes_20_30_50_when_there_is_none(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    expected = {"manualEnergyTarget": True, "energy": 1800, "proteinPercentage": 20, "proteinWeight": 90, "fatPercentage": 30,
+                "fatWeight": 60, "carbohydratePercentage": 50, "carbohydrateWeight": 225}
+    data(tools, "set_targets", energy_kcal=1800)
+    assert fake.requests[-1]["json_data"]["userDietSettings"] == {**recorded("settings_new")["userDietSettings"], **expected}
+    # A free account's automatic goal has no split (checked live), and a manual goal needs one.
+    none = dict.fromkeys(f"{macro}{part}" for macro in ("protein", "fat", "carbohydrate") for part in ("Percentage", "Weight"))
+    fake.routes[("GET", f"/users/{RECORDED_USER_ID}/settings-new/{TODAY}")] = settings_after(none)
+    data(tools, "set_targets", energy_kcal=1800)
+    assert fake.requests[-1]["json_data"]["userDietSettings"] == {**settings_after(none)["userDietSettings"], **expected}
+
+
+def test_set_targets_percentages_alone_keep_the_energy(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    data(tools, "set_targets", protein_pct=40, fat_pct=30, carbohydrate_pct=30)
+    diet = fake.requests[-1]["json_data"]["userDietSettings"]
+    assert (diet["manualEnergyTarget"], diet["energy"]) == (True, 2000)
+    assert (diet["proteinWeight"], diet["fatWeight"], diet["carbohydrateWeight"]) == (200, 67, 150)  # 66.7 g of fat rounds to 67
+
+
+def test_set_targets_back_to_automatic(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    manual = settings_after(MANUAL_1800)
+    fake.routes[("GET", f"/users/{RECORDED_USER_ID}/settings-new/{TODAY}")] = manual
+    fake.routes[("PATCH", f"/users/{RECORDED_USER_ID}/settings-new")] = recorded("settings_new")
+    result = data(tools, "set_targets", automatic=True)
+    # Only the mode changes: Fitatu works the energy out again.
+    assert fake.requests[-1]["json_data"]["userDietSettings"] == {**manual["userDietSettings"], "manualEnergyTarget": False}
+    assert (result["automatic"], result["energy"], result["ok"]) == (True, 2000, True)
+    assert result["previous"] == {"energy_kcal": 1800, "protein_pct": 40, "fat_pct": 30, "carbohydrate_pct": 30}
+    data(tools, "set_targets", **result["previous"])  # the undo SYSTEM_PROMPT describes
+    assert {key: fake.requests[-1]["json_data"]["userDietSettings"][key] for key in MANUAL_1800} == MANUAL_1800
+
+
+def test_set_targets_water_glass_only(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    fake.routes[("PATCH", f"/users/{RECORDED_USER_ID}/settings-new")] = settings_after(glass=300)
+    result = data(tools, "set_targets", water_glass_ml=300)
+    assert fake.requests[-1]["json_data"] == {"userId": 1234567, "updatedAt": None, "waterSettings": {"unitCapacity": 300}}
+    assert (result["glass_ml"], result["automatic"], result["ok"]) == (300, True, True)
+    # previous holds only what the call changed; the recorded glass size is none (0), which cannot be sent back.
+    assert result["previous"] == {}
+    fake.routes[("GET", f"/users/{RECORDED_USER_ID}/settings-new/{TODAY}")] = settings_after(glass=250)
+    assert data(tools, "set_targets", water_glass_ml=300)["previous"] == {"water_glass_ml": 250}
+    assert data(tools, "set_targets", energy_kcal=1800)["previous"] == {"automatic": True}
+
+
+def test_set_targets_is_not_ok_when_the_reply_does_not_show_it(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    fake.routes[("PATCH", f"/users/{RECORDED_USER_ID}/settings-new")] = recorded("settings_new")
+    assert data(tools, "set_targets", energy_kcal=1800)["ok"] is False
+    # An empty reply: the settings are read again.
+    fake.routes[("PATCH", f"/users/{RECORDED_USER_ID}/settings-new")] = None
+    fake.requests.clear()
+    assert data(tools, "set_targets", water_glass_ml=300)["ok"] is False
+    assert [r["method"] for r in fake.requests] == ["GET", "PATCH", "GET"]
+
+
 def test_set_note_replaces_the_note_keeps_its_tags_and_sends_nothing_else(tools: FitatuTools, fake: FakeFitatuServer) -> None:
     fake.day_notes[DAY] = {"note": "Stara notatka", "tagsIds": [3]}
     before = rows(fake)
@@ -1459,6 +1552,17 @@ def test_an_id_from_the_other_list_is_not_found_and_the_day_keeps_it(tools: Fita
         ("log_measurements", {"date": WEIGHT_DAY}, "validation"),
         ("log_measurements", {"date": WEIGHT_DAY, "waist": 0}, "validation"),
         ("log_measurements", {"date": WEIGHT_DAY, "weight": 70}, "validation"),
+        ("set_targets", {}, "validation"),
+        ("set_targets", {"automatic": False}, "validation"),
+        ("set_targets", {"automatic": True, "energy_kcal": 1800}, "validation"),
+        ("set_targets", {"protein_pct": 40, "fat_pct": 30}, "validation"),
+        ("set_targets", {"protein_pct": 30, "fat_pct": 30, "carbohydrate_pct": 30}, "validation"),  # sums to 90
+        ("set_targets", {"protein_pct": 40.5, "fat_pct": 29.5, "carbohydrate_pct": 30}, "validation"),  # Fitatu answers 500
+        ("set_targets", {"protein_pct": 0, "fat_pct": 40, "carbohydrate_pct": 60}, "validation"),  # 0 g is refused
+        ("set_targets", {"energy_kcal": 499}, "validation"),
+        ("set_targets", {"energy_kcal": 8001}, "validation"),
+        ("set_targets", {"energy_kcal": "1800"}, "validation"),
+        ("set_targets", {"water_glass_ml": 2}, "validation"),
     ],
 )
 def test_bad_calls_are_validation_errors_and_send_nothing(

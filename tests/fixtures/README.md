@@ -99,6 +99,18 @@ test day); `tests/test_agent.py` and `tests/fake_server.py` fake these with neut
   the store, the price and transaction ids; the fakes carry only neutral dates (and a dummy price
   that must not come out).
 
+Checked live on 2026-10-15 but not recorded (a free account's goals changed and put back):
+`PATCH /users/{id}/settings-new` answers with the whole new settings, as a GET gives them
+afterwards. It needs `userId` (a number or a string) and refuses a partial `userDietSettings`
+(400: a missing field); `updatedAt` may be null, stale or left out. A manual goal
+(`manualEnergyTarget: true`) needs all three macro percentages, whole numbers summing to 100,
+with grams within 1 g of energy × percent / 100 / 4 (9 for fat), each above 0 g. Anything else is
+a 400, and a fractional percentage a 500. Any energy from 100 to 20000 kcal is taken.
+`manualEnergyTarget: false` brings Fitatu's calculated energy back and, on this free account,
+nulls the split; `waterSettings` alone changes only the glass. A change applies from today on:
+today and later days read the new goals, earlier days keep theirs. `tests/test_agent.py` fakes the
+reply from the recorded `settings_new`.
+
 Added to the scenario on 2026-10-14, not recorded yet (reads only): the recipe catalog search
 with `maxEnergy` (`search_recipes`), the fasting schemes and the fasting summary of the test day,
 the habit catalog, the user's habits and good days, and `GET /upgrade-application/{os}/{version}`

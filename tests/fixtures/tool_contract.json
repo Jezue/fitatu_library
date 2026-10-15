@@ -531,6 +531,23 @@
       "openWorldHint": false
     }
   },
+  "set_targets": {
+    "parameters": {
+      "automatic": "boolean",
+      "carbohydrate_pct": "integer",
+      "energy_kcal": "integer",
+      "fat_pct": "integer",
+      "protein_pct": "integer",
+      "water_glass_ml": "integer"
+    },
+    "required": [],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
   "set_note": {
     "parameters": {
       "date": "string",
