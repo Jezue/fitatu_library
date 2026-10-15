@@ -89,5 +89,6 @@ def test_the_hermes_skill_follows_the_agent_skills_spec_and_names_real_tools() -
     assert re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", fields["name"]) and len(fields["name"]) <= 64
     assert 0 < len(fields["description"]) <= 1024 and len(fields["compatibility"]) <= 500
     assert len(body.splitlines()) < 500
+    assert f'  version: "{__version__}"\n' in front  # the skill's tools are the release's (docs/RELEASING.md)
     named = set(re.findall(r"`((?:get|add|set|remove|search|find|log|copy|move|update|create|delete|preview)_[a-z_]+)`", body))
     assert named and named <= {tool["name"] for tool in TOOLS}

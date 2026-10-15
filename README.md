@@ -190,7 +190,7 @@ instead of raising, is deprecated and will be removed in 1.0: for results that n
 | Recipe search filters (`min_protein_g`, `max_carbohydrate_g`, `max_cooking_time`, `diets`, `meal`) and premium catalog recipes (`get_recipe`, `get_food_measures`, `add_food`, `add_foods`; the shopping list leaves out their ingredients) | ❌ "needs Fitatu Premium": the tools follow the app | ✅ |
 | Goals: read and set (`get_targets`, `set_targets`), progress (`get_progress`), reports (`get_report`), range totals (`get_range_summary`) | ✅ (progress: a request per day, at most 31 days) | ✅ |
 | Weight and body measurement history, profile, fasting and habits (read), shopping list | ✅ | ✅ |
-| Top foods (`get_top_foods`, `summary.get_top_products()`) | ❌ 403: "needs Fitatu Premium" | ✅ |
+| Top foods (`get_top_foods`, `summary.get_top_products()`) | ❌ 403: needs Fitatu Premium | ✅ |
 | Diary export (`fitatu-api export`, `summary.export_diary()`) | ❌ 403: "needs Fitatu Premium" | ✅ |
 | Protein / fat / carbohydrate day by day (`summary.get_nutrient_by_day()`; energy works on both) | ❌ 403 (`get_progress` reads around it) | ✅ |
 
@@ -401,7 +401,7 @@ again afterwards to set `ok`. Requests per agent tool call, before retries and t
 |---|---|
 | 0 | `get_today` |
 | 1 | the other read tools; `set_water`; `set_favorite`; `preview_removal` and `remove_items` with `dry_run`; `delete_recipe` of a recipe already deleted, `delete_food` of a product already deleted |
-| 2 | `get_range_summary`, `get_profile`, `get_fasting` (3 when the settings name the scheme by id), `get_habits`, `find_by_barcode` (1 without a product hit), `add_food` for a recipe in portions (3 without Fitatu Premium, as it reads the recipe first, and 1 more for the Premium flags as below), `add_custom_item`, `log_weight`, `delete_recipe`, `set_targets`, `create_food`, `delete_food`; `add_foods`, plus 1 for each item with `unit` or `measure_id` and, without Fitatu Premium, for each recipe in portions; `create_recipe`, plus 1 for each ingredient; `search_recipes` with a filter but `max_energy_kcal`, and `get_recipe` and `get_food_measures` of a premium recipe, the first such call on a `FitatuTools` in 10 minutes (it reads the account's Premium flags; 1 afterwards) |
+| 2 | `get_range_summary`, `get_profile`, `get_fasting` (3 when the settings name the scheme by id), `get_habits`, `find_by_barcode` (1 without a product hit), `add_food` for a recipe in portions (plus 1 for the Premium flags, the first such call in 10 minutes; without Fitatu Premium 1 more, as it reads the recipe first), `add_custom_item`, `log_weight`, `delete_recipe`, `set_targets`, `create_food`, `delete_food`; `add_foods`, plus 1 for each item with `unit` or `measure_id` and, without Fitatu Premium, for each recipe in portions (and 1 for the Premium flags as for `add_food`); `create_recipe`, plus 1 for each ingredient; `search_recipes` with a filter but `max_energy_kcal`, and `get_recipe` and `get_food_measures` of a premium recipe, the first such call on a `FitatuTools` in 10 minutes (it reads the account's Premium flags; 1 afterwards) |
 | 3 | `add_food` with `unit` or `measure_id` (reads the food first), `log_measurements` (reads the size unit from the profile), `copy_meal` within a day, `remove_items`, `add_activity`, `remove_activity`, `set_note`, `update_food`; `update_recipe`, plus 1 for each new ingredient |
 | 4 | `update_item`, `move_item` within a day, `copy_meal` to another day |
 | 5 | `get_progress` (any range up to 62 days; without Fitatu Premium, see below) |

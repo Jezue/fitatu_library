@@ -17,7 +17,7 @@ user's diary as tools. This skill says how to set it up and how to use the tools
 
 ## Setup
 
-1. Log in once on the machine the agent runs on: `fitatu-api login` (e-mail and password),
+1. Log in once on the machine the server runs on: `fitatu-api login` (e-mail and password),
    or `fitatu-api import-session` for an account without a password, e.g. created with Apple or
    Facebook (steps:
    `fitatu-api import-session --help`). This writes `~/.fitatu/session.json`; the tokens
@@ -35,9 +35,9 @@ user's diary as tools. This skill says how to set it up and how to use the tools
    Other hosts: `claude mcp add fitatu -- uvx --from "fitatu-api[mcp]" fitatu-mcp`, or the
    same command in an `mcpServers` entry. To try it without an account: add `"--demo"`.
    An agent on another machine (or n8n): run
-   `fitatu-mcp --http --host 0.0.0.0 --allow-host <that machine>` where the session is, with
+   `fitatu-mcp --http --host 0.0.0.0 --allow-host <server name>` where the session is, with
    `FITATU_MCP_TOKEN` set (add `--read-only` for reads only), and give the host the URL
-   `http://<that machine>:8765/mcp` and the header `Authorization: Bearer <token>` (Hermes:
+   `http://<server name>:8765/mcp` and the header `Authorization: Bearer <token>` (Hermes:
    `url:` and `headers:` in place of `command:`).
 3. Some hosts put the server's name in front of the tool names; the names below are without
    that prefix.

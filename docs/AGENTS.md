@@ -148,8 +148,9 @@ tools: they read the account's `accessControl` flags (`GET /users/{id}`:
 `ROLE_FEATURE_RECIPES_CATALOG_FILTERS` and `ROLE_FEATURE_RECIPES_CATALOG_PREMIUM`), only when a
 call needs them, and keep the flags alone for 10 minutes, so a plan bought meanwhile shows within
 that time. No result carries the flags or anything else of that profile. A search by `phrase` and
-`max_energy_kcal` and a recipe that is not premium work on any account as before, without that
-read; the error is a `FitatuPremiumRequiredError` for code that calls the methods. Without
+`max_energy_kcal`, and `get_recipe` or `get_food_measures` of a recipe that is not premium, work
+without that read; `add_food` and `add_foods` of a recipe in portions read the flags on any
+account. The error is a `FitatuPremiumRequiredError` for code that calls the methods. Without
 Premium, `get_shopping_list` lists a premium recipe with `expanded` false and leaves out its
 ingredients, and `add_food` and `add_foods` read a recipe logged in portions once to check it
 before anything is written (with a `measure_id` they read it anyway); with Premium they do not.
@@ -335,7 +336,7 @@ matches the user's request against:
   with a word that nothing is ticked as eaten when `eaten` is 0; what is left is each day's
   `left`, which counts planned rows too; a weekly or monthly report is `get_report`; food is
   logged with `eaten` true unless the user plans ahead;
-- `get_top_foods`, `search_recipes`' filters but `max_energy_kcal`, and `get_recipe` and `get_food_measures` of a premium recipe need Fitatu Premium, and without it `get_shopping_list` leaves out a premium recipe's ingredients (see [Free and Premium accounts](#free-and-premium-accounts));
+- `get_top_foods`, `search_recipes`' filters but `max_energy_kcal`, and `get_recipe`, `get_food_measures`, `add_food` and `add_foods` of a premium recipe need Fitatu Premium, and without it `get_shopping_list` leaves out a premium recipe's ingredients (see [Free and Premium accounts](#free-and-premium-accounts));
 - `ok` only says the call ran, the effect is `data.ok`;
 - a direct request is the user's consent, so the model asks only about changes it inferred or
   that reach beyond what the user named, and previews removals with `preview_removal`;
@@ -832,8 +833,9 @@ fitatu-mcp --http --host 0.0.0.0 --allow-host nas.local --read-only   # the netw
 ```
 
 - **Who can reach it.** It listens on 127.0.0.1 unless `--host` says otherwise. It answers only to
-  the names in the client's URL that it knows: 127.0.0.1, localhost, `--host` and each `--allow-host`
-  (others get 421), and refuses requests from web pages of other sites (Origin, 403). Any request
+  the names in the client's URL that it knows: 127.0.0.1, localhost, `[::1]`, `--host` and each
+  `--allow-host` (others get 421), and refuses any request whose Origin is not a local page with a
+  port (403), so browser pages, even behind the proxy, cannot call it. Any request
   without the token gets 401, and the server logs the client's address (never the token).
 - **No TLS.** The token and the diary travel in plain HTTP. Keep it on your own computer, a home
   network or a VPN such as Tailscale; to reach it from the internet, put an HTTPS reverse proxy in
