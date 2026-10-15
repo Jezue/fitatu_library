@@ -860,6 +860,26 @@ def test_a_premium_recipes_measures_and_ingredients_need_premium(tools: FitatuTo
         assert [r["expanded"] for r in data(tools, "get_shopping_list", from_date=DAY, to_date=DAY)["recipes"]] == [True]
 
 
+def test_adding_a_premium_recipe_needs_premium(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    fake.routes[("GET", f"/recipes/{RECIPE_ID}")] = {**recorded("recipe_details"), "premiumInRecipesCatalog": True}
+    fake.routes[("GET", f"/users/{RECORDED_USER_ID}")] = profile(FREE_FLAGS)
+    before = rows(fake)
+    for name, arguments in (
+        ("add_food", {"date": DAY, "meal": "lunch", "food_id": RECIPE_ID, "food_type": "RECIPE", "quantity": 1}),  # in portions
+        ("add_food", {"date": DAY, "meal": "lunch", "food_id": RECIPE_ID, "food_type": "RECIPE", "quantity": 1, "measure_id": 39}),
+        ("add_foods", ARGUMENTS["add_foods"]),
+    ):
+        error = tools.call(name, arguments)["error"]
+        assert error["error_type"] == "forbidden" and error["hint"].startswith("Needs Fitatu Premium")
+    assert rows(fake) == before and all(r["method"] == "GET" for r in fake.requests)  # nothing was written
+    # With Premium a recipe in portions is added without reading it.
+    fake.routes[("GET", f"/users/{RECORDED_USER_ID}")] = profile(PREMIUM_FLAGS)
+    with patch("fitatu_api.agent.time.monotonic", return_value=time.monotonic() + 601):
+        fake.requests.clear()
+        data(tools, "add_food", date=DAY, meal="lunch", food_id=RECIPE_ID, food_type="RECIPE", quantity=1)
+    assert f"/recipes/{RECIPE_ID}" not in [r["path"] for r in fake.requests]
+
+
 def test_get_recipe_gives_ingredients_steps_and_the_portion_and_refuses_someone_elses_private_recipe(tools: FitatuTools, fake: FakeFitatuServer) -> None:
     recipe = data(tools, "get_recipe", recipe_id=RECIPE_ID)  # a community recipe: private, but shared
     assert (recipe["name"], recipe["servings"], recipe["own"], recipe["deleted"], recipe["rating"]) == ("Gorąca czekolada", 1, False, False, 3.33)

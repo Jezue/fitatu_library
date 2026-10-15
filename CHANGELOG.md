@@ -39,12 +39,14 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   applies them (checked live 2026-10-15). `client.search_recipes()` takes them as
   `min_protein`, `max_carbohydrate`, `max_cooking_time`, `tags` and `meals`.
 - The tools respect Fitatu Premium where only the app enforces it: `search_recipes`' new filters
-  and `get_recipe` and `get_food_measures` of a premium recipe answer a `forbidden` error ("Needs
-  Fitatu Premium") on an account without it, though Fitatu's API serves them to any account, and
-  `get_shopping_list` leaves out a premium recipe's ingredients there. They read the account's
-  `accessControl` flags (`GET /users/{id}`) only when a call needs them and keep just the flags,
-  for 10 minutes. A search by phrase and `max_energy_kcal` works on any account as before. The
-  error is the new `FitatuPremiumRequiredError`; the client does not check.
+  and `get_recipe`, `get_food_measures`, `add_food` and `add_foods` of a premium recipe answer a
+  `forbidden` error ("Needs Fitatu Premium") on an account without it, though Fitatu's API
+  serves them to any account, and `get_shopping_list` leaves out a premium recipe's ingredients
+  there. An add is refused before anything is written; without Premium it reads a recipe logged
+  in portions once to check it. They read the account's `accessControl` flags
+  (`GET /users/{id}`) only when a call needs them and keep just the flags, for 10 minutes. A
+  search by phrase and `max_energy_kcal` works on any account as before. The error is the new
+  `FitatuPremiumRequiredError`; the client does not check.
 - `create_food`, `update_food` and `delete_food` tools: the user's own products from a
   nutrition label (per 100 g or 100 ml, servings such as a 45 g bar, an optional barcode). Fitatu
   keeps them private: checked live 2026-10-15 that another account's search does not find one or

@@ -106,7 +106,7 @@ repeating the same call has no further effect.
 | `get_good_days` | The days the app's summary marks as good days (Fitatu's rule), oldest first, with their `count`; `from_date` and `to_date` filter them here, as the server returns them all. | read | no | yes |
 | `search_activity` | Activity catalog search; `activity_id` and the catalog's energy estimate for the effort in `energy_for`. | read | no | yes |
 | `preview_removal` | What `remove_items` would delete, without deleting anything: in `would_remove` each row with its meal and `meal_name`, name, food, measure, quantity, kcal, protein, fat, carbohydrate and `eaten`; ids that are not food rows of the day in `missing`. | read | no | yes |
-| `add_food` | Log a catalog food in a meal (grams/ml for a product, or `measure_id` and a count; recipes in portions); returns its `row_id` and the measure the row was stored in (grams of a food without a gram measure become a count of another one). A `measure_id` the food does not have is refused before anything is written. | write | no | no |
+| `add_food` | Log a catalog food in a meal (grams/ml for a product, or `measure_id` and a count; recipes in portions); returns its `row_id` and the measure the row was stored in (grams of a food without a gram measure become a count of another one). A `measure_id` the food does not have is refused before anything is written, and so is a `premium` recipe without Fitatu Premium. | write | no | no |
 | `add_foods` | Log several catalog foods in one meal with one write; each item takes what `add_food` does and is checked the same way first, so when one is wrong nothing is logged and the error names it (`items[1]: ...`). `eaten` (true by default) sets every row; returns each row's `row_id` and the measure it was stored in. | write | no | no |
 | `add_custom_item` | Log a food that is not in the catalog by name and the kcal of the amount eaten (protein, fat and carbohydrate optional, 0 when left out; the model is told to estimate them); returns its `row_id`. | write | no | no |
 | `update_item` | Change a food row's quantity (in its own measure) and/or `eaten`, nothing else; returns the `previous` quantity and `eaten`. | write | yes | no |
@@ -141,9 +141,9 @@ model should tell the user rather than retry:
 |---|---|---|
 | `get_top_foods` | Fitatu (403) | "A premium feature: the account has no active premium plan..." |
 | `search_recipes` with `min_protein_g`, `max_carbohydrate_g`, `max_cooking_time`, `diets` or `meal` | the tools, as the app does | "Needs Fitatu Premium..." |
-| `get_recipe` and `get_food_measures` of a recipe marked `premium` | the tools, as the app does | "Needs Fitatu Premium..." |
+| `get_recipe`, `get_food_measures`, `add_food` and `add_foods` of a recipe marked `premium` | the tools, as the app does | "Needs Fitatu Premium..." |
 
-Fitatu serves the last two to any account, but its app keeps them for Premium, and so do the
+Fitatu serves the last two rows to any account, but its app keeps them for Premium, and so do the
 tools: they read the account's `accessControl` flags (`GET /users/{id}`:
 `ROLE_FEATURE_RECIPES_CATALOG_FILTERS` and `ROLE_FEATURE_RECIPES_CATALOG_PREMIUM`), only when a
 call needs them, and keep the flags alone for 10 minutes, so a plan bought meanwhile shows within
@@ -151,8 +151,8 @@ that time. No result carries the flags or anything else of that profile. A searc
 `max_energy_kcal` and a recipe that is not premium work on any account as before, without that
 read; the error is a `FitatuPremiumRequiredError` for code that calls the methods. Without
 Premium, `get_shopping_list` lists a premium recipe with `expanded` false and leaves out its
-ingredients; `add_food` still logs one in portions when given no `measure_id`, as checking that
-would cost a read per add.
+ingredients, and `add_food` and `add_foods` read a recipe logged in portions once to check it
+before anything is written (with a `measure_id` they read it anyway); with Premium they do not.
 
 The rest works on any account, some of it differently:
 

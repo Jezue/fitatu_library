@@ -608,6 +608,7 @@ TOOLS: list[dict[str, Any]] = [
         "or 'ml' with quantity in grams or millilitres, or measure_id (from the hit or "
         "get_food_measures) with quantity = how many of that measure. A RECIPE is logged in "
         "portions unless measure_id names another of its measures; unit is for products only. "
+        "A premium recipe needs Fitatu Premium: without it a forbidden error. "
         "A measure_id the food does not have is refused before anything is written (that check "
         "reads the food once), and the error lists its measures. "
         "Each call adds a row unless row_id is reused. The row is not read back: data.ok says the "
@@ -993,10 +994,10 @@ against get_day's meal_name and pass that meal's meal_key.
 monthly report: get_report. Eaten is its totals' eaten (rows ticked as eaten); when that is 0 but \
 logged is not, give logged and say the rows are not ticked as eaten. What is left is each day's \
 left: the goal minus everything logged, planned rows included.
-- Fitatu Premium: get_top_foods, search_recipes' filters but max_energy_kcal, and get_recipe and \
-get_food_measures of a premium recipe need it (without it, get_report's top_foods is null and \
-get_shopping_list leaves out a premium recipe's ingredients); every other tool, get_progress \
-and get_report included, works on any account.
+- Fitatu Premium: get_top_foods, search_recipes' filters but max_energy_kcal, and get_recipe, \
+get_food_measures, add_food and add_foods of a premium recipe need it (without it, get_report's \
+top_foods is null and get_shopping_list leaves out a premium recipe's ingredients); every other \
+tool, get_progress and get_report included, works on any account.
 - Log food (and set copy_meal's eaten) with eaten true when the user ate it or just asks to log it; \
 false only when they plan ahead.
 - A result's top-level ok only says the call ran: say something changed only when data.ok is true.
@@ -1860,7 +1861,6 @@ class FitatuTools:
         client = self.client
         details = client.get_recipe(food_id) if food_type == "RECIPE" else client.get_product_details(food_id)
         if food_type == "RECIPE" and details.get("premiumInRecipesCatalog") is True:  # as get_recipe
-            # shortcut: add_food of a recipe without a measure_id reads nothing, so it still logs one; check there if asked.
             self._need_premium("ROLE_FEATURE_RECIPES_CATALOG_PREMIUM", f"recipe {food_id} is a premium recipe, which needs Fitatu Premium")
         return {"food_id": food_id, "type": food_type, "name": details.get("name"), "measures": _measures(details, food_type)}
 
@@ -2049,6 +2049,8 @@ class FitatuTools:
         if food_type == "RECIPE":
             if unit is not None:
                 raise FitatuValidationError("unit is for products only; log a recipe in portions or pass a measure_id from get_food_measures")
+            if measure_id is None and not self._has_feature("ROLE_FEATURE_RECIPES_CATALOG_PREMIUM"):
+                self.get_food_measures(food_id, food_type)  # refuses a premium recipe, as the measure_id check above does
             measure: dict[str, Any] = {} if measure_id is None else {"measure_id": measure_id}
             return {"recipe_id": food_id, "measure_quantity": quantity, **measure}, measure_name
         if unit is not None and measure_id is not None:
