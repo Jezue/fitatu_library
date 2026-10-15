@@ -4,7 +4,7 @@
 
 ## Checklist
 
-- [ ] `ruff check .`, `mypy src demo.py example.py`, `pytest -q` and `pre-commit run --all-files` pass
+- [ ] `ruff check .`, `mypy src demo.py example.py catering_sync.py`, `pytest -q` and `pre-commit run --all-files` pass
 - [ ] Tests run offline (fake server or mocks); nothing in the diff calls the real API
 - [ ] No personal data: no session files, tokens, e-mails, names, or your own meals or weights
 - [ ] `CHANGELOG.md` (under `## [Unreleased]`) and the docs the change touches (README, docs/AGENTS.md, docs/API_REFERENCE.md, docs/PLANNER.md) are updated

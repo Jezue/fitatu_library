@@ -89,10 +89,10 @@ features = ["dev"]
 [tool.hatch.envs.default.scripts]
 # Lint fixes only: the code is not kept in ruff format style, and neither CI nor pre-commit checks it.
 format = "ruff check . --fix"
-lint = "ruff check . && mypy src demo.py example.py"
+lint = "ruff check . && mypy src demo.py example.py catering_sync.py"
 test = "pytest -q"
 testcov = "pytest -q --cov-report=html"
-typecheck = "mypy src demo.py example.py"
+typecheck = "mypy src demo.py example.py catering_sync.py"
 # Lint, tests and the package build in one command: hatch run all
 all = ["lint", "test", "python -m build"]
 

@@ -35,7 +35,7 @@ jobs:
         run: ruff check .
 
       - name: Type check
-        run: mypy src demo.py example.py
+        run: mypy src demo.py example.py catering_sync.py
 
       - name: Build package
         run: python -m build
