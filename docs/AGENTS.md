@@ -88,18 +88,18 @@ repeating the same call has no further effect.
 | `get_progress` | Each day of a range (at most 62 days; longer is `get_report`, or `get_range_summary` without Fitatu Premium) against the user's goals, for energy, protein, fat and carbohydrate: `logged` (every row; null on a day with nothing logged), `target` (energy) or `target_min`/`target_max` (a macro), `left` (the goal minus `logged`, a macro's from `target_max`; negative when over); range `totals` with `logged`, `eaten` (rows ticked as eaten) and the goals summed. "What is left today", "did I hit protein", how each day went; 5 requests for any range. Works on every account: without Fitatu Premium, which the macros' day-by-day route needs, it reads each day's own summary instead (at most 31 days, a request per day, and each day has `eaten` too). | read | no | yes |
 | `get_top_foods` | The foods that gave the most of a nutrient (energy by default, or protein, fat, carbohydrate, fiber, sugars, salt) over a range, most first: `name`, `amount` summed over the range and `per100`, as numbers (the server sends strings); no id, since the server does not say whether it is a product's, a recipe's or a custom row's. A recipe may show up as its ingredients. Premium only: without Fitatu Premium a `forbidden` error. | read | no | yes |
 | `get_report` | A weekly or monthly report: per nutrient the range's `logged` and `eaten` totals and `daily` (`logged` averaged over the `days_logged`, next to the average daily goal); `weight` (first and last weigh-in of the range and the `change`, null without one); `top_foods`, the 5 with the most energy and the 5 with the most protein. 8 requests, one more for every further 41 weigh-ins in the range. Without Fitatu Premium the progress is read day by day as in `get_progress` (at most 31 days), and `top_foods` is null with a `top_foods_note` saying why. | read | no | yes |
-| `get_shopping_list` | A shopping list for up to 14 days, worked out here from the rows planned and not ticked as eaten (Fitatu has no route for it): `products` summed per product and measure, with `quantity` and `weight_g`, the ingredients of each planned recipe included for its portions; `recipes` lists those recipes (`expanded` false when the recipe could not be read, e.g. a deleted one); `other_items` the custom rows as they are. It knows nothing of the user's stock or pack sizes. It should start at today ("this week" is today to Sunday), as past rows not ticked as eaten were usually eaten anyway. One request per day and one per recipe. | read | no | yes |
+| `get_shopping_list` | A shopping list for up to 14 days, worked out here from the rows planned and not ticked as eaten (Fitatu has no route for it): `products` summed per product and measure, with `quantity` and `weight_g`, the ingredients of each planned recipe included for its portions; `recipes` lists those recipes (`expanded` false when the recipe could not be read, e.g. a deleted one, or is `premium` on an account without Fitatu Premium); `other_items` the custom rows as they are. It knows nothing of the user's stock or pack sizes. It should start at today ("this week" is today to Sunday), as past rows not ticked as eaten were usually eaten anyway. One request per day and one per recipe. | read | no | yes |
 | `search_food` | Catalog search; each hit has `food_id`, `type` (PRODUCT or RECIPE), name, brand, its default measure, `times_used` (how often the user logged it, when the server says) and `favorite`. `locale` searches another country's catalog (15 that Fitatu takes, e.g. `de_DE`); the user's own logged foods show up there too, and every hit can be logged. | read | no | yes |
-| `search_recipes` | Recipe catalog search for meal ideas, by words and per-portion filters (`max_energy_kcal`, `min_protein_g`, `max_carbohydrate_g`, `max_cooking_time` of 10 or 30 minutes, `diets`, which must all apply, and `meal`): "a quick vegan breakfast", "a dinner under 500 kcal with chicken". Every filter but `max_energy_kcal` needs Fitatu Premium. Hits are shaped like `search_food` RECIPE hits (energy and measure of one portion) plus `cooking_time`, `preparation_time`, `rating` and `premium`, whether the app keeps the recipe for Fitatu Premium (`get_recipe` reads it only with Premium). | read | no | yes |
-| `get_recipe` | One catalog recipe or one of the user's own in full: `servings`, `ingredients` for the whole recipe (`food_id`, `food_type`, `quantity` and `measure_id` as `create_recipe` takes them, plus name, `measure_name` and `weight_g`), `description` (the steps), `per_serving` (the portion measure as `get_food_measures` lists it), `cooking_time`, `preparation_time`, `meals`, `tags`, `rating`, `premium`, `deleted` and `own` (whether `update_recipe` and `delete_recipe` take it). Another user's private recipe is `not_found`, and the author's name and id are never returned. A `premium` recipe needs Fitatu Premium. | read | no | yes |
+| `search_recipes` | Recipe catalog search for meal ideas, by words and per-portion filters (`max_energy_kcal`, `min_protein_g`, `max_carbohydrate_g`, `max_cooking_time` of 10 or 30 minutes, `diets`, which must all apply, and `meal`): "a quick vegan breakfast", "a dinner under 500 kcal with chicken". Every filter but `max_energy_kcal` needs Fitatu Premium. Hits are shaped like `search_food` RECIPE hits (energy and measure of one portion) plus `cooking_time`, `preparation_time`, `rating` and `premium`, whether the app keeps the recipe for Fitatu Premium (`get_recipe` and `get_food_measures` read it only with Premium). | read | no | yes |
+| `get_recipe` | One catalog recipe or one of the user's own in full: `servings`, `ingredients` for the whole recipe (`food_id`, `food_type`, `quantity` and `measure_id`, the only keys `create_recipe` and `update_recipe` take, plus name, `measure_name` and `weight_g`, which they refuse), `description` (the steps), `per_serving` (the portion measure as `get_food_measures` lists it), `cooking_time`, `preparation_time`, `meals`, `tags`, `rating`, `premium`, `deleted` and `own` (whether `update_recipe` and `delete_recipe` take it). Another user's private recipe is `not_found`, and the author's name and id are never returned. A `premium` recipe needs Fitatu Premium. | read | no | yes |
 | `find_by_barcode` | The catalog product with a barcode (8 to 14 digits), or the user's own product with that barcode, in the shape of a search hit: the first product hit of a search for the digits, confirmed by its details' `barcode` (an own product's `currentUserPrivateBarcode`); otherwise `not_found`, and the model searches by name. | read | no | yes |
-| `get_food_measures` | The measures a food can be logged in (`measure_id`, name, weight or capacity, energy, protein, fat and carbohydrate of one measure; a macro is null when the details do not give it). | read | no | yes |
+| `get_food_measures` | The measures a food can be logged in (`measure_id`, name, weight or capacity, energy, protein, fat and carbohydrate of one measure; a macro is null when the details do not give it). A product made with `create_food` and `unit` `ml` gives a serving's ml as `weight_g` (Fitatu stores it so; checked live 2026-10-15). A `premium` recipe needs Fitatu Premium. | read | no | yes |
 | `get_recent_foods` | Foods recently logged in a meal, shaped like search hits. | read | no | yes |
 | `get_favorite_foods` | The user's favourite products and recipes, shaped like search hits. | read | no | yes |
 | `get_my_foods` | The foods the user created (their recipes and products), shaped like search hits; `phrase` narrows them by name (matched here: Fitatu ignores it). | read | no | yes |
 | `get_weight_history` | Logged body weights (`date`, `value` in the user's weight unit, `difference`, `direction`), newest first, up to `limit` entries (41, the most) of a range; without one, the newest entries however old (there is no default period). | read | no | yes |
 | `get_body_measurements` | How body sizes and fat percentage changed over a range: per `body_part` the first and last value (`start_value`, `end_value`) and the `difference`, sizes in the user's size unit; parts with nothing logged are left out. The server's summary has no dates per value. | read | no | yes |
-| `get_measurement_history` | One body measurement (`waist`, ..., or `fat_percentage`) over time: `{date, value}` newest first, in the user's size unit, up to `limit` (41); without a range, the newest entries up to today. | read | no | yes |
+| `get_measurement_history` | One body measurement (`waist`, ..., or `fat_percentage`) over time: `{date, value}` newest first, in the user's size unit, up to `limit` (41); without `to_date` it stops at today (a `from_date` alone in the future gives `[]`); without either, the newest entries up to today. | read | no | yes |
 | `get_water` | Water drunk on a day in ml, the day's goal (`target_ml`) and the glass size from the user's settings (`glass_ml`, null when unknown or 0). | read | no | yes |
 | `get_fasting` | Intermittent fasting over a range of up to 62 days: each day with fasting, its `eating_periods` next to the `expected` windows (times of day); `scheme`, the scheme in the user's settings (`type` such as `16_08_hours`, `week_days`, `start_date`), null when none is set. 2 requests, 3 when the settings name the scheme by id. | read | no | yes |
 | `get_habits` | The habits the user took up in the app, each with `name`, `length_days`, `days_done` and the `checked_days`, `enrolled_date` and `completed`; `available`, the other habits the app offers, with `premium`. | read | no | yes |
@@ -141,7 +141,7 @@ model should tell the user rather than retry:
 |---|---|---|
 | `get_top_foods` | Fitatu (403) | "A premium feature: the account has no active premium plan..." |
 | `search_recipes` with `min_protein_g`, `max_carbohydrate_g`, `max_cooking_time`, `diets` or `meal` | the tools, as the app does | "Needs Fitatu Premium..." |
-| `get_recipe` of a recipe marked `premium` | the tools, as the app does | "Needs Fitatu Premium..." |
+| `get_recipe` and `get_food_measures` of a recipe marked `premium` | the tools, as the app does | "Needs Fitatu Premium..." |
 
 Fitatu serves the last two to any account, but its app keeps them for Premium, and so do the
 tools: they read the account's `accessControl` flags (`GET /users/{id}`:
@@ -149,7 +149,10 @@ tools: they read the account's `accessControl` flags (`GET /users/{id}`:
 call needs them, and keep the flags alone for 10 minutes, so a plan bought meanwhile shows within
 that time. No result carries the flags or anything else of that profile. A search by `phrase` and
 `max_energy_kcal` and a recipe that is not premium work on any account as before, without that
-read; the error is a `FitatuPremiumRequiredError` for code that calls the methods.
+read; the error is a `FitatuPremiumRequiredError` for code that calls the methods. Without
+Premium, `get_shopping_list` lists a premium recipe with `expanded` false and leaves out its
+ingredients; `add_food` still logs one in portions when given no `measure_id`, as checking that
+would cost a read per add.
 
 The rest works on any account, some of it differently:
 
@@ -296,9 +299,12 @@ failed create may still have made the product: look for it with `get_my_foods` f
 
 `update_food` and `delete_food` read the product first and act only on a private product of the
 session user. A change goes back whole with `PUT /products/{id}`, every value read included, as
-Fitatu clears what is left out. Fitatu may keep a change as a new product (new values of a
-product already logged, a serving removed): `food_id` is then the new id and `replaced_food_id`
-the retired one, and rows logged before keep the old values. Deletes are soft, as for recipes.
+Fitatu clears what is left out. Fitatu usually changes the product in place, and rows already
+logged with it then show the new values too. It may keep a change as a new product instead (seen
+after a rename or new servings, checked live 2026-10-15): `food_id` is then the new id and
+`replaced_food_id` the retired one, and rows logged before keep the old values. The tool tells
+the model to say so before changing a product the user has logged. Deletes are soft, as for
+recipes.
 `previous` undoes `update_food`; `create_food` with `delete_food`'s `previous` makes the product
 again under a new id.
 
@@ -329,7 +335,7 @@ matches the user's request against:
   with a word that nothing is ticked as eaten when `eaten` is 0; what is left is each day's
   `left`, which counts planned rows too; a weekly or monthly report is `get_report`; food is
   logged with `eaten` true unless the user plans ahead;
-- `get_top_foods`, `search_recipes`' filters but `max_energy_kcal` and `get_recipe` of a premium recipe need Fitatu Premium (see [Free and Premium accounts](#free-and-premium-accounts));
+- `get_top_foods`, `search_recipes`' filters but `max_energy_kcal`, and `get_recipe` and `get_food_measures` of a premium recipe need Fitatu Premium, and without it `get_shopping_list` leaves out a premium recipe's ingredients (see [Free and Premium accounts](#free-and-premium-accounts));
 - `ok` only says the call ran, the effect is `data.ok`;
 - a direct request is the user's consent, so the model asks only about changes it inferred or
   that reach beyond what the user named, and previews removals with `preview_removal`;

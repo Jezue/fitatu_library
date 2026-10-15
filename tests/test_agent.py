@@ -846,6 +846,20 @@ def test_recipe_filters_and_premium_recipes_need_premium_as_in_the_app(tools: Fi
         assert tools.call("search_recipes", {"meal": "dinner"})["error"]["error_type"] == "forbidden"
 
 
+def test_a_premium_recipes_measures_and_ingredients_need_premium(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    # The recipe planned on DAY, marked premium: as get_recipe, its measures and its shopping are for Premium only.
+    fake.routes[("GET", f"/recipes/{RECIPE_ID}")] = {**recorded("recipe_details"), "premiumInRecipesCatalog": True}
+    fake.routes[("GET", f"/users/{RECORDED_USER_ID}")] = profile(FREE_FLAGS)
+    assert error_type(tools, "get_food_measures", {"food_id": RECIPE_ID, "food_type": "RECIPE"}) == "forbidden"
+    shopping = data(tools, "get_shopping_list", from_date=DAY, to_date=DAY)
+    assert [(r["recipe_id"], r["expanded"]) for r in shopping["recipes"]] == [(RECIPE_ID, False)]
+    assert [entry["name"] for entry in shopping["products"]] == ["Białko jaja kurzego"]  # none of its ingredients
+    fake.routes[("GET", f"/users/{RECORDED_USER_ID}")] = profile(PREMIUM_FLAGS)
+    with patch("fitatu_api.agent.time.monotonic", return_value=time.monotonic() + 601):
+        assert data(tools, "get_food_measures", food_id=RECIPE_ID, food_type="RECIPE")["measures"]
+        assert [r["expanded"] for r in data(tools, "get_shopping_list", from_date=DAY, to_date=DAY)["recipes"]] == [True]
+
+
 def test_get_recipe_gives_ingredients_steps_and_the_portion_and_refuses_someone_elses_private_recipe(tools: FitatuTools, fake: FakeFitatuServer) -> None:
     recipe = data(tools, "get_recipe", recipe_id=RECIPE_ID)  # a community recipe: private, but shared
     assert (recipe["name"], recipe["servings"], recipe["own"], recipe["deleted"], recipe["rating"]) == ("Gorąca czekolada", 1, False, False, 3.33)
@@ -1715,13 +1729,21 @@ def test_update_food_sends_the_whole_product_with_only_the_changes(tools: Fitatu
 
 
 def test_update_food_reports_a_replaced_product(tools: FitatuTools, fake: FakeFitatuServer) -> None:
-    # e.g. new values of a product already logged: Fitatu keeps them as a new product and retires the old one
+    # e.g. a rename: Fitatu keeps the change as a new product and retires the old one (seen live)
     new_id = MY_PRODUCT_ID + 1
     fake.routes[("PUT", f"/products/{MY_PRODUCT_ID}")] = {"id": new_id, "name": "Baton owsiany", "newProductCreated": True}
     fake.routes[("GET", f"/products/{new_id}")] = {**fake.routes[("GET", f"/products/{MY_PRODUCT_ID}")], "id": new_id, "energy": 410}
     updated = data(tools, "update_food", food_id=MY_PRODUCT_ID, energy_kcal=410)
     assert (updated["food_id"], updated["replaced_food_id"]) == (new_id, MY_PRODUCT_ID)
     assert fake.requests[-1]["path"] == f"/products/{new_id}"  # the measures are the new product's
+
+
+def test_update_and_delete_food_keep_a_drink_in_ml(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    fake.routes[("GET", f"/products/{MY_PRODUCT_ID}")]["liquid"] = True
+    data(tools, "update_food", food_id=MY_PRODUCT_ID, energy_kcal=410)
+    measures = next(r for r in fake.requests if r["method"] == "PUT")["json_data"]["measures"]
+    assert measures == [{"measureKey": "MILLILITER", "measureUnit": "ml", "weight": 100}, {"measureKey": "BAR", "measureUnit": "ml", "weight": 45}]
+    assert data(tools, "delete_food", food_id=MY_PRODUCT_ID)["previous"]["unit"] == "ml"
 
 
 def test_update_and_delete_food_refuse_other_products(tools: FitatuTools, fake: FakeFitatuServer) -> None:

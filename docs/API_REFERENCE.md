@@ -118,7 +118,7 @@ service.
 | `measurements.set_day(user_id, day, *, weight=None, fat_percentage=None, weight_unit=None, size_unit=None, merge=True, **body_parts)` | stable | Save weight and/or sizes, merged with what the day already has. Without `weight_unit` the weight is taken in the unit already stored for that day, else `KG` (`size_unit` likewise, else `CM`); pass `weight_unit="KG"` to be sure. The `log_weight` tool always sends kg. |
 | `measurements.delete_day(user_id, day)` | stable | Delete the whole record of a day; safe to repeat. |
 | `measurements.get_weight_history(user_id, *, from_date=None, to_date=None, page=1, limit=41)`, `get_weight_chart()` | stable | One page of weight entries `{date, value, difference, direction}`, in the user's weight unit, newest first; the weight chart with targets. Without dates no range is sent and the page holds every entry up to `limit`, however old: there is no default period (checked live 2026-10-14, not recorded). |
-| `measurements.get_body_part_history()`, `get_size_summary()` | stable | One body part (or `fat_percentage`) over time, newest first, without dates up to today; size changes across a range. |
+| `measurements.get_body_part_history()`, `get_size_summary()` | stable | One body part (or `fat_percentage`) over time, newest first, up to today without `to_date`; size changes across a range. |
 | **Summary and export (`client.summary`)** | | |
 | `summary.get_nutrition(user_id, from_date, to_date)` | stable | Range summary per nutrient (`current`, `eaten`, `min`, `max`); `current` is the total of every row over the whole range, not a daily average (checked live 2026-10-13), `eaten` only of the rows ticked as eaten (null when none is), `min` and `max` the goals summed over the days (checked live 2026-10-14). |
 | `summary.get_nutrient_by_day(user_id, nutrient, from_date, to_date)` | stable | One nutrient day by day: `measures` (every row, planned or eaten; null on a day with nothing logged) with `targets` for energy, `targetRanges` (`min`, `max`) for protein, fat and carbohydrate (checked live 2026-10-14). Premium only for protein, fat and carbohydrate: without Fitatu Premium the API answers 403; energy works on any account (checked live 2026-10-15). |
@@ -187,7 +187,7 @@ service.
 | `FitatuConnectionError` | stable | No HTTP response (DNS, timeout, reset). |
 | `FitatuMaintenanceError` | stable | Fitatu's technical break; `display_from`, `display_to`. |
 | `FitatuPlannerSyncError` | stable | The day sync rejected a day (HTTP 202); `results`. |
-| `FitatuPremiumRequiredError` | beta | A `FitatuTools` tool refused what the Fitatu app keeps for Premium (the account's `accessControl` lacks it), though the API would serve it: `search_recipes`' filters but `max_energy_kcal`, `get_recipe` of a premium recipe. `status_code` None. |
+| `FitatuPremiumRequiredError` | beta | A `FitatuTools` tool refused what the Fitatu app keeps for Premium (the account's `accessControl` lacks it), though the API would serve it: `search_recipes`' filters but `max_energy_kcal`, `get_recipe` and `get_food_measures` of a premium recipe. `status_code` None. |
 | `describe_error(exc)` | stable | Any exception as a JSON-safe dict with `error_type`, `retryable` and `hint`. |
 
 ## Naming

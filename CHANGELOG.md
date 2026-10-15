@@ -39,8 +39,9 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   applies them (checked live 2026-10-15). `client.search_recipes()` takes them as
   `min_protein`, `max_carbohydrate`, `max_cooking_time`, `tags` and `meals`.
 - The tools respect Fitatu Premium where only the app enforces it: `search_recipes`' new filters
-  and `get_recipe` of a premium recipe answer a `forbidden` error ("Needs Fitatu Premium") on an
-  account without it, though Fitatu's API serves them to any account. They read the account's
+  and `get_recipe` and `get_food_measures` of a premium recipe answer a `forbidden` error ("Needs
+  Fitatu Premium") on an account without it, though Fitatu's API serves them to any account, and
+  `get_shopping_list` leaves out a premium recipe's ingredients there. They read the account's
   `accessControl` flags (`GET /users/{id}`) only when a call needs them and keep just the flags,
   for 10 minutes. A search by phrase and `max_energy_kcal` works on any account as before. The
   error is the new `FitatuPremiumRequiredError`; the client does not check.
@@ -49,8 +50,10 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   keeps them private: checked live 2026-10-15 that another account's search does not find one or
   its barcode. The tools check the label before anything is sent (Fitatu takes nearly any
   numbers), act only on the user's own products, send a change back whole (Fitatu clears what is
-  left out) and report when Fitatu saved it as a new product (`replaced_food_id`). `delete_food`
-  asks in Claude Code like `delete_recipe`.
+  left out) and report when Fitatu saved it as a new product (`replaced_food_id`, seen after a
+  rename or new servings; rows logged before keep the old values). A product changed in place
+  changes the rows already logged with it too, and `update_food` says so. `delete_food` asks in
+  Claude Code like `delete_recipe`.
 - `client.update_product()`; `client.create_product()` takes `measures` and `barcode`, and
   `brand` is optional.
 

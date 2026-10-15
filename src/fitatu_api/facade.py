@@ -246,7 +246,7 @@ class FitatuLibrary:
         saturated_fat: float | int | None = None,
         salt: float | int | None = None,
     ) -> dict[str, Any]:
-        """Create a product in the Fitatu catalog. Nutrition values are per 100 g.
+        """Create a private product of the user's (only they see it). Nutrition values are per 100 g.
 
         Args:
             name: Product name.

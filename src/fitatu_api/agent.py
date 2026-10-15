@@ -345,8 +345,9 @@ TOOLS: list[dict[str, Any]] = [
         "not ticked as eaten. products sums them per product and measure (product_id, name, measure_name, "
         "quantity of that measure, weight_g; weight_g is null when a row does not give it), with the "
         "ingredients of each planned recipe added for its portions; recipes lists those recipes (date, "
-        "meal, recipe_id, name, portions, and expanded false when its ingredients could not be read, so "
-        "they are missing from products); other_items lists custom and other rows as they are. It cannot "
+        "meal, recipe_id, name, portions, and expanded false when its ingredients could not be read or it is "
+        "a premium recipe on an account without Fitatu Premium, so they are missing from products); "
+        "other_items lists custom and other rows as they are. It cannot "
         "know what the user already has at home, pack sizes or anything not planned in the diary: say so. "
         "Start at today (\"this week\" is today to Sunday): rows on past days not ticked as eaten were "
         "usually eaten anyway. One request per day and one per recipe.",
@@ -388,7 +389,7 @@ TOOLS: list[dict[str, Any]] = [
         "and max_energy_kcal instead). Each hit is shaped "
         "like a search_food hit of type RECIPE (food_id, name, energy_kcal and measure of one portion) plus "
         "cooking_time and preparation_time as the catalog gives them, rating, and premium: whether the app "
-        "keeps the recipe for Fitatu Premium (get_recipe reads it only with Premium). "
+        "keeps the recipe for Fitatu Premium (get_recipe and get_food_measures read it only with Premium). "
         "get_recipe gives a hit's ingredients and steps. Log one with add_food: food_type RECIPE, quantity "
         "the portions.",
         {
@@ -420,9 +421,9 @@ TOOLS: list[dict[str, Any]] = [
         "get_recipe",
         "Read a recipe",
         "Read one recipe in full, from the catalog or the user's own: name, servings (how many servings the "
-        "ingredients make), ingredients for the whole recipe (food_id, food_type, quantity and measure_id as "
-        "create_recipe and update_recipe take them, plus name, measure_name and weight_g), description (the "
-        "steps), per_serving (its portion measure as get_food_measures lists it: weight_g, energy_kcal, "
+        "ingredients make), ingredients for the whole recipe (food_id, food_type, quantity, measure_id, name, "
+        "measure_name and weight_g; create_recipe and update_recipe take only the first four: drop the rest), "
+        "description (the steps), per_serving (its portion measure as get_food_measures lists it: weight_g, energy_kcal, "
         "protein_g, fat_g and carbohydrate_g of one serving; null when it has none), cooking_time and "
         "preparation_time in minutes as the catalog gives them, meals (the meal types it suits), tags (e.g. "
         "vegan, keto, polish), rating, premium, deleted, and own: whether it is the user's private recipe, "
@@ -456,8 +457,9 @@ TOOLS: list[dict[str, Any]] = [
         "List a food's measures",
         "List the measures a food can be logged in: measure_id, name (e.g. 'g', 'portion', "
         "'piece'), weight_g or capacity_ml, energy_kcal and protein_g, fat_g, carbohydrate_g of "
-        "one measure (a macro is null when the food's details do not give it). Pass measure_id "
-        "and a quantity of that measure to add_food.",
+        "one measure (a macro is null when the food's details do not give it; a product the user created "
+        "with unit ml gives a serving's ml as weight_g). Pass measure_id and a quantity of that measure to "
+        "add_food. A premium recipe needs Fitatu Premium: without it a forbidden error.",
         {"food_id": _FOOD_ID, "food_type": _FOOD_TYPE},
         ("food_id", "food_type"),
         read_only=True,
@@ -516,9 +518,9 @@ TOOLS: list[dict[str, Any]] = [
         "Read a body size history",
         "List the logged values of one body measurement as {date, value}, newest first: value in the "
         "user's size unit (cm unless changed in the app), fat_percentage in %. Days without that "
-        "measurement are left out. Pass from_date and to_date to choose the period; without them it lists "
-        "the newest entries up to limit, up to today. The first and last value of every part over a period "
-        "is get_body_measurements; body weight is get_weight_history.",
+        "measurement are left out. Pass from_date and to_date to choose the period; without to_date it stops at "
+        "today, so give it for later days; without either it lists the newest entries up to limit. The first and "
+        "last value of every part over a period is get_body_measurements; body weight is get_weight_history.",
         {
             "body_part": {
                 "type": "string",
@@ -941,10 +943,12 @@ TOOLS: list[dict[str, Any]] = [
         "Change a private product",
         "Change one of the user's own products (create_food's food_id or a get_my_foods PRODUCT hit's food_id): any "
         "value create_food takes but unit; what is not given stays as it is, and servings replaces the list. Any other "
-        "product is refused before anything is changed (that check reads it). Fitatu may save the change as a new "
-        "product (e.g. new values of a product already logged): food_id is then the new id and replaced_food_id the "
-        "old one, which is retired; rows logged before keep the old values. Returns measures as create_food does and "
-        "previous, which update_food takes on food_id to undo the change. data.ok says the server accepted it.",
+        "product is refused before anything is changed (that check reads it). Fitatu usually changes the product in "
+        "place (replaced_food_id null), and rows already logged with it then show the new values too. It may save "
+        "the change as a new product instead (seen after a rename or new servings): food_id is then the new id and "
+        "replaced_food_id the old, retired one, and rows logged before keep the old values. Before changing a "
+        "product the user has logged, tell them their logged rows may change. Returns measures as create_food does "
+        "and previous, which update_food takes on food_id to undo the change. data.ok says the server accepted it.",
         {
             "food_id": _OWN_FOOD_ID,
             **_LABEL,
@@ -989,8 +993,9 @@ against get_day's meal_name and pass that meal's meal_key.
 monthly report: get_report. Eaten is its totals' eaten (rows ticked as eaten); when that is 0 but \
 logged is not, give logged and say the rows are not ticked as eaten. What is left is each day's \
 left: the goal minus everything logged, planned rows included.
-- Fitatu Premium: get_top_foods, search_recipes' filters but max_energy_kcal and get_recipe of a \
-premium recipe need it (without it, get_report's top_foods is null); every other tool, get_progress \
+- Fitatu Premium: get_top_foods, search_recipes' filters but max_energy_kcal, and get_recipe and \
+get_food_measures of a premium recipe need it (without it, get_report's top_foods is null and \
+get_shopping_list leaves out a premium recipe's ingredients); every other tool, get_progress \
 and get_report included, works on any account.
 - Log food (and set copy_meal's eaten) with eaten true when the user ate it or just asks to log it; \
 false only when they plan ahead.
@@ -1401,8 +1406,8 @@ class FitatuTools:
         # Not for good: the MCP server keeps one FitatuTools while the user may buy Premium.
         self._premium_refused_until = time.monotonic() + _PREMIUM_RECHECK if refused else 0.0
 
-    def _need_premium(self, feature: str, message: str) -> None:
-        """Raise FitatuPremiumRequiredError unless the account's accessControl (``GET /users/{id}``) has ``feature``.
+    def _has_feature(self, feature: str) -> bool:
+        """Whether the account's accessControl (``GET /users/{id}``) has ``feature``.
 
         For what the app keeps for Premium but the API serves to any account. Only the flags are
         kept, for 10 minutes; the rest of the profile (e-mail, name) is dropped at once.
@@ -1412,7 +1417,11 @@ class FitatuTools:
             flags = self.client.user_settings.get_profile(self._user_id).get("accessControl")
             features = frozenset(flag for flag in flags if isinstance(flag, str)) if isinstance(flags, list) else frozenset()
             self._features = (time.monotonic() + _PREMIUM_RECHECK, features)
-        if feature not in features:
+        return feature in features
+
+    def _need_premium(self, feature: str, message: str) -> None:
+        """Raise FitatuPremiumRequiredError unless the account has ``feature`` (:meth:`_has_feature`)."""
+        if not self._has_feature(feature):
             raise FitatuPremiumRequiredError(message)
 
     @classmethod
@@ -1741,6 +1750,8 @@ class FitatuTools:
                 else:
                     portions = None
                 items = as_dict_list(recipe.get("items"))
+                if recipe.get("premiumInRecipesCatalog") is True and not self._has_feature("ROLE_FEATURE_RECIPES_CATALOG_PREMIUM"):
+                    items = []  # the app keeps a premium recipe's ingredients for Premium, as get_recipe does
                 expanded = portions is not None and bool(items)
                 recipes.append({"date": day.isoformat(), "meal": meal, "recipe_id": recipe_id, "name": row.get("name"), "portions": portions, "expanded": expanded})
                 share = (portions or 0) / float(recipe.get("serving") or 1)  # the ingredients make the recipe's servings
@@ -1848,6 +1859,9 @@ class FitatuTools:
     def get_food_measures(self, food_id: int, food_type: str) -> dict[str, Any]:
         client = self.client
         details = client.get_recipe(food_id) if food_type == "RECIPE" else client.get_product_details(food_id)
+        if food_type == "RECIPE" and details.get("premiumInRecipesCatalog") is True:  # as get_recipe
+            # shortcut: add_food of a recipe without a measure_id reads nothing, so it still logs one; check there if asked.
+            self._need_premium("ROLE_FEATURE_RECIPES_CATALOG_PREMIUM", f"recipe {food_id} is a premium recipe, which needs Fitatu Premium")
         return {"food_id": food_id, "type": food_type, "name": details.get("name"), "measures": _measures(details, food_type)}
 
     def get_recent_foods(self, meal: str, limit: int = 10) -> list[FoodHit]:
@@ -2469,7 +2483,7 @@ class FitatuTools:
             raise FitatuValidationError("pass the values to change")
         details = self._own_product(food_id, "changed")
         if details.get("deleted") is True:
-            raise FitatuNotFoundError(f"food {food_id} was deleted; create_food makes a new one")
+            raise FitatuNotFoundError(f"food {food_id} was deleted or replaced by an earlier change; find it with get_my_foods")
         # shortcut: previous cannot clear a value that was empty before (null counts as not given); upgrade if asked.
         previous = _label_of(details, strict=True)
         values = {**previous, **given}
@@ -2478,7 +2492,8 @@ class FitatuTools:
         body = {key: details.get(key) for key in _PRODUCT_FORM}
         body |= {_LABEL_KEYS.get(key, key): value for key, value in values.items() if key not in ("servings", "barcode")}
         body |= {"measures": _label_measures(values.get("servings"), "ml" if details.get("liquid") else "g"), "barcode": values.get("barcode")}
-        # Fitatu may keep the change as a new product and retire this one (e.g. new values of a product already logged).
+        # Fitatu may keep the change as a new product and retire this one (seen live after a rename or new servings);
+        # changed in place, rows already logged with it show the new values (checked live 2026-10-15).
         new_id = int(self.client.update_product(food_id, body).get("id") or food_id)
         return {
             "food_id": new_id,

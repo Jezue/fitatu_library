@@ -92,7 +92,7 @@ def _require_premium(premium: bool) -> None:
 
 def _require_account_writes() -> None:
     if os.getenv("FITATU_LIVE_RUN_WRITE_ACCOUNT") != "1":
-        pytest.skip("Set FITATU_LIVE_RUN_WRITE_ACCOUNT=1 to change settings and the shared catalog")
+        pytest.skip("Set FITATU_LIVE_RUN_WRITE_ACCOUNT=1 to change settings and create private products and recipes")
 
 
 def _new_row(added_rows: list[str]) -> str:
@@ -755,7 +755,7 @@ class TestAuthRefresh:
 
 
 # ---------------------------------------------------------------------------
-# Account writes (FITATU_LIVE_RUN_WRITE_ACCOUNT=1): settings and the food catalog
+# Account writes (FITATU_LIVE_RUN_WRITE_ACCOUNT=1): settings, private products and recipes
 # ---------------------------------------------------------------------------
 
 
@@ -1009,6 +1009,17 @@ class TestToolsReadOnly:
         assert _ok(tools.call("search_food", {"phrase": "eggs", "locale": "en_GB"})), "no en_GB hit for 'eggs'"
         assert any(hit.get("lang") == "en_GB" for hit in client.search_food("eggs", locale="en_GB")), "no hit comes from the en_GB catalog"
 
+    def test_premium_recipes_follow_the_accounts_plan(self, tools: FitatuTools, premium: bool) -> None:
+        # The tools gate these on accessControl flag names: a renamed flag would refuse them on Premium too.
+        expected = (True, None) if premium else (False, "forbidden")
+        filtered = tools.call("search_recipes", {"meal": "breakfast", "limit": 1})
+        assert (filtered["ok"], filtered.get("error", {}).get("error_type")) == expected, _why(filtered)
+        hit = next((hit for hit in _ok(tools.call("search_recipes", {"phrase": "kurczak", "limit": 50})) if hit["premium"]), None)
+        if hit is None:
+            pytest.skip("No premium recipe found for 'kurczak'")
+        measures = tools.call("get_food_measures", {"food_id": hit["food_id"], "food_type": "RECIPE"})
+        assert (measures["ok"], measures.get("error", {}).get("error_type")) == expected, _why(measures)
+
 
 class TestFreeAndPremiumReadOnly:
     """get_progress and get_report on any account; without Premium they read the goals day by day."""
@@ -1205,11 +1216,14 @@ class TestTools:
                 "date": day, "meal": meal_key, "food_id": created["food_id"], "food_type": "PRODUCT", "quantity": 50, "unit": "g", "row_id": row_id,
             }))
             assert added["ok"], _why(added)
-            # New values of a product already logged: Fitatu kept them as a new product (checked live 2026-10-15); either is fine.
+            # Fitatu usually changes new values in place, and the row logged above then shows them; when it saves a new
+            # product instead (seen after a rename or new servings), the row keeps the old values (checked live 2026-10-15).
             updated = _ok(tools.call("update_food", {"food_id": created["food_id"], "energy_kcal": 390}))
             food_ids.append(updated["food_id"])
             assert updated["previous"]["energy_kcal"] == 400 and updated["replaced_food_id"] in (None, created["food_id"]), "update_food's previous is wrong"
             assert client.get_product_details(updated["food_id"]).get("energy") == 390, "the change did not land"
+            rows = {item["row_id"]: item for meal in _ok(tools.call("get_day", {"date": day}))["meals"] for item in meal["items"]}
+            assert rows[row_id]["energy"] == pytest.approx(195 if updated["replaced_food_id"] is None else 200, abs=0.5), "the logged row is not as update_food says"
             removed = _ok(tools.call("remove_items", {"date": day, "row_ids": [row_id]}))["removed"]
             assert [row["row_id"] for row in removed] == [row_id]
         finally:

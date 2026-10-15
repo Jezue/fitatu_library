@@ -14,7 +14,7 @@ upserts rows by `planDayDietItemId` and keeps rows that are not sent, so a clien
 rows it changes ([PLANNER.md](PLANNER.md)). A "Checked live" note was probed by hand against
 `pl-pl.fitatu.com` on 2026-10-13.
 
-Endpoints: 149 · already covered: 48
+Endpoints: 149 · already covered: 49
 
 
 ## activities

@@ -1024,9 +1024,10 @@ class FitatuApiClient:
         """Replace a product the user created (``PUT /products/{id}``) with ``product``, the whole
         :meth:`create_product` body: a key left out is cleared, so send back what
         :meth:`get_product_details` returned for the values to keep (its ``currentUserPrivateBarcode``
-        as ``barcode``). Answers ``{"id", "name", "newProductCreated"}``: when true, Fitatu saved the
-        change as a new product under ``id`` and marked the old one deleted, e.g. new values of a product
-        already logged (checked live 2026-10-15).
+        as ``barcode``). Answers ``{"id", "name", "newProductCreated"}``. Usually false: the product is
+        changed in place, and rows already logged with it show the new values. When true (seen after a
+        rename or new servings), Fitatu saved the change as a new product under ``id`` and marked the old
+        one deleted; rows logged before keep the old values (checked live 2026-10-15).
         """
         pid = validate_numeric_id(product_id, "product_id")
         return write_reply(self.request("PUT", f"/products/{pid}", json_data=product))
