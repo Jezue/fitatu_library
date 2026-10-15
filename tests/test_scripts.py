@@ -27,6 +27,7 @@ from fitatu_api import (
     FitatuAuthContext,
     FitatuAuthError,
     FitatuMaintenanceError,
+    FitatuRateLimitError,
     FitatuTools,
     __version__,
 )
@@ -185,6 +186,7 @@ CATERING_MENU = [
     {"date": CATERING_DAY, "meal": "snack", "name": "Mleko", "grams": 250, "barcode": "5900000000017"},  # the same dish twice: two rows
     {"date": CATERING_DAY, "meal": "supper", "name": "Jabłko", "grams": 150, "search": "jablko"},
     {"date": CATERING_DAY, "meal": "supper", "name": "Baton", "grams": 50, "barcode": "5909999999999", "energy_kcal": 210},  # unknown barcode
+    {"date": CATERING_DAY, "meal": "supper", "name": "Jabłko pieczone", "grams": 100, "barcode": "5909999999999", "search": "jablko"},
 ]
 
 
@@ -234,12 +236,22 @@ def test_a_csv_and_a_json_menu_give_the_same_dishes(tmp_path: Path) -> None:
         ({"date": CATERING_DAY, "meal": "lunch", "name": "Zupa", "energy_kcal": -5}, "energy_kcal must be a number, 0 or more"),
         ({"date": CATERING_DAY, "meal": "lunch", "name": "Zupa", "energy_kcal": "nan"}, "energy_kcal must be a number"),
         ({"date": CATERING_DAY, "meal": "lunch", "name": "Zupa", "energy_kcal": "dużo"}, "could not convert"),
+        ({"date": CATERING_DAY, "meal": "snack", "name": "Baton", "grams": 50, "barcode": "5900-497300056", "energy_kcal": 1}, "barcode must be"),
+        ({"date": CATERING_DAY, "meal": "snack", "name": "Baton", "grams": 50, "barcode": 5900820000011.0}, "barcode must be"),  # a float from a spreadsheet
         ("Zupa", "dish 1:"),
     ],
 )
 def test_a_bad_dish_is_named_and_nothing_is_read(tmp_path: Path, entry: Any, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         catering_sync.read_menu(write_catering_menu(tmp_path, [entry]))
+
+
+def test_a_csv_row_with_more_values_than_columns_is_refused(tmp_path: Path) -> None:
+    menu = tmp_path / "menu.csv"
+    # A decimal comma in a comma-separated file splits 650,5 in two and shifts the values after it.
+    menu.write_text(f"date,meal,name,energy_kcal,protein_g,fat_g\n{CATERING_DAY},Obiad,Kurczak,650,5,40,20\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="dish 1: more values than columns"):
+        catering_sync.read_menu(menu)
 
 
 def test_zero_kcal_is_a_value_not_a_missing_one(tmp_path: Path) -> None:
@@ -250,7 +262,7 @@ def test_zero_kcal_is_a_value_not_a_missing_one(tmp_path: Path) -> None:
 def test_a_second_run_logs_nothing_and_keeps_what_the_user_changed(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     tools, dishes = FitatuTools.demo(), catering_sync.read_menu(write_catering_menu(tmp_path, CATERING_MENU))
     assert catering_sync.sync(tools, dishes, dry_run=True) == 0
-    assert catering_rows(tools) == [] and capsys.readouterr().out.count("would add") == 6
+    assert catering_rows(tools) == [] and capsys.readouterr().out.count("would add") == 7
     assert catering_sync.sync(tools, dishes, dry_run=False) == 0
     first = catering_rows(tools)
     assert [(meal, name) for meal, name, _ in first] == [
@@ -260,19 +272,20 @@ def test_a_second_run_logs_nothing_and_keeps_what_the_user_changed(tmp_path: Pat
         ("snack", "Mleko 2%"),
         ("supper", "Jabłko"),
         ("supper", "Baton"),  # the barcode is not in the catalog: a custom row
+        ("supper", "Jabłko"),  # the barcode is not in the catalog: the search's product
     ]
     assert [row_id for *_, row_id in first] == [dish["row_id"] for dish in dishes]
     tools.update_item(CATERING_DAY, first[0][2], eaten=True)  # ticked on the phone
     capsys.readouterr()
     assert catering_sync.sync(tools, dishes, dry_run=False) == 0
-    assert catering_rows(tools) == first and capsys.readouterr().out.count("already in Fitatu") == 6
+    assert catering_rows(tools) == first and capsys.readouterr().out.count("already in Fitatu") == 7
     assert tools.get_day(CATERING_DAY)["meals"][0]["items"][0]["eaten"] is True
 
 
 def test_a_dish_that_cannot_be_logged_is_reported_and_the_rest_is_logged(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     menu = [
         {"date": CATERING_DAY, "meal": "Podwieczorek", "name": "Budyń", "energy_kcal": 180},
-        {"date": CATERING_DAY, "meal": "supper", "name": "Coś", "grams": 100, "search": "zzzz"},
+        {"date": CATERING_DAY, "meal": "supper", "name": "Coś", "grams": 100, "search": "zzzz"},  # live, a search nearly always finds something
         CATERING_MENU[0],
     ]
     tools = FitatuTools.demo()
@@ -294,6 +307,25 @@ def test_main_reads_the_menu_logs_it_and_says_how_it_went(tmp_path: Path, monkey
     (tmp_path / "bad.json").write_text("{", encoding="utf-8")
     assert catering_sync.main([str(tmp_path / "bad.json")]) == 2
     assert "Cannot read" in capsys.readouterr().out
+    (tmp_path / "excel.csv").write_bytes("date;meal;name;energy_kcal\n2026-10-20;Obiad;Gołąbki;500\n".encode("cp1250"))
+    assert catering_sync.main([str(tmp_path / "excel.csv")]) == 2
+    assert "save it as UTF-8 (in Excel: CSV UTF-8)" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [(FitatuRateLimitError("429 slow down"), "Run it again later"), (FitatuAuthError("401 gone"), "Run `fitatu-api login`")],
+)
+def test_main_says_how_to_finish_a_run_fitatu_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], error: Exception, message: str
+) -> None:
+    def stop(self: FitatuTools, day: str) -> None:
+        raise error
+
+    monkeypatch.setattr(catering_sync, "init_api", DemoClient)
+    monkeypatch.setattr(FitatuTools, "get_day", stop)
+    assert catering_sync.main([str(write_catering_menu(tmp_path, CATERING_MENU[:1]))]) == 1
+    assert message in capsys.readouterr().out
 
 
 # -- scripts/record_fixtures.py: calls added to the scenario -------------------------------

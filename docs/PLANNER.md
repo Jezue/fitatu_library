@@ -169,7 +169,8 @@ Never pass a row id read from the day to an add; to change a row, use `update_da
 
 `catering_sync.py`, a script in the repository (not in the package), copies a catering diet's
 menu into the diary and can be run again without logging a dish twice. The menu is a JSON list,
-or a CSV file (comma or semicolon separated, decimal point or comma), with one dish per entry:
+or a CSV file saved as UTF-8 (in Excel: CSV UTF-8; comma or semicolon separated, decimal point or
+comma), with one dish per entry:
 
 | Key | Meaning |
 |---|---|
@@ -177,7 +178,7 @@ or a CSV file (comma or semicolon separated, decimal point or comma), with one d
 | `meal` | A meal key (`breakfast`, `second_breakfast`, `lunch`, `dinner`, `snack`, `supper`) or the name of the meal in your Fitatu, in any case (`Obiad`). Required. |
 | `name` | The dish as the provider names it. Required. |
 | `energy_kcal`, `protein_g`, `fat_g`, `carbohydrate_g` | The whole portion, logged as a custom row. A macro left out counts as 0 g. |
-| `grams` with `barcode` or `search` | Logs a catalog product: the one with that barcode, else the first product the search finds. With `energy_kcal` too, a product that is not found is logged as a custom row. |
+| `grams` with `barcode` or `search` | Logs a catalog product: the one with that barcode, else the first product the search finds. A search nearly always finds one, even for a typo or a vague phrase, so check the product names `--dry-run` prints. With `energy_kcal` too, a dish whose barcode is not in the catalog and that has no `search` is logged as a custom row. |
 
 A dish needs `energy_kcal`, or `grams` with a `barcode` or `search`. Other keys are ignored.
 Every entry is checked before anything is read from Fitatu.
@@ -227,7 +228,8 @@ with open("menu.json", "w", encoding="utf-8") as file:
   Obiad, Przekąska and Kolacja) and map the others to a meal key, such as `Podwieczorek` to
   `snack`. Providers do not agree on which slot their Obiad is, so let your own meal names decide.
 - Leave out the dishes that are not delivered (paused or skipped days).
-- Write barcodes as text, so a leading 0 stays.
+- Write barcodes as text, so a leading 0 stays, and as printed under the bars: a 13-digit code
+  padded to 14 digits with a 0 is not found.
 
 ## Updates
 
