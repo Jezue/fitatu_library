@@ -10,6 +10,10 @@ Live contract workflow does with $FITATU_SESSION_JSON. Assertion messages name w
 never what the account holds, because that workflow's logs are public (it also runs pytest
 with --assert=plain, as its assertion rewriting would print the compared values).
 
+On an account without Fitatu Premium, the tests of Premium-only routes (the macros day by day,
+the top foods, the export) skip with "needs Fitatu Premium", get_top_foods is checked to be
+refused, and get_progress and get_report are checked to work without them.
+
 What a run changes on the account, and how it is put back:
 
 - Food rows and one activity on FITATU_LIVE_DAY. Each test deletes exactly the rows it
@@ -72,6 +76,11 @@ TOOLS_RECIPE_NAME = "fitatu api live test recipe"  # words, for get_my_foods to 
 
 def _env(key: str, default: str | None = None) -> str | None:
     return os.getenv(key, "").strip() or default
+
+
+def _require_premium(premium: bool) -> None:
+    if not premium:
+        pytest.skip("needs Fitatu Premium")
 
 
 def _require_account_writes() -> None:
@@ -160,6 +169,12 @@ def user_id(client: FitatuApiClient) -> str:
     if not uid:
         pytest.skip("The session has no Fitatu user id; run `fitatu-api login`")
     return uid
+
+
+@pytest.fixture(scope="module")
+def premium(client: FitatuApiClient, user_id: str) -> bool:
+    """Whether the account has a premium plan: Fitatu answers 403 to the Premium-only routes without one."""
+    return bool(client.user_settings.get_premium(user_id)["active"])
 
 
 @pytest.fixture(scope="module")
@@ -893,7 +908,9 @@ class TestFacadeWritePlanner:
 
 
 class TestToolsReadOnly:
-    def test_every_read_tool(self, tools: FitatuTools, client: FitatuApiClient, test_date: date, known_product_id: str) -> None:
+    def test_every_read_tool(
+        self, tools: FitatuTools, client: FitatuApiClient, test_date: date, known_product_id: str, premium: bool
+    ) -> None:
         today = date.today()
         barcode = client.get_product_details(known_product_id).get("barcode")
         arguments: dict[str, dict[str, Any]] = {
@@ -927,6 +944,10 @@ class TestToolsReadOnly:
         if not barcode:  # the product has none; the catalog holds junk codes, so the example EAN may be someone's
             found = results.pop("find_by_barcode")
             assert found["ok"] or found["error"]["error_type"] == "not_found", _why(found)
+        if not premium:  # the top foods need Fitatu Premium: refused, with a hint that says so
+            refused = results.pop("get_top_foods")
+            assert not refused["ok"] and refused["error"]["error_type"] == "forbidden", _why(refused)
+            assert str(refused["error"]["hint"]).startswith("A premium feature"), "the hint does not say it is a premium feature"
         failed = {name: _why(result) for name, result in results.items() if not result["ok"]}
         assert not failed, failed
         if importlib.util.find_spec("mcp"):  # MCP hosts check results against these schemas; name where one does not fit, never the value
@@ -940,6 +961,36 @@ class TestToolsReadOnly:
                 for error in Draft202012Validator(output_schema(name)).iter_errors(result)
             ]
             assert not misfits, misfits
+
+
+class TestFreeAndPremiumReadOnly:
+    """get_progress and get_report on any account; without Premium they read the goals day by day."""
+
+    def test_progress_has_goals_on_any_account(self, client: FitatuApiClient) -> None:
+        today = date.today()
+        week = {"from_date": (today - timedelta(days=6)).isoformat(), "to_date": today.isoformat()}
+        progress = _ok(FitatuTools(client).call("get_progress", week))
+        for day in progress["days"]:
+            assert day["energy"]["target"] is not None, "a day has no energy goal"
+            assert all(day[m]["target_max"] is not None for m in ("protein", "fat", "carbohydrate")), "a day has no macro goal"
+        # Read day by day, as without Premium: the same logged values and goals (on a free account, the same path).
+        by_day = FitatuTools(client)
+        by_day._without_premium = True
+        read_alone = _ok(by_day.call("get_progress", week))
+        def without_eaten(days: list[dict[str, Any]]) -> list[dict[str, Any]]:  # only a day read on its own has it
+            return [{key: {k: v for k, v in value.items() if k != "eaten"} if key != "date" else value for key, value in day.items()} for day in days]
+
+        assert without_eaten(read_alone["days"]) == without_eaten(progress["days"]), "the days read one by one differ from get_progress"
+        assert all("eaten" in day["energy"] for day in read_alone["days"]), "a day read on its own has no eaten"
+
+    def test_report_without_premium_has_progress_and_no_top_foods(self, client: FitatuApiClient, premium: bool) -> None:
+        today = date.today()
+        report = _ok(FitatuTools(client).call("get_report", {"from_date": (today - timedelta(days=6)).isoformat(), "to_date": today.isoformat()}))
+        assert report["nutrition"]["energy"]["daily"]["target"] is not None, "the report has no energy goal"
+        if premium:
+            assert isinstance(report["top_foods"], dict) and report["top_foods_note"] is None, "a Premium report has no top foods"
+        else:
+            assert report["top_foods"] is None and report["top_foods_note"], "a report without Premium has top foods or no note"
 
 
 class TestTools:
@@ -1125,12 +1176,22 @@ class TestNewReadOnlyEndpoints:
     def test_range_summaries(self, client: FitatuApiClient, user_id: str) -> None:
         start, end = date.today() - timedelta(days=6), date.today()
         assert "energy" in client.summary.get_nutrition(user_id, start, end)
+        assert isinstance(client.summary.get_nutrient_by_day(user_id, "energy", start, end), dict)
+        assert isinstance(client.summary.get_activities(user_id, start, end), dict)
+        # One day's summary gives that day's goals on any account (what get_progress reads without Premium).
+        day = client.summary.get_nutrition(user_id, end, end)
+        assert all({"current", "eaten", "min", "max"} <= set(day[n]) for n in ("energy", "protein", "fat", "carbohydrate")), "a nutrient lacks a key"
+        assert all(day[n]["max"] is not None for n in ("energy", "protein", "fat", "carbohydrate")), "a day's summary has no goal"
+
+    def test_premium_range_summaries(self, client: FitatuApiClient, user_id: str, premium: bool) -> None:
+        _require_premium(premium)
+        start, end = date.today() - timedelta(days=6), date.today()
         assert isinstance(client.summary.get_nutrient_by_day(user_id, "protein", start, end), dict)
         top = client.summary.get_top_products(user_id, "protein", start, end, limit=3)
         assert isinstance(top.get("list"), list) and isinstance(top.get("count"), int), "the top foods are not {list, count}"
-        assert isinstance(client.summary.get_activities(user_id, start, end), dict)
 
-    def test_export_diary(self, client: FitatuApiClient, user_id: str) -> None:
+    def test_export_diary(self, client: FitatuApiClient, user_id: str, premium: bool) -> None:
+        _require_premium(premium)
         content = client.summary.export_diary(user_id, date.today() - timedelta(days=6), date.today())
         assert content is None or content.startswith(b"Date")
 

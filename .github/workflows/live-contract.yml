@@ -5,7 +5,8 @@ name: Live contract
 # with tests/fixtures/, then the read-only live tests run. Both only read, with the session in
 # the FITATU_SESSION_JSON secret, which should be a throwaway account's (CONTRIBUTING.md). They
 # print route and key names, never values; nothing is uploaded. Without the secret the run
-# ends with a notice and succeeds.
+# ends with a notice and succeeds. On an account without Fitatu Premium both skip what needs
+# it ("skipped (premium)", "needs Fitatu Premium") instead of failing on its 403.
 on:
   schedule:
     - cron: "23 5 * * 1"  # Mondays, 05:23 UTC

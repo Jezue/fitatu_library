@@ -38,6 +38,9 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the Premium-only routes there (`skipped (premium)`, from `user_settings.get_premium()`), and a
   key only some accounts' replies have, such as a meal's `recommendedPercent` in the day GET, is
   not drift when it is missing.
+- The live tests skip what needs Premium on an account without it ("needs Fitatu Premium"), check
+  that `get_top_foods` is refused there, and check on any account that `get_progress` and
+  `get_report` give goals, the latter with `top_foods` null and a note without Premium.
 
 ## [0.5.0] - 2026-10-14
 
