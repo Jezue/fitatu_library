@@ -14,6 +14,93 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Claude Code), the rules for using the tools well, common tasks, free vs Premium accounts and
   what to do on each error. A test checks it against the format and that it names only real
   tools.
+- `set_targets` tool: change the daily goals from today on. It can set a manual calorie goal,
+  the macro split in whole percent (the grams follow from the energy, as Fitatu requires them to
+  match), go back to Fitatu's automatic goal, and set the glass size water is counted in. It
+  sends the whole current `userDietSettings` back with the changes, as the app does (Fitatu
+  refuses a partial one). It returns the goals Fitatu answered with, plus `previous`, the
+  arguments that put back what it changed. Checked live on an account without Premium
+  (2026-10-15): manual goals and a custom split work there too, and earlier days keep their
+  goals. `fitatu-mcp --read-only` does not serve it.
+- `catering_sync.py` (in the repository, not the package) copies a catering menu into the diary:
+  a JSON list or a CSV file of dishes (date, meal, name, and kcal with macros, or grams with a
+  barcode or a search phrase). Each dish's row id is made from its date and name, so a second
+  run skips what is already logged instead of logging it twice; `--dry-run` shows what it would
+  log. docs/PLANNER.md says how to write an adapter for a catering provider's export. Checked
+  live (2026-10-15): Fitatu takes any UUID of version 1 as a row id, also one made from a hash,
+  and row ids belong to one day.
+- `fitatu-mcp --http` (also `fitatu-api mcp --http`): the same server over Streamable HTTP, for n8n,
+  another computer or a phone on your network. It listens on 127.0.0.1:8765 unless `--host` and
+  `--port` say otherwise, does not start without a token (`FITATU_MCP_TOKEN` or the file
+  `FITATU_MCP_TOKEN_FILE`, at least 32 characters) and answers only requests that send it as
+  `Authorization: Bearer <token>`, checks the Host header (127.0.0.1, localhost, `--host` and each
+  `--allow-host`) and the Origin, and keeps no sessions, so a restart breaks no client.
+  `--read-only`, `--tools`, `--demo` and `--call-timeout` work as over stdio. No new dependency:
+  uvicorn and starlette come with `mcp`. `fitatu_api.mcp_server.http_app()` is the ASGI app.
+- `Dockerfile`: an image that runs `fitatu-mcp --http` as a non-root user, with the session in the
+  volume `/data`. CI builds it and checks that it answers; it is not published to a registry.
+- A logo (`docs/assets/logo.png`, a pixel-art onion in a chat bubble). The server sends it as its
+  icon at start-up, the Claude Desktop bundle carries it as `icon.png`, and `server.json` lists it
+  for the MCP Registry.
+- `get_measurement_history` tool: one body measurement, or body fat, over time, newest first.
+- `get_profile` tool: height, weight (current, start, target), BMI, goal and pace, activity
+  level, sex, age and whether the account has Premium, read from the settings, with nothing that
+  identifies the user.
+- `search_food` takes `locale` to search another country's catalog (the 15 Fitatu took, checked
+  live 2026-10-15).
+- `get_recipe` tool: one recipe in full, from the catalog or the user's own: servings,
+  ingredients with amounts, the steps, the portion's nutrition, cooking time, meal types, tags,
+  rating, and whether it is the user's own (which `update_recipe` and `delete_recipe` take).
+  A premium catalog recipe needs Fitatu Premium (see below). Another user's private recipe is refused
+  as `not_found`: Fitatu serves any recipe by id, so the tool checks whose it is, and it never
+  returns the author's name or id.
+- `search_recipes` filters: `min_protein_g`, `max_carbohydrate_g`, `max_cooking_time` (10 or 30
+  minutes, the catalog's two steps), `diets` (all must apply) and `meal`, per portion as Fitatu
+  applies them (checked live 2026-10-15). `client.search_recipes()` takes them as
+  `min_protein`, `max_carbohydrate`, `max_cooking_time`, `tags` and `meals`.
+- The tools respect Fitatu Premium where only the app enforces it: `search_recipes`' new filters
+  and `get_recipe`, `get_food_measures`, `add_food` and `add_foods` of a premium recipe answer a
+  `forbidden` error ("Needs Fitatu Premium") on an account without it, though Fitatu's API
+  serves them to any account, and `get_shopping_list` leaves out a premium recipe's ingredients
+  there. An add is refused before anything is written; without Premium it reads a recipe logged
+  in portions once to check it. They read the account's `accessControl` flags
+  (`GET /users/{id}`) only when a call needs them and keep just the flags, for 10 minutes. A
+  search by phrase and `max_energy_kcal` works on any account as before. The error is the new
+  `FitatuPremiumRequiredError`; the client does not check.
+- `create_food`, `update_food` and `delete_food` tools: the user's own products from a
+  nutrition label (per 100 g or 100 ml, servings such as a 45 g bar, an optional barcode). Fitatu
+  keeps them private: checked live 2026-10-15 that another account's search does not find one or
+  its barcode. The tools check the label before anything is sent (Fitatu takes nearly any
+  numbers), act only on the user's own products, send a change back whole (Fitatu clears what is
+  left out) and report when Fitatu saved it as a new product (`replaced_food_id`, seen after a
+  rename or new servings; rows logged before keep the old values). A product changed in place
+  changes the rows already logged with it too, and `update_food` says so. `delete_food` asks in
+  Claude Code like `delete_recipe`.
+- `client.update_product()`; `client.create_product()` takes `measures` and `barcode`, and
+  `brand` is optional.
+
+### Changed
+
+- `measurements.get_body_part_history()` takes `fat_percentage` (the route's `fatPercentage`).
+- The demo's ml measure has Fitatu's id, 17.
+
+### Fixed
+
+- Error results passed the account's numeric Fitatu user id to the model, e.g. `get_top_foods` on
+  an account without Premium: `GET /diet-plan/1234567/summary-product/protein/custom -> 403`.
+  `describe_error()` now writes it as `<user>` after the user-scoped routes (`/users/`,
+  `/diet-plan/`, `/v2/diet-plan/`, `/diet-and-activity-plan/`, `/water/`, ...) and in a
+  `userId=` query, and with its new `user_id=` wherever else the id stands alone (e.g. echoed in
+  the server's message); `FitatuTools.call()`, and so the MCP server, pass it. Dates, food ids,
+  row ids and barcodes stay. `fitatu-api doctor`, `example.py` and `catering_sync.py` mask the id
+  the same way in what they print (`<user>`; doctor printed `<user id>`).
+- `search_recipes` with a decimal `max_energy_kcal` (e.g. 499.5) failed with a 400: Fitatu takes
+  whole kcal only, so it is rounded down now.
+- `find_by_barcode` finds the user's own product by the barcode they gave it.
+- `get_my_foods` narrows by `phrase` again: Fitatu ignores it (checked live 2026-10-15), so the
+  words are matched in the library, in the user's first 50 foods.
+- `create_product()`'s docs: it makes a private product, not a catalog one, and its measures work
+  with the app's upper-case keys (the 404 came from a wrong key).
 
 ## [0.5.1] - 2026-10-15
 

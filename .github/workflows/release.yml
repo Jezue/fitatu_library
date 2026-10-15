@@ -33,7 +33,7 @@ jobs:
       - name: Lint and test
         run: |
           ruff check .
-          mypy src demo.py example.py
+          mypy src demo.py example.py catering_sync.py
           pytest -q
 
       - name: Build

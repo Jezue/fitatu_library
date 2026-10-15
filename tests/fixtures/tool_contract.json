@@ -37,6 +37,16 @@
       "openWorldHint": false
     }
   },
+  "get_profile": {
+    "parameters": {},
+    "required": [],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
   "get_range_summary": {
     "parameters": {
       "from_date": "string",
@@ -122,6 +132,7 @@
   "search_food": {
     "parameters": {
       "limit": "integer",
+      "locale": "string",
       "phrase": "string"
     },
     "required": [
@@ -136,11 +147,30 @@
   },
   "search_recipes": {
     "parameters": {
+      "diets": "array",
       "limit": "integer",
+      "max_carbohydrate_g": "integer",
+      "max_cooking_time": "integer",
       "max_energy_kcal": "number",
+      "meal": "string",
+      "min_protein_g": "integer",
       "phrase": "string"
     },
     "required": [],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  "get_recipe": {
+    "parameters": {
+      "recipe_id": "integer"
+    },
+    "required": [
+      "recipe_id"
+    ],
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,
@@ -238,6 +268,23 @@
       "to_date": "string"
     },
     "required": [],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "get_measurement_history": {
+    "parameters": {
+      "body_part": "string",
+      "from_date": "string",
+      "limit": "integer",
+      "to_date": "string"
+    },
+    "required": [
+      "body_part"
+    ],
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,
@@ -531,6 +578,23 @@
       "openWorldHint": false
     }
   },
+  "set_targets": {
+    "parameters": {
+      "automatic": "boolean",
+      "carbohydrate_pct": "integer",
+      "energy_kcal": "integer",
+      "fat_pct": "integer",
+      "protein_pct": "integer",
+      "water_glass_ml": "integer"
+    },
+    "required": [],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
   "set_note": {
     "parameters": {
       "date": "string",
@@ -643,6 +707,76 @@
     },
     "required": [
       "recipe_id"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "create_food": {
+    "parameters": {
+      "barcode": "string",
+      "brand": "string",
+      "carbohydrate_g": "number",
+      "energy_kcal": "number",
+      "fat_g": "number",
+      "fiber_g": "number",
+      "name": "string",
+      "protein_g": "number",
+      "salt_g": "number",
+      "saturated_fat_g": "number",
+      "servings": "array",
+      "sugars_g": "number",
+      "unit": "string"
+    },
+    "required": [
+      "carbohydrate_g",
+      "energy_kcal",
+      "fat_g",
+      "name",
+      "protein_g"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  "update_food": {
+    "parameters": {
+      "barcode": "string",
+      "brand": "string",
+      "carbohydrate_g": "number",
+      "energy_kcal": "number",
+      "fat_g": "number",
+      "fiber_g": "number",
+      "food_id": "integer",
+      "name": "string",
+      "protein_g": "number",
+      "salt_g": "number",
+      "saturated_fat_g": "number",
+      "servings": "array",
+      "sugars_g": "number"
+    },
+    "required": [
+      "food_id"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "delete_food": {
+    "parameters": {
+      "food_id": "integer"
+    },
+    "required": [
+      "food_id"
     ],
     "annotations": {
       "readOnlyHint": false,

@@ -3,6 +3,7 @@
   "manifest_version": "0.4",
   "name": "fitatu",
   "display_name": "Fitatu",
+  "icon": "icon.png",
   "description": "Unofficial Fitatu calorie counter: read and log food, weight, water and workouts.",
   "long_description": "Your Fitatu food diary as tools: read a day, check what is left against your goals, search the food catalog, log meals, weight, water and workouts, and get weekly reports. Unofficial: Fitatu's private API can change at any time. Log in once with `fitatu-api login` (`uvx --from fitatu-api fitatu-api login`), then pick the session file it wrote below. Tool results, including what you ate, go to the model provider.",
   "author": {

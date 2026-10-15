@@ -1,0 +1,7 @@
+# The image is built from these only: never a session file, .env, .venv or dist.
+*
+!pyproject.toml
+!README.md
+!LICENSE
+!src/
+**/__pycache__

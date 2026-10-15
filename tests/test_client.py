@@ -93,8 +93,27 @@ class ApiClientTests(unittest.TestCase):
         payload = req.call_args.kwargs["json_data"]
         self.assertEqual(payload["saturatedFat"], 4)
         self.assertEqual(payload["salt"], 2.1)
-        # measures are not included — POST /products 404s when measures key is present
         self.assertNotIn("measures", payload)
+
+    def test_create_product_sends_measures_and_barcode_and_no_brand_without_one(self) -> None:
+        client = self._make_client()
+        measures = [{"measureKey": "GRAM", "measureUnit": "g", "weight": 100}, {"measureKey": "BAR", "measureUnit": "g", "weight": 45}]
+        with patch.object(client, "request", return_value={"id": 3, "name": "Bar"}) as req:
+            client.create_product(name="Bar", energy=420, protein=9, fat=18, carbohydrate=55, measures=measures, barcode="2900000000018")
+
+        payload = req.call_args.kwargs["json_data"]
+        self.assertEqual((payload["measures"], payload["barcode"]), (measures, "2900000000018"))
+        self.assertNotIn("brand", payload)  # Fitatu stores none
+
+    def test_update_product_puts_the_whole_product(self) -> None:
+        client = self._make_client()
+        reply = {"id": 124, "name": "Bar", "newProductCreated": True}
+        with patch.object(client, "request", return_value=reply) as req:
+            self.assertEqual(client.update_product(123, {"name": "Bar", "energy": 410}), reply)
+            with self.assertRaises(FitatuValidationError):
+                client.update_product("../users/1", {"name": "Bar"})
+
+        req.assert_called_once_with("PUT", "/products/123", json_data={"name": "Bar", "energy": 410})
 
     def test_search_user_food_calls_user_food_endpoint(self) -> None:
         client = self._make_client()

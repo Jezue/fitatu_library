@@ -47,7 +47,8 @@ re-run on its own.
    The scenario logs the first catalog hit for "jajko kurze", so when search ranks another product
    first, tests that pin its recorded values (the totals in `tests/test_scripts.py`) need updating.
 2. Set `__version__` in `src/fitatu_api/__init__.py`; the package version is read from it.
-   Set the same version twice in `server.json` (`version` and the package's `version`);
+   Set the same version twice in `server.json` (`version` and the package's `version`) and in
+   `skills/fitatu-diary/SKILL.md` (`metadata.version`, once the skill matches the release);
    `tests/test_docs.py` fails until they match.
 3. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` and update the link
    references at the bottom of the file (`[X.Y.Z]` to the release tag, `[Unreleased]` to
@@ -56,7 +57,7 @@ re-run on its own.
 
    ```bash
    rm -rf dist                # python -m build adds to dist/ and never removes older builds
-   hatch run all              # ruff, mypy (src, demo.py, example.py), pytest, python -m build
+   hatch run all              # ruff, mypy (src, demo.py, example.py, catering_sync.py), pytest, python -m build
    pre-commit run --all-files
    ```
 

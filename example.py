@@ -22,6 +22,7 @@ from fitatu_api import (
     FitatuTools,
 )
 from fitatu_api.__main__ import main as fitatu_cli
+from fitatu_api.exceptions import redact_user_id
 
 
 def init_api() -> FitatuApiClient:
@@ -34,7 +35,7 @@ def init_api() -> FitatuApiClient:
             client.user_settings.get_profile(user_id)
             return client
     except FitatuAuthError as exc:
-        print(exc)
+        print(redact_user_id(str(exc)))  # terminal output gets pasted into issues
     print("Logging in to save a new session.")
     if fitatu_cli(["login"]) != 0:  # the `fitatu-api login` command; it prints why it failed
         raise SystemExit(1)
@@ -64,7 +65,7 @@ def main() -> int:
         with init_api() as client:
             show_today(FitatuTools(client))
     except (FitatuRateLimitError, FitatuConnectionError, FitatuMaintenanceError) as exc:
-        print(f"Fitatu is not available right now: {exc}")
+        print(f"Fitatu is not available right now: {redact_user_id(str(exc))}")
         return 1
     return 0
 

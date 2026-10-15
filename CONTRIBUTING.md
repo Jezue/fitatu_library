@@ -19,7 +19,7 @@ request:
 
 ```bash
 ruff check .
-mypy src demo.py example.py
+mypy src demo.py example.py catering_sync.py
 pytest -q
 pre-commit run --all-files
 ```
@@ -89,8 +89,9 @@ token, a name, an e-mail address, or your own meals, weights or measurements.
   bumps.
 - New tools reach `fitatu-mcp` without a change to the server; `--read-only` serves the ones
   whose `readOnlyHint` is true.
-- Tools do not write to the shared food catalog or to other users' items, do not change account
-  goals or settings, and never handle passwords. Those stay library calls on purpose.
+- Tools do not write to the shared food catalog or to other users' items, change account
+  settings only through `set_targets` (the goals and the glass size), and never handle passwords.
+  Other settings writes stay library calls on purpose.
 
 ## Changes and commits
 

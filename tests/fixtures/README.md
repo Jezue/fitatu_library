@@ -99,6 +99,33 @@ test day); `tests/test_agent.py` and `tests/fake_server.py` fake these with neut
   the store, the price and transaction ids; the fakes carry only neutral dates (and a dummy price
   that must not come out).
 
+Checked live on 2026-10-15 but not recorded (a free account's goals changed and put back):
+`PATCH /users/{id}/settings-new` answers with the whole new settings, as a GET gives them
+afterwards. It needs `userId` (a number or a string) and refuses a partial `userDietSettings`
+(400: a missing field); `updatedAt` may be null, stale or left out. A manual goal
+(`manualEnergyTarget: true`) needs all three macro percentages, whole numbers summing to 100,
+with grams within 1 g of energy × percent / 100 / 4 (9 for fat), each above 0 g. Anything else is
+a 400, and a fractional percentage a 500. Any energy from 100 to 20000 kcal is taken.
+`manualEnergyTarget: false` brings Fitatu's calculated energy back and, on this free account,
+nulls the split; `waterSettings` alone changes only the glass. A change applies from today on:
+today and later days read the new goals, earlier days keep theirs. `tests/test_agent.py` fakes the
+reply from the recorded `settings_new`.
+
+Checked live on 2026-10-15 but not recorded (sizes logged on two far-future days of a free
+account and deleted again; searches read only):
+
+- `GET /users/{id}/measurements/size/{part}` takes the 8 body parts and `fatPercentage`;
+  `fat_percentage`, `weight` or `knee` is a 400 (`bodyPart is invalid`). It answers
+  `[{date, value}]`, newest first, with only the days that have that value. Without `toDate` the
+  list ends at today, so later days are left out (the weight history's route too); with both dates
+  any range is listed, and a reversed one is `[]`. `tests/test_agent.py` fakes `fatPercentage`
+  in the shape of the recorded `waist` reply.
+- `GET /search/new/food` takes `locale` `pl_PL`, `cs_CZ`, `de_DE`, `de_AT`, `en_GB`, `en_IE`,
+  `en_US`, `en_CA`, `es_ES`, `es_MX`, `fr_FR`, `it_IT`, `nl_NL`, `nb_NO` and `pt_BR`, and answers
+  with that country's catalog (each hit's `lang`), plus foods the account logged before. Anything
+  else tried (`sk_SK`, `pt_PT`, `de_CH`, `en_AU`, `en`, `pl`, `""` and others) is a 400 that does
+  not list the allowed values. The parameter wins over the `APP-SearchLocale` header.
+
 Added to the scenario on 2026-10-14, not recorded yet (reads only): the recipe catalog search
 with `maxEnergy` (`search_recipes`), the fasting schemes and the fasting summary of the test day,
 the habit catalog, the user's habits and good days, and `GET /upgrade-application/{os}/{version}`

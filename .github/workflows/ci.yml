@@ -35,7 +35,7 @@ jobs:
         run: ruff check .
 
       - name: Type check
-        run: mypy src demo.py example.py
+        run: mypy src demo.py example.py catering_sync.py
 
       - name: Build package
         run: python -m build
@@ -87,3 +87,33 @@ jobs:
         with:
           name: coverage-${{ matrix.os }}-py${{ matrix.python-version }}
           path: coverage.xml
+
+  docker:
+    # The image builds and answers with the token; nothing is pushed.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the image
+        run: docker build -t fitatu-mcp:ci .
+
+      - name: Smoke test
+        # Polls with curl, as Docker runs the first health check only after its 30 s interval;
+        # without -f a 401 counts as up. --demo: no Fitatu calls.
+        run: |
+          token=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+          docker run -d --name fitatu-mcp -e FITATU_MCP_TOKEN="$token" -p 127.0.0.1:8765:8765 fitatu-mcp:ci --demo
+          for _ in $(seq 30); do curl -s -o /dev/null http://127.0.0.1:8765/mcp && break; sleep 1; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8765/mcp)" = 401
+          curl -sSf -X POST http://127.0.0.1:8765/mcp -H "Authorization: Bearer $token" \
+            -H "Content-Type: application/json" -H "Accept: application/json" \
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_today","arguments":{}}}' \
+            | grep -q '"ok": *true'
+          ! docker logs fitatu-mcp 2>&1 | grep -qF "$token"
+
+      - name: Server log
+        if: failure()
+        run: docker logs fitatu-mcp
