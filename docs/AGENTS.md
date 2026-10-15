@@ -618,9 +618,10 @@ file (default `~/.fitatu/session.json`) and a *Read only* checkbox, which `mcpb/
 turns into `--read-only`; the host runs it with `uv run`, which installs `fitatu-api[mcp]` of
 the bundle's version from PyPI, so build it only for a released version. Log in first with
 `fitatu-api login` (or `uvx --from fitatu-api fitatu-api login`). The manifest validates
-against the MCPB 0.4 schema and the bundle was started with `uv run` the way the host does (40
-tools, 23 with *Read only*); installing it through the Claude Desktop UI is **not tested yet**, so
-the `mcpServers` entry above stays the tested way.
+against the MCPB 0.4 schema, and the bundle was installed through the Claude Desktop UI and
+answered tool calls with the default settings (40 tools, 23 with *Read only*). Claude Desktop does
+not replace an installed extension with a bundle of the same version: uninstall it first
+(*Settings > Extensions*), then open the new `.mcpb`.
 
 What the server does:
 

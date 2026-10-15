@@ -96,7 +96,9 @@ re-run on its own.
    ```
 
    The bundle pins `fitatu-api[mcp]==X.Y.Z`, which the host installs from PyPI, so it is no use
-   before the release is there.
+   before the release is there. A rebuilt bundle for the same version replaces the asset with
+   `gh release upload vX.Y.Z dist/fitatu-X.Y.Z.mcpb --clobber`; Claude Desktop only installs it
+   after the old extension is uninstalled, so say so in the release notes.
 10. Add an empty `## [Unreleased]` above the new section of `CHANGELOG.md` for the next changes.
 
 ## Compatibility policy

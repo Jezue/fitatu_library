@@ -187,8 +187,8 @@ from 0.4" at the end of this section.
 - `mcpb/` and `scripts/build_mcpb.py`: a Claude Desktop bundle (`dist/fitatu-<version>.mcpb`,
   MCPB manifest 0.4, server type `uv`) with the session file and a read-only checkbox as its
   settings; it installs the released `fitatu-api[mcp]` from PyPI and is attached to the GitHub
-  release. The manifest validates against the bundle schema and the bundle starts with `uv run`
-  the way the host does; installing it through the Claude Desktop UI is not tested yet
+  release. The manifest validates against the bundle schema; installed through the Claude Desktop
+  UI (after the fix below) it starts, finds the session and answers tool calls
 - `describe_error()`: any exception as a JSON-safe dict with `error_type`, `retryable` and a
   `hint`, used by `FitatuTools` and `FitatuLibrary`; a 429 without `Retry-After` gets a hint to
   wait a few seconds and retry once, and a 403 whose body is an HTML page (a firewall such as
