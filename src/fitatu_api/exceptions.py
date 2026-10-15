@@ -146,6 +146,14 @@ class FitatuPlannerSyncError(FitatuApiError):
         self.results = results if results is not None else []
 
 
+class FitatuPremiumRequiredError(FitatuApiError):
+    """Raised by a tool for a feature the Fitatu app keeps for Premium, on an account without it.
+
+    The API serves some of these features to any account; the tools follow the app all the same,
+    by the account's ``accessControl`` flags, and send nothing for the feature itself.
+    """
+
+
 # describe_error's hint for a 403 from the API; FitatuTools.call() narrows it down with the account's plan.
 FORBIDDEN_HINT = "Premium-only feature, used-up AI quota (see codename) or a wrong API key."
 # The routes whose next segment is the user id (paths in messages, URLs in network errors), and a userId= query;
@@ -196,6 +204,8 @@ def describe_error(exc: BaseException, *, user_id: str | None = None) -> dict[st
         error_type, retryable = "network", True
     elif isinstance(exc, FitatuPlannerSyncError):
         error_type, hint = "sync_rejected", "Nothing was saved for the rejected day; fix the rows and send them again."
+    elif isinstance(exc, FitatuPremiumRequiredError):
+        error_type, hint = "forbidden", "Needs Fitatu Premium, which the account does not have. Tell the user; do not retry."
     elif isinstance(exc, FitatuApiError):
         if status == 403 and (exc.body or "").lstrip().startswith("<"):
             # The API answers in JSON; an HTML page comes from the firewall in front of it (e.g. Cloudflare).

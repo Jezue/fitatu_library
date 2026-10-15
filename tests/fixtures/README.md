@@ -111,6 +111,21 @@ nulls the split; `waterSettings` alone changes only the glass. A change applies 
 today and later days read the new goals, earlier days keep theirs. `tests/test_agent.py` fakes the
 reply from the recorded `settings_new`.
 
+Checked live on 2026-10-15 but not recorded (sizes logged on two far-future days of a free
+account and deleted again; searches read only):
+
+- `GET /users/{id}/measurements/size/{part}` takes the 8 body parts and `fatPercentage`;
+  `fat_percentage`, `weight` or `knee` is a 400 (`bodyPart is invalid`). It answers
+  `[{date, value}]`, newest first, with only the days that have that value. Without `toDate` the
+  list ends at today, so later days are left out (the weight history's route too); with both dates
+  any range is listed, and a reversed one is `[]`. `tests/test_agent.py` fakes `fatPercentage`
+  in the shape of the recorded `waist` reply.
+- `GET /search/new/food` takes `locale` `pl_PL`, `cs_CZ`, `de_DE`, `de_AT`, `en_GB`, `en_IE`,
+  `en_US`, `en_CA`, `es_ES`, `es_MX`, `fr_FR`, `it_IT`, `nl_NL`, `nb_NO` and `pt_BR`, and answers
+  with that country's catalog (each hit's `lang`), plus foods the account logged before. Anything
+  else tried (`sk_SK`, `pt_PT`, `de_CH`, `en_AU`, `en`, `pl`, `""` and others) is a 400 that does
+  not list the allowed values. The parameter wins over the `APP-SearchLocale` header.
+
 Added to the scenario on 2026-10-14, not recorded yet (reads only): the recipe catalog search
 with `maxEnergy` (`search_recipes`), the fasting schemes and the fasting summary of the test day,
 the habit catalog, the user's habits and good days, and `GET /upgrade-application/{os}/{version}`

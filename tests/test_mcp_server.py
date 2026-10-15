@@ -82,8 +82,8 @@ def test_tools_are_listed_as_defined_and_results_carry_the_envelope(tools: Fitat
             "inputSchema": t["input_schema"],
             "annotations": {"title": t["title"], **t["annotations"]},
             "outputSchema": output_schema(t["name"]),
-            # Claude Code then asks before every call, as a deleted recipe cannot be brought back
-            **({"_meta": {"anthropic/requiresUserInteraction": True}} if t["name"] == "delete_recipe" else {}),
+            # Claude Code then asks before every call, as a deleted recipe or product cannot be brought back
+            **({"_meta": {"anthropic/requiresUserInteraction": True}} if t["name"] in ("delete_recipe", "delete_food") else {}),
         }
         for t in TOOLS
     ]

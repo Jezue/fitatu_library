@@ -200,6 +200,7 @@ class TestMeasurementsModule:
         assert module.get_body_part_history(USER, "waist", from_date=date(2026, 9, 1)) == [
             {"date": "2026-09-01", "value": 80.0}
         ]
+        module.get_body_part_history(USER, "fat_percentage")
         client.request.return_value = {"waist": {"difference": -2}}
         module.get_size_summary(USER, from_date=date(2026, 9, 1), to_date=DAY)
         module.delete_day(USER, DAY)
@@ -208,14 +209,16 @@ class TestMeasurementsModule:
         assert calls == [
             ("GET", f"/users/{USER}/measurements/{DAY.isoformat()}"),
             ("GET", f"/users/{USER}/measurements/size/waist"),
+            ("GET", f"/users/{USER}/measurements/size/fatPercentage"),
             ("GET", f"/users/{USER}/measurements/summary/size"),
             ("DELETE", f"/users/{USER}/measurements/{DAY.isoformat()}"),
         ]
         assert client.request.call_args_list[1].kwargs["params"] == {"fromDate": "2026-09-01", "limit": 41, "page": 1}
 
-    def test_body_part_history_validates_body_part(self) -> None:
+    @pytest.mark.parametrize("part", ["knee", "fatPercentage"])  # fat is fat_percentage, as set_day takes it
+    def test_body_part_history_validates_body_part(self, part: str) -> None:
         with pytest.raises(FitatuValidationError):
-            MeasurementsModule(Mock()).get_body_part_history(USER, "knee")
+            MeasurementsModule(Mock()).get_body_part_history(USER, part)
 
     def test_reversed_range_is_rejected_before_any_request(self) -> None:
         client = Mock()

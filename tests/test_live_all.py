@@ -37,9 +37,12 @@ With FITATU_LIVE_RUN_WRITE_ACCOUNT=1 also:
 - the daily goals and the glass size (`set_targets`): a manual goal, then the automatic one,
   then the settings read before are sent back whole. Fitatu keeps them as a new version from
   today, equal to the old one.
-- a product in Fitatu's shared food catalog and a private recipe: created, then deleted;
+- a private product and a private recipe: created, then deleted;
 - a private recipe made with the tools: created, logged on FITATU_LIVE_DAY, removed and
-  deleted. Recipes are deleted softly: Fitatu keeps them, marked deleted, out of your foods.
+  deleted. Recipes and products are deleted softly: Fitatu keeps them, marked deleted, out of
+  your foods.
+- a private product made with the tools, with a made-up in-store barcode: created, logged on
+  FITATU_LIVE_DAY, changed (Fitatu may keep the change as a new product), removed and deleted.
 
 Optional env vars:
     FITATU_LIVE_DAY              YYYY-MM-DD after today       (default: a year from today)
@@ -75,6 +78,7 @@ SEARCH_FALLBACK_PHRASE = "jajko kurze"
 TEST_PRODUCT_NAME = "__fitatu_api_live_test_product__"
 TEST_RECIPE_NAME = "__fitatu_api_live_test_recipe__"
 TOOLS_RECIPE_NAME = "fitatu api live test recipe"  # words, for get_my_foods to find it by
+TOOLS_PRODUCT_NAME = "fitatu api live test product"
 
 
 def _env(key: str, default: str | None = None) -> str | None:
@@ -88,7 +92,7 @@ def _require_premium(premium: bool) -> None:
 
 def _require_account_writes() -> None:
     if os.getenv("FITATU_LIVE_RUN_WRITE_ACCOUNT") != "1":
-        pytest.skip("Set FITATU_LIVE_RUN_WRITE_ACCOUNT=1 to change settings and the shared catalog")
+        pytest.skip("Set FITATU_LIVE_RUN_WRITE_ACCOUNT=1 to change settings and create private products and recipes")
 
 
 def _new_row(added_rows: list[str]) -> str:
@@ -114,8 +118,7 @@ def _water_ml(client: FitatuApiClient, user_id: str, day: date) -> int:
 def _assert_deleted(client: FitatuApiClient, path: str, what: str) -> None:
     """Fail unless ``GET path`` now answers 404 or, for a soft delete, ``"deleted": true``.
 
-    Fitatu deletes recipes softly (checked live): the GET still answers 200, marked deleted.
-    Product details carry ``deleted`` as well, so a product may go the same way.
+    Fitatu deletes recipes and products softly (checked live): the GET still answers 200, marked deleted.
     """
     try:
         reply = client.request("GET", path)
@@ -752,7 +755,7 @@ class TestAuthRefresh:
 
 
 # ---------------------------------------------------------------------------
-# Account writes (FITATU_LIVE_RUN_WRITE_ACCOUNT=1): settings and the food catalog
+# Account writes (FITATU_LIVE_RUN_WRITE_ACCOUNT=1): settings, private products and recipes
 # ---------------------------------------------------------------------------
 
 
@@ -937,7 +940,7 @@ class TestFacadeWritePlanner:
 
 class TestToolsReadOnly:
     def test_every_read_tool(
-        self, tools: FitatuTools, client: FitatuApiClient, test_date: date, known_product_id: str, premium: bool
+        self, tools: FitatuTools, client: FitatuApiClient, test_date: date, known_product_id: str, known_recipe_id: str, premium: bool
     ) -> None:
         today = date.today()
         barcode = client.get_product_details(known_product_id).get("barcode")
@@ -945,6 +948,7 @@ class TestToolsReadOnly:
             "get_today": {},
             "get_day": {"date": test_date.isoformat()},
             "get_targets": {"date": today.isoformat()},
+            "get_profile": {},
             "get_range_summary": {"from_date": (today - timedelta(days=6)).isoformat(), "to_date": today.isoformat()},
             "get_progress": {"from_date": (today - timedelta(days=6)).isoformat(), "to_date": today.isoformat()},
             "get_top_foods": {"from_date": (today - timedelta(days=6)).isoformat(), "to_date": today.isoformat()},
@@ -952,6 +956,7 @@ class TestToolsReadOnly:
             "get_shopping_list": {"from_date": test_date.isoformat(), "to_date": test_date.isoformat()},
             "search_food": {"phrase": "jajko", "limit": 3},
             "search_recipes": {"phrase": "kurczak", "max_energy_kcal": 500, "limit": 3},
+            "get_recipe": {"recipe_id": int(known_recipe_id)},
             "find_by_barcode": {"barcode": str(barcode or "5901234123457")},
             "get_food_measures": {"food_id": int(known_product_id), "food_type": "PRODUCT"},
             "get_recent_foods": {"meal": "breakfast"},
@@ -959,6 +964,7 @@ class TestToolsReadOnly:
             "get_my_foods": {},
             "get_weight_history": {"limit": 5},
             "get_body_measurements": {"from_date": (today - timedelta(days=365)).isoformat(), "to_date": today.isoformat()},
+            "get_measurement_history": {"body_part": "waist", "limit": 5},
             "get_water": {"date": test_date.isoformat()},
             "search_activity": {"phrase": "bieganie", "limit": 3},
             "get_fasting": {"from_date": (today - timedelta(days=6)).isoformat(), "to_date": today.isoformat()},
@@ -989,6 +995,30 @@ class TestToolsReadOnly:
                 for error in Draft202012Validator(output_schema(name)).iter_errors(result)
             ]
             assert not misfits, misfits
+
+    def test_get_profile_leaves_out_what_identifies_the_user(self, tools: FitatuTools, client: FitatuApiClient, user_id: str) -> None:
+        profile = _ok(tools.call("get_profile", {}))
+        keys = {"height_cm", "weight_kg", "start_weight_kg", "target_weight_kg", "bmi", "goal", "pace_kg_per_week", "pal", "sex", "age", "premium"}
+        assert set(profile) == keys, "get_profile's keys changed"
+        assert profile["premium"] == client.user_settings.get_premium(user_id), "premium differs from get_premium"
+        text = json.dumps(profile)
+        assert "@" not in text and user_id not in text, "get_profile carries an e-mail or the user id"
+        assert "birthDate" not in profile and "email" not in profile, "get_profile carries a birth date or an e-mail"
+
+    def test_search_food_reads_another_countrys_catalog(self, tools: FitatuTools, client: FitatuApiClient) -> None:
+        assert _ok(tools.call("search_food", {"phrase": "eggs", "locale": "en_GB"})), "no en_GB hit for 'eggs'"
+        assert any(hit.get("lang") == "en_GB" for hit in client.search_food("eggs", locale="en_GB")), "no hit comes from the en_GB catalog"
+
+    def test_premium_recipes_follow_the_accounts_plan(self, tools: FitatuTools, premium: bool) -> None:
+        # The tools gate these on accessControl flag names: a renamed flag would refuse them on Premium too.
+        expected = (True, None) if premium else (False, "forbidden")
+        filtered = tools.call("search_recipes", {"meal": "breakfast", "limit": 1})
+        assert (filtered["ok"], filtered.get("error", {}).get("error_type")) == expected, _why(filtered)
+        hit = next((hit for hit in _ok(tools.call("search_recipes", {"phrase": "kurczak", "limit": 50})) if hit["premium"]), None)
+        if hit is None:
+            pytest.skip("No premium recipe found for 'kurczak'")
+        measures = tools.call("get_food_measures", {"food_id": hit["food_id"], "food_type": "RECIPE"})
+        assert (measures["ok"], measures.get("error", {}).get("error_type")) == expected, _why(measures)
 
 
 class TestFreeAndPremiumReadOnly:
@@ -1115,6 +1145,10 @@ class TestTools:
             # log_measurements keeps the day's weight, as its description says.
             values = tuple(None if stored.get(key) is None else float(stored[key]) for key in ("weight", "waist", "fatPercentage"))
             assert values == (70.5, 80.0, 20.0), "the day does not hold the logged weight, waist and body fat"
+            on_day = {"from_date": day.isoformat(), "to_date": day.isoformat()}
+            waist = _ok(tools.call("get_measurement_history", {"body_part": "waist", **on_day}))
+            fat = _ok(tools.call("get_measurement_history", {"body_part": "fat_percentage", **on_day}))
+            assert (waist, fat) == ([{"date": day.isoformat(), "value": 80}], [{"date": day.isoformat(), "value": 20}]), "the size history lacks the day"
         finally:
             client.measurements.delete_day(user_id, day)
             assert client.measurements.get_day(user_id, day) is None, f"cleanup failed: delete the measurement on {day} by hand"
@@ -1161,6 +1195,43 @@ class TestTools:
         assert _ok(deleted) == {"recipe_id": recipe_id, "name": TOOLS_RECIPE_NAME, "already_deleted": False, "ok": True}
         assert _ok(tools.call("delete_recipe", {"recipe_id": recipe_id}))["already_deleted"] is True
         assert recipe_id not in {hit["food_id"] for hit in _ok(tools.call("get_my_foods", {"phrase": TOOLS_RECIPE_NAME}))}
+
+    def test_private_product_created_logged_updated_and_deleted(
+        self, tools: FitatuTools, client: FitatuApiClient, test_date: date, meal_key: str, added_rows: list[str]
+    ) -> None:
+        _require_account_writes()
+        day = test_date.isoformat()
+        digits = "29" + f"{uuid.uuid4().int % 10**10:010d}"  # an in-store EAN-13, which no product in the shops has
+        barcode = digits + str(-sum(int(digit) * (3 if index % 2 else 1) for index, digit in enumerate(digits)) % 10)
+        label = {"name": TOOLS_PRODUCT_NAME, "energy_kcal": 400, "protein_g": 10, "fat_g": 15, "carbohydrate_g": 55}
+        created = _ok(tools.call("create_food", {**label, "servings": [{"name": "bar", "weight": 45}], "barcode": barcode}))
+        food_ids = [created["food_id"]]
+        try:
+            assert created["ok"] and 54 in {m["measure_id"] for m in created["measures"] or []}, "create_food did not confirm, or a bar is not measure 54"
+            assert _ok(tools.call("find_by_barcode", {"barcode": barcode}))["food_id"] == created["food_id"], "find_by_barcode did not find it"
+            mine = _ok(tools.call("get_my_foods", {"phrase": TOOLS_PRODUCT_NAME}))
+            assert (created["food_id"], "PRODUCT") in {(hit["food_id"], hit["type"]) for hit in mine}, "the product is not in get_my_foods"
+            row_id = _new_row(added_rows)
+            added = _ok(tools.call("add_food", {
+                "date": day, "meal": meal_key, "food_id": created["food_id"], "food_type": "PRODUCT", "quantity": 50, "unit": "g", "row_id": row_id,
+            }))
+            assert added["ok"], _why(added)
+            # Fitatu usually changes new values in place, and the row logged above then shows them; when it saves a new
+            # product instead (seen after a rename or new servings), the row keeps the old values (checked live 2026-10-15).
+            updated = _ok(tools.call("update_food", {"food_id": created["food_id"], "energy_kcal": 390}))
+            food_ids.append(updated["food_id"])
+            assert updated["previous"]["energy_kcal"] == 400 and updated["replaced_food_id"] in (None, created["food_id"]), "update_food's previous is wrong"
+            assert client.get_product_details(updated["food_id"]).get("energy") == 390, "the change did not land"
+            rows = {item["row_id"]: item for meal in _ok(tools.call("get_day", {"date": day}))["meals"] for item in meal["items"]}
+            assert rows[row_id]["energy"] == pytest.approx(195 if updated["replaced_food_id"] is None else 200, abs=0.5), "the logged row is not as update_food says"
+            removed = _ok(tools.call("remove_items", {"date": day, "row_ids": [row_id]}))["removed"]
+            assert [row["row_id"] for row in removed] == [row_id]
+        finally:
+            for food_id in dict.fromkeys(food_ids):  # a replaced one is already deleted
+                tools.call("delete_food", {"food_id": food_id})
+                _assert_deleted(client, f"/products/{int(food_id)}", f"product {food_id} {TOOLS_PRODUCT_NAME!r}")
+        assert _ok(tools.call("delete_food", {"food_id": food_ids[-1]}))["already_deleted"] is True
+        assert not {hit["food_id"] for hit in _ok(tools.call("get_my_foods", {"phrase": TOOLS_PRODUCT_NAME}))} & set(food_ids)
 
     def test_add_and_remove_activity(
         self, tools: FitatuTools, client: FitatuApiClient, user_id: str, test_date: date
@@ -1253,6 +1324,15 @@ class TestNewReadOnlyEndpoints:
         hits = client.search_recipes("kurczak", max_energy=500, limit=10)
         assert hits, "no recipe for 'kurczak' up to 500 kcal"
         assert all(hit.get("type") == "RECIPE" and float(hit["energy"]) <= 500 for hit in hits), "a hit is not a recipe of at most 500 kcal a portion"
+
+    def test_recipe_search_filters_apply_per_portion(self, client: FitatuApiClient) -> None:
+        hits = client.search_recipes("", min_protein=20, max_cooking_time=10, tags=["tag.vegetarian"], meals=["breakfast"], limit=5)
+        assert hits, "no quick vegetarian breakfast with 20 g of protein"
+        assert all((hit.get("cookingTime") or 0) <= 10 for hit in hits), "a hit cooks for more than 10 minutes"
+        recipe = client.get_recipe(hits[0]["foodId"])
+        assert float(recipe["protein"]) >= 20, "the first hit has less than 20 g of protein a portion"
+        assert "tag.vegetarian" in {tag.get("name") for tag in recipe.get("tags") or []}, "the first hit is not tagged vegetarian"
+        assert "breakfast" in (recipe.get("mealSchema") or []), "the first hit is not a breakfast"
 
     def test_daily_targets_via_facade(self, facade: FitatuLibrary) -> None:
         result = facade.get_daily_targets_via_api()

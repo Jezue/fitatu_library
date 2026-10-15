@@ -42,6 +42,47 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A logo (`docs/assets/logo.png`, a pixel-art onion in a chat bubble). The server sends it as its
   icon at start-up, the Claude Desktop bundle carries it as `icon.png`, and `server.json` lists it
   for the MCP Registry.
+- `get_measurement_history` tool: one body measurement, or body fat, over time, newest first.
+- `get_profile` tool: height, weight (current, start, target), BMI, goal and pace, activity
+  level, sex, age and whether the account has Premium, read from the settings, with nothing that
+  identifies the user.
+- `search_food` takes `locale` to search another country's catalog (the 15 Fitatu took, checked
+  live 2026-10-15).
+- `get_recipe` tool: one recipe in full, from the catalog or the user's own: servings,
+  ingredients with amounts, the steps, the portion's nutrition, cooking time, meal types, tags,
+  rating, and whether it is the user's own (which `update_recipe` and `delete_recipe` take).
+  A premium catalog recipe needs Fitatu Premium (see below). Another user's private recipe is refused
+  as `not_found`: Fitatu serves any recipe by id, so the tool checks whose it is, and it never
+  returns the author's name or id.
+- `search_recipes` filters: `min_protein_g`, `max_carbohydrate_g`, `max_cooking_time` (10 or 30
+  minutes, the catalog's two steps), `diets` (all must apply) and `meal`, per portion as Fitatu
+  applies them (checked live 2026-10-15). `client.search_recipes()` takes them as
+  `min_protein`, `max_carbohydrate`, `max_cooking_time`, `tags` and `meals`.
+- The tools respect Fitatu Premium where only the app enforces it: `search_recipes`' new filters
+  and `get_recipe`, `get_food_measures`, `add_food` and `add_foods` of a premium recipe answer a
+  `forbidden` error ("Needs Fitatu Premium") on an account without it, though Fitatu's API
+  serves them to any account, and `get_shopping_list` leaves out a premium recipe's ingredients
+  there. An add is refused before anything is written; without Premium it reads a recipe logged
+  in portions once to check it. They read the account's `accessControl` flags
+  (`GET /users/{id}`) only when a call needs them and keep just the flags, for 10 minutes. A
+  search by phrase and `max_energy_kcal` works on any account as before. The error is the new
+  `FitatuPremiumRequiredError`; the client does not check.
+- `create_food`, `update_food` and `delete_food` tools: the user's own products from a
+  nutrition label (per 100 g or 100 ml, servings such as a 45 g bar, an optional barcode). Fitatu
+  keeps them private: checked live 2026-10-15 that another account's search does not find one or
+  its barcode. The tools check the label before anything is sent (Fitatu takes nearly any
+  numbers), act only on the user's own products, send a change back whole (Fitatu clears what is
+  left out) and report when Fitatu saved it as a new product (`replaced_food_id`, seen after a
+  rename or new servings; rows logged before keep the old values). A product changed in place
+  changes the rows already logged with it too, and `update_food` says so. `delete_food` asks in
+  Claude Code like `delete_recipe`.
+- `client.update_product()`; `client.create_product()` takes `measures` and `barcode`, and
+  `brand` is optional.
+
+### Changed
+
+- `measurements.get_body_part_history()` takes `fat_percentage` (the route's `fatPercentage`).
+- The demo's ml measure has Fitatu's id, 17.
 
 ### Fixed
 
@@ -53,6 +94,13 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the server's message); `FitatuTools.call()`, and so the MCP server, pass it. Dates, food ids,
   row ids and barcodes stay. `fitatu-api doctor`, `example.py` and `catering_sync.py` mask the id
   the same way in what they print (`<user>`; doctor printed `<user id>`).
+- `search_recipes` with a decimal `max_energy_kcal` (e.g. 499.5) failed with a 400: Fitatu takes
+  whole kcal only, so it is rounded down now.
+- `find_by_barcode` finds the user's own product by the barcode they gave it.
+- `get_my_foods` narrows by `phrase` again: Fitatu ignores it (checked live 2026-10-15), so the
+  words are matched in the library, in the user's first 50 foods.
+- `create_product()`'s docs: it makes a private product, not a catalog one, and its measures work
+  with the app's upper-case keys (the 404 came from a wrong key).
 
 ## [0.5.1] - 2026-10-15
 

@@ -71,17 +71,18 @@ service.
 | **Food catalog** | | |
 | `client.search_food(phrase, *, locale=None, limit=5, page=1)` | stable | Food search (products and recipes); rows carry the id as `foodId`. |
 | `client.get_product_details(product_id)` | stable | A product with its measures (`/products/{id}` only; recipes: `get_recipe`). |
-| `client.search_recipes(phrase="", *, max_energy=None, locale=None, limit=10, page=1)` | beta | Recipe catalog search: RECIPE hits shaped like `search_food` rows plus `premiumInRecipesCatalog`, `rating`, `cookingTime`, `preparationTime`; `max_energy` keeps recipes of at most that many kcal per portion (sent with `hasFilters=true`, checked live 2026-10-14). |
-| `client.get_recipe(recipe_id)` | stable | A recipe with ingredients and nutrition (numeric id only). |
+| `client.search_recipes(phrase="", *, max_energy=None, min_protein=None, max_carbohydrate=None, max_cooking_time=None, tags=(), meals=(), locale=None, limit=10, page=1)` | beta | Recipe catalog search: RECIPE hits shaped like `search_food` rows plus `premiumInRecipesCatalog`, `rating`, `cookingTime`, `preparationTime`. Filters are per portion and whole numbers (Fitatu answers 400 to a decimal, so `max_energy` is rounded down); `max_cooking_time` works in two steps (10 to 29 keeps recipes of up to 10 minutes, 30 or more up to 30, less than 10 nothing); `tags` are the catalog's `tag.*` names (e.g. `tag.vegan`) and must all apply; `meals` any of them (checked live 2026-10-15). |
+| `client.get_recipe(recipe_id)` | stable | A recipe with ingredients and nutrition (numeric id only). Fitatu serves any user's private recipe by id, with the author's `username` and `userId` (checked live 2026-10-15): the `get_recipe` tool answers `not_found` for another user's. |
 | `client.get_recipes_catalog()` | stable | The recipe catalog home (categories with recipes). |
 | `client.get_recipes_catalog_category(category_id)` | stable | One catalog category by id or slug. |
-| `client.search_user_food(user_id, phrase, day, *, page=1, limit=50)` | beta | Search the user's own products and recipes. |
+| `client.search_user_food(user_id, phrase, day, *, page=1, limit=50)` | beta | Search the user's own products and recipes. Fitatu ignores `phrase` (checked live 2026-10-15): it answers every own food. |
 | `client.find_matching_user_product(user_id, phrase, day, *, nutrition, brand=None, ...)` | beta | The user's first product matching brand and nutrition within a tolerance, or `None`. |
 | `client.nutrition_values_match()`, `client.product_nutrition_matches()` | stable | Local helpers for comparing nutrition values. |
 | `client.normalize_recipe_items(items)` | stable | Local helper: ingredient dicts in the shape `create_recipe` sends. |
-| `client.create_product(*, name, brand, energy, protein, fat, carbohydrate, ...)` | stable | Create a product in the Fitatu catalog (values per 100 g). |
+| `client.create_product(*, name, energy, protein, fat, carbohydrate, brand=None, ..., measures=None, barcode=None)` | stable | Create a private product of the user's (values per 100 g, or per the first of `measures`; `barcode` stays private). |
+| `client.update_product(product_id, product)` | stable | Replace a product the user created with the whole body (`PUT /products/{id}`); a key left out is cleared; answers `newProductCreated` (checked live 2026-10-15). |
 | `client.create_recipe(*, name, items, ...)` | stable | Create a recipe from `{"foodId", "measureId", "measureQuantity"}` items. |
-| `client.delete_product(product_id)` | beta | Delete a product the user created. |
+| `client.delete_product(product_id)` | beta | Delete a product the user created. Soft, like recipes. |
 | `client.update_recipe(recipe_id, *, name, items, ...)` | beta | Replace a recipe the user created with `create_recipe`'s body (`PUT /recipes/{id}`): the app sends the whole recipe, so pass what `get_recipe()` returned for the fields to keep. The app's route and body, not checked live yet. |
 | `client.delete_recipe(recipe_id)` | beta | Delete a recipe the user created. Fitatu deletes it softly: `get_recipe()` still returns it, with `"deleted": true`, and it leaves the user's searches. |
 | `client.set_product_proposal(product_id, *, property_name, property_value)` | beta | Propose a change to a catalog product; only `rawIngredients` is accepted. |
@@ -117,7 +118,7 @@ service.
 | `measurements.set_day(user_id, day, *, weight=None, fat_percentage=None, weight_unit=None, size_unit=None, merge=True, **body_parts)` | stable | Save weight and/or sizes, merged with what the day already has. Without `weight_unit` the weight is taken in the unit already stored for that day, else `KG` (`size_unit` likewise, else `CM`); pass `weight_unit="KG"` to be sure. The `log_weight` tool always sends kg. |
 | `measurements.delete_day(user_id, day)` | stable | Delete the whole record of a day; safe to repeat. |
 | `measurements.get_weight_history(user_id, *, from_date=None, to_date=None, page=1, limit=41)`, `get_weight_chart()` | stable | One page of weight entries `{date, value, difference, direction}`, in the user's weight unit, newest first; the weight chart with targets. Without dates no range is sent and the page holds every entry up to `limit`, however old: there is no default period (checked live 2026-10-14, not recorded). |
-| `measurements.get_body_part_history()`, `get_size_summary()` | stable | One body part over time; size changes across a range. |
+| `measurements.get_body_part_history()`, `get_size_summary()` | stable | One body part (or `fat_percentage`) over time, newest first, up to today without `to_date`; size changes across a range. |
 | **Summary and export (`client.summary`)** | | |
 | `summary.get_nutrition(user_id, from_date, to_date)` | stable | Range summary per nutrient (`current`, `eaten`, `min`, `max`); `current` is the total of every row over the whole range, not a daily average (checked live 2026-10-13), `eaten` only of the rows ticked as eaten (null when none is), `min` and `max` the goals summed over the days (checked live 2026-10-14). |
 | `summary.get_nutrient_by_day(user_id, nutrient, from_date, to_date)` | stable | One nutrient day by day: `measures` (every row, planned or eaten; null on a day with nothing logged) with `targets` for energy, `targetRanges` (`min`, `max`) for protein, fat and carbohydrate (checked live 2026-10-14). Premium only for protein, fat and carbohydrate: without Fitatu Premium the API answers 403; energy works on any account (checked live 2026-10-15). |
@@ -142,7 +143,7 @@ service.
 | **Settings (`client.user_settings`, `client.diet_plan`)** | | |
 | `user_settings.get_new(user_id, day=None)` | stable | Goals, macro targets, BMR/TMR, meal schema, water settings for a day. |
 | `user_settings.get_premium(user_id)` | beta | `{"active", "end_date"}`: whether a premium plan runs today and its latest end (`YYYY-MM-DD`, None without an end); nothing else of the subscriptions reply, which carries prices and transaction ids. |
-| `user_settings.get_profile(user_id)` | stable | The user's profile, including locales and timezone. |
+| `user_settings.get_profile(user_id)` | stable | The user's profile, including locales and timezone. It carries the e-mail, username and ids: not for a model (the `get_profile` tool reads the settings instead). |
 | `user_settings.update_water_settings(user_id, *, unit_capacity)` | stable | Set the size of one water unit (a glass) in ml. |
 | `user_settings.update_new(user_id, payload)`, `update_profile(user_id, payload)` | experimental | Raw PATCH of settings or of the profile. |
 | `user_settings.get()`, `user_settings.get_for_day()` | deprecated | Legacy settings reads, removed in 1.0; use `get_new`. |
@@ -151,7 +152,7 @@ service.
 | `FitatuTools.from_session(path=None, *, tools=None, call_timeout=45, **client_kwargs)`, `FitatuTools(client, *, tools=None, call_timeout=45)` | beta | The tool layer over a client; `tools` is an allowlist of tool names for `call()`; `call_timeout` (also an attribute) is the seconds one `call()` may take, retries included (`None`: no limit). |
 | `FitatuTools.demo(*, tools=None)` | beta | The tools over a small made-up diary kept in memory (`fitatu_api/demo_data.json`): nothing is sent, no session is read, writes last as long as the instance. |
 | `FitatuTools.call(name, arguments)` | beta | Run a tool by name within `call_timeout`; never raises, and refuses a tool outside the allowlist. |
-| `FitatuTools.<tool>(...)` | beta | Each of the 41 tools in [AGENTS.md](AGENTS.md) as a method that raises. |
+| `FitatuTools.<tool>(...)` | beta | Each of the 47 tools in [AGENTS.md](AGENTS.md) as a method that raises. |
 | `fitatu_api.agent.TOOLS`, `READ_ONLY_TOOLS`, `anthropic_tools(names=None)`, `openai_tools(names=None)` | beta | Tool definitions with titles and annotations; the names of the read tools; copies of all tools, or of the ones named, in the Anthropic and OpenAI formats. |
 | `fitatu_api.agent.SYSTEM_PROMPT` | beta | The recommended system prompt for a model that uses the tools (static English text). |
 | `fitatu_api.mcp_server.build_server(open_tools=FitatuTools.from_session, *, read_only=False, tools=None, call_timeout=45, demo=False)`, `main(argv=None)`, `serve(args)` | beta | The tools as an MCP server over stdio or, with `--http`, HTTP (`fitatu-mcp [--read-only] [--demo] [--tools NAME,...] [--call-timeout SECONDS] [--http ...] [--log-level LEVEL]`, `python -m fitatu_api.mcp_server`) with the prompts of `PROMPTS`; logs to stderr (see the README); `open_tools` runs on the first tool call; `tools` serves only those (a warning names the ones `SYSTEM_PROMPT` mentions and it leaves out); each call gets what is left of `call_timeout` since the host sent it (`None`, or `--call-timeout 0`: no limit). Needs the `mcp` extra; see [AGENTS.md](AGENTS.md#mcp). |
@@ -187,6 +188,7 @@ service.
 | `FitatuConnectionError` | stable | No HTTP response (DNS, timeout, reset). |
 | `FitatuMaintenanceError` | stable | Fitatu's technical break; `display_from`, `display_to`. |
 | `FitatuPlannerSyncError` | stable | The day sync rejected a day (HTTP 202); `results`. |
+| `FitatuPremiumRequiredError` | beta | A `FitatuTools` tool refused what the Fitatu app keeps for Premium (the account's `accessControl` lacks it), though the API would serve it: `search_recipes`' filters but `max_energy_kcal`, `get_recipe`, `get_food_measures`, `add_food` and `add_foods` of a premium recipe. `status_code` None. |
 | `describe_error(exc, *, user_id=None)` | stable | Any exception as a JSON-safe dict with `error_type`, `retryable` and `hint`; the user id in its `message` is `<user>`. |
 
 ## Naming

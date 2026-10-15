@@ -28,13 +28,15 @@ def demo_arguments(tools: FitatuTools) -> dict[str, dict[str, Any]]:
         "get_today": {},
         "get_day": {"date": day},
         "get_targets": {"date": day},
+        "get_profile": {},
         "get_range_summary": {"from_date": yesterday, "to_date": day},
         "get_progress": {"from_date": yesterday, "to_date": day},
         "get_top_foods": {"from_date": yesterday, "to_date": day, "nutrient": "protein"},
         "get_report": {"from_date": month_ago, "to_date": day},
         "get_shopping_list": {"from_date": day, "to_date": day},
         "search_food": {"phrase": "jajka"},
-        "search_recipes": {"max_energy_kcal": 400},
+        "search_recipes": {"max_energy_kcal": 400, "meal": "breakfast", "max_cooking_time": 10},
+        "get_recipe": {"recipe_id": 3000001},
         "find_by_barcode": {"barcode": "5900000000017"},
         "get_food_measures": {"food_id": 3000001, "food_type": "RECIPE"},
         "get_recent_foods": {"meal": "breakfast"},
@@ -42,6 +44,7 @@ def demo_arguments(tools: FitatuTools) -> dict[str, dict[str, Any]]:
         "get_my_foods": {},
         "get_weight_history": {"from_date": month_ago, "to_date": day},
         "get_body_measurements": {"from_date": month_ago, "to_date": day},
+        "get_measurement_history": {"body_part": "waist"},
         "get_water": {"date": day},
         "search_activity": {"phrase": "bieganie"},
         "get_fasting": {"from_date": yesterday, "to_date": day},
@@ -70,6 +73,9 @@ def demo_arguments(tools: FitatuTools) -> dict[str, dict[str, Any]]:
         "create_recipe": {"name": "Jajecznica", "ingredients": [{"food_id": 2000001, "food_type": "PRODUCT", "quantity": 3, "measure_id": 46}]},
         "update_recipe": {"recipe_id": 3000003, "name": "Koktajl", "servings": 2},
         "delete_recipe": {"recipe_id": 3000003},
+        "create_food": {"name": "Baton", "energy_kcal": 420, "protein_g": 9, "fat_g": 18, "carbohydrate_g": 55, "servings": [{"name": "bar", "weight": 45}]},
+        "update_food": {"food_id": 2000015, "energy_kcal": 410},
+        "delete_food": {"food_id": 2000015},
     }
 
 
@@ -111,14 +117,43 @@ def test_goals_set_in_the_demo_show_in_its_targets_progress_and_water() -> None:
     assert back["ok"] and back["automatic"] and back["energy"] == 2000
 
 
+def test_the_demo_profile_follows_a_weigh_in_for_today_and_the_sizes_come_newest_first() -> None:
+    tools = FitatuTools.demo()
+    assert [entry["value"] for entry in tools.get_measurement_history("waist")] == [90, 92]
+    profile = tools.get_profile()
+    assert profile["weight_kg"] == 80.5 and profile["goal"] == "lose" and profile["premium"]["active"]
+    tools.log_weight(tools.get_today()["date"], 79.9)
+    assert tools.get_profile()["weight_kg"] == 79.9
+
+
+def test_the_demo_recipe_search_filters_and_get_recipe_tells_the_users_own() -> None:
+    tools = FitatuTools.demo()
+    assert [hit["name"] for hit in tools.search_recipes(diets=["high_protein"], meal="dinner")] == ["Spaghetti bolognese"]
+    assert tools.search_recipes(diets=["vegan"]) == [] and tools.search_recipes(max_cooking_time=10, min_protein_g=20) == []
+    assert tools.get_recipe(3000003)["own"] is True and tools.get_recipe(3000001)["own"] is False
+
+
+def test_a_product_created_in_the_demo_logs_by_its_serving_and_is_one_of_the_users_foods() -> None:
+    tools = FitatuTools.demo()
+    day = tools.get_today()["date"]
+    created = tools.create_food("Baton proteinowy", 380, 30, 12, 35, servings=[{"name": "bar", "weight": 50}], barcode="2900000000018")
+    assert [measure["measure_id"] for measure in created["measures"]] == [1, 54]
+    added = tools.add_food(day, "snack", created["food_id"], "PRODUCT", 1, measure_id=54)
+    assert added["measure_name"] == "bar" and created["food_id"] in {hit["food_id"] for hit in tools.get_my_foods("proteinowy")}
+    assert tools.find_by_barcode("2900000000018")["food_id"] == created["food_id"]
+    assert tools.delete_food(created["food_id"])["previous"]["servings"] == [{"name": "bar", "weight": 50}]
+    assert tools.get_my_foods("proteinowy") == []
+
+
 def test_the_demo_refuses_what_fitatu_would_and_names_what_it_does_not_serve() -> None:
     tools = FitatuTools.demo()
     assert tools.call("delete_recipe", {"recipe_id": 3000001})["error"]["error_type"] == "validation"  # a catalog recipe
+    assert tools.call("delete_food", {"food_id": 2000004})["error"]["error_type"] == "validation"  # a catalog product
     assert tools.call("get_food_measures", {"food_id": 1, "food_type": "PRODUCT"})["error"]["error_type"] == "not_found"
     error = tools.call("add_food", {"date": "2027-01-03", "meal": "snack", "food_id": 1, "food_type": "RECIPE", "quantity": 1})["error"]
     assert error["error_type"] == "sync_rejected"
     with pytest.raises(Exception, match="the demo does not serve"):
-        tools.client.request("GET", "/users/1000001/subscriptions")
+        tools.client.request("GET", "/users/1000001/measurements/chart/weight")
 
 
 def test_the_demo_data_is_small_and_made_up() -> None:
