@@ -39,6 +39,9 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   uvicorn and starlette come with `mcp`. `fitatu_api.mcp_server.http_app()` is the ASGI app.
 - `Dockerfile`: an image that runs `fitatu-mcp --http` as a non-root user, with the session in the
   volume `/data`. CI builds it and checks that it answers; it is not published to a registry.
+- A logo (`docs/assets/logo.png`, a pixel-art onion in a chat bubble). The server sends it as its
+  icon at start-up, the Claude Desktop bundle carries it as `icon.png`, and `server.json` lists it
+  for the MCP Registry.
 
 ### Fixed
 

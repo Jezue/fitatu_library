@@ -102,6 +102,7 @@ def test_the_server_names_itself_and_its_instructions_fit_the_hosts_limit(tools:
 
     info, instructions = anyio.run(run)
     assert (info.name, info.title, info.version, info.website_url) == ("fitatu", "Fitatu", __version__, "https://github.com/Jezue/fitatu_library")
+    assert [icon.src for icon in info.icons or []] == [json.loads((Path(__file__).parents[1] / "server.json").read_text())["icons"][0]["src"]]
     assert "calorie counter" in info.description and len(instructions) < 4000
 
 

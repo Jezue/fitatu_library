@@ -57,6 +57,7 @@ WEBSITE = "https://github.com/Jezue/fitatu_library"
 LOOPBACK = ("127.0.0.1", "localhost", "[::1]")
 # An HTTP token: printable ASCII without spaces, which also keeps it a valid header value.
 _TOKEN_PATTERN = r"[!-~]{32,}"
+ICON = "https://raw.githubusercontent.com/Jezue/fitatu_library/main/docs/assets/logo.png"  # 512x512, also in server.json
 # Claude Code asks before every call of such a tool, also where calls are otherwise allowed without
 # asking (https://code.claude.com/docs/en/mcp, "Require approval for a specific tool"): a deleted
 # recipe cannot be brought back.
@@ -252,6 +253,7 @@ def build_server(
         title="Fitatu",
         description="Unofficial MCP server for the Fitatu calorie counter: food diary, meals, weight, body measurements and water.",
         website_url=WEBSITE,
+        icons=[types.Icon(src=ICON, mime_type="image/png", sizes=["512x512"])],
         instructions=SYSTEM_PROMPT + (READ_ONLY_NOTE if read_only else "") + (DEMO_NOTE if demo else ""),
         on_list_tools=list_tools,
         on_call_tool=call_tool,
