@@ -179,7 +179,8 @@ Nearly everything works on an account without Fitatu Premium. Fitatu answers 403
 `get_progress` and `get_report` work on every account: when the macros' day-by-day route is
 refused, they read each day's own summary instead (a request per day, at most 31 days), and
 `get_report` gives `top_foods` null with a `top_foods_note`. A free account's macro goals are a
-range (`target_min` below `target_max`), a Premium one's a single number. `fitatu-api doctor`
+range (`target_min` below `target_max`); on a Premium account a one-day summary gave the two
+equal (not checked yet for the day-by-day route `get_progress` reads there). `fitatu-api doctor`
 says whether the account has a premium plan. See
 [Free and Premium accounts](https://github.com/Jezue/fitatu_library/blob/main/docs/AGENTS.md#free-and-premium-accounts)
 in docs/AGENTS.md for the tools.

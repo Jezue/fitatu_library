@@ -17,7 +17,7 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `get_progress` and `get_report` failed with a 403 on an account without Fitatu Premium: the
   macros' day-by-day route they read is Premium-only (checked live 2026-10-15). When it is
   refused, they read each day's own range summary instead, which every account may read and
-  which gives the same goals (a macro's as a range on a free account) and each day's `eaten`
+  which gives each day's goals (a macro's as a range on a free account) and its `eaten`
   too; `FitatuTools` remembers the refusal for 10 minutes and goes straight to it on later calls
   (a `get_top_foods` that succeeds ends it, so a plan bought meanwhile shows). Without
   Premium this covers at most 31 days (a request per day), and a longer range is a validation

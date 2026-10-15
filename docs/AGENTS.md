@@ -132,7 +132,7 @@ Every tool but `get_top_foods` works on an account without Fitatu Premium (check
   `forbidden` error, whose `hint` says the account has no premium plan.
 - `get_progress` reads the macros day by day from a Premium-only route. When Fitatu refuses
   it, `get_progress` reads each day's own summary instead, which any account may read and
-  which has the same goals: a request per day, so at most 31 days (a longer range is a
+  which has each day's goals: a request per day, so at most 31 days (a longer range is a
   `validation` error that points to `get_range_summary`), and each day has `eaten` too.
   `FitatuTools` remembers the refusal for 10 minutes, so only its first such call in that time
   spends a request on the Premium route. A plan bought while `fitatu-mcp` runs shows within
@@ -140,8 +140,10 @@ Every tool but `get_top_foods` works on an account without Fitatu Premium (check
 - `get_report` reads its progress the same way, and gives `top_foods` null with a
   `top_foods_note` saying that the top foods need Premium.
 - A free account's macro goals are a range (`target_min` below `target_max`; `left` counts
-  from `target_max`), a Premium one's a single number (the two equal). Its meals in `get_day`
-  have `recommended_percent` null.
+  from `target_max`). On a Premium account a one-day range summary gave the two equal; whether
+  the day-by-day route `get_progress` reads there does too is not checked yet (the live tests
+  compare the two on a Premium session). A free account's meals in `get_day` have
+  `recommended_percent` null.
 - Catalog recipes that `search_recipes` marks `premium` can still be read with
   `get_food_measures`.
 
