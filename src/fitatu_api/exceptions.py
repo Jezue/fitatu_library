@@ -148,10 +148,11 @@ class FitatuPlannerSyncError(FitatuApiError):
 
 # describe_error's hint for a 403 from the API; FitatuTools.call() narrows it down with the account's plan.
 FORBIDDEN_HINT = "Premium-only feature, used-up AI quota (see codename) or a wrong API key."
-# The routes whose next segment is the user id (paths in messages, URLs in network errors), and a userId= query.
+# The routes whose next segment is the user id (paths in messages, URLs in network errors), and a userId= query;
+# /search/activity/ only before /last-used, as its other route carries the search phrase there.
 _USER_ID_IN_ROUTE = re.compile(
     r"(/(?:users|diet-plan|diet-and-activity-plan|activity-plan|habits|intermittent-fasting|water"
-    r"|search/food(?:/user)?|search/activity)/|userId=)\d+"
+    r"|search/food(?:/user)?)/|/search/activity/(?=\d+/last-used)|userId=)\d+"
 )
 
 

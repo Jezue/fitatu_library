@@ -68,10 +68,12 @@ class DescribeErrorTests(unittest.TestCase):
             "PUT /users/7654321/measurements/2027-01-03 -> 400": "PUT /users/<user>/measurements/2027-01-03 -> 400",
             "PUT /water/7654321/2027-01-03 -> 400": "PUT /water/<user>/2027-01-03 -> 400",
             "GET /search/food/user/7654321 -> 500": "GET /search/food/user/<user> -> 500",
+            "GET /search/activity/7654321/last-used -> 500": "GET /search/activity/<user>/last-used -> 500",
             "network error: Max retries exceeded with url: /api/habits/7654321/good-days?userId=7654321": (
                 "network error: Max retries exceeded with url: /api/habits/<user>/good-days?userId=<user>"
             ),
-            # Food ids, row UUIDs and barcodes stay.
+            # Food ids, row UUIDs, barcodes and search phrases stay.
+            "GET /search/activity/5km -> 500": "GET /search/activity/5km -> 500",
             "GET /products/7654321 -> 404": "GET /products/7654321 -> 404",
             "row_id '5f0c3a2e-1d2b-11ef-9c1a-7654321abcde' is not on 2027-01-03": "row_id '5f0c3a2e-1d2b-11ef-9c1a-7654321abcde' is not on 2027-01-03",
         }
