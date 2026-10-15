@@ -56,8 +56,14 @@ it the run ends with a notice and succeeds. To set it up (repository owner):
 1. Create a throwaway Fitatu account for it, with no real data in it. Only reads run, and the
    logs carry route and key names with the account id and tokens masked, but Actions logs of a
    public repository are public, and the secret is a working login to that account.
-2. Store its session: `fitatu-api login --print | gh secret set FITATU_SESSION_JSON` (the
-   e-mail and password are asked for; nothing is written to disk).
+2. Store its session (the e-mail and password are asked for; nothing is written to disk):
+
+   ```bash
+   SESSION=$(fitatu-api login --print) && printf '%s' "$SESSION" | gh secret set FITATU_SESSION_JSON; unset SESSION
+   ```
+
+   Do not pipe `fitatu-api login --print` straight into `gh secret set`: both start at once,
+   and `gh` turns the terminal's echo back on, so the password shows while you type it.
 3. Start the workflow once by hand (*Actions > Live contract > Run workflow*).
 
 Fitatu does not rotate refresh tokens, so the secret keeps working until the refresh token
