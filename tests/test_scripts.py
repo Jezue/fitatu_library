@@ -123,7 +123,7 @@ def test_example_reports_an_outage_in_one_line(
     monkeypatch.setenv("FITATU_SESSION", str(tmp_path / "session.json"))
     (tmp_path / "session.json").write_text(json.dumps({"bearer_token": JWT}))
     assert example.main() == 1
-    assert capsys.readouterr().out.startswith("Fitatu is not available right now: GET /users/1234567 -> ")
+    assert capsys.readouterr().out.startswith("Fitatu is not available right now: GET /users/<user> -> ")
 
 
 # -- demo.py ------------------------------------------------------------------------------

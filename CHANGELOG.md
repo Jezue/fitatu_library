@@ -51,8 +51,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `/diet-plan/`, `/v2/diet-plan/`, `/diet-and-activity-plan/`, `/water/`, ...) and in a
   `userId=` query, and with its new `user_id=` wherever else the id stands alone (e.g. echoed in
   the server's message); `FitatuTools.call()`, and so the MCP server, pass it. Dates, food ids,
-  row ids and barcodes stay. `fitatu-api doctor` masks the id the same way (`<user>`, was
-  `<user id>`).
+  row ids and barcodes stay. `fitatu-api doctor`, `example.py` and `catering_sync.py` mask the id
+  the same way in what they print (`<user>`; doctor printed `<user id>`).
 
 ## [0.5.1] - 2026-10-15
 

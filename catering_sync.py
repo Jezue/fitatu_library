@@ -40,6 +40,7 @@ from fitatu_api import (
     FitatuTools,
     FitatuValidationError,
 )
+from fitatu_api.exceptions import redact_user_id
 
 # Never change these: the row ids follow from them, and new ids would log every dish again.
 NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Jezue/fitatu_library/catering_sync.py")
@@ -145,7 +146,7 @@ def sync(tools: FitatuTools, dishes: list[dict[str, Any]], *, dry_run: bool) -> 
                 print(f"{label}: {'would add' if dry_run else 'added'} ({what})")
             except (FitatuValidationError, FitatuNotFoundError, FitatuPlannerSyncError) as exc:  # this dish's fault: go on with the next
                 failed += 1
-                print(f"{label}: not added: {exc}")
+                print(f"{label}: not added: {redact_user_id(str(exc))}")  # terminal output gets pasted into issues
     return failed
 
 
@@ -166,10 +167,10 @@ def main(argv: list[str] | None = None) -> int:
         with init_api() as client:
             failed = sync(FitatuTools(client), dishes, dry_run=args.dry_run)
     except FitatuAuthError as exc:
-        print(f"The Fitatu session stopped working: {exc}. Run `fitatu-api login`, then this again: dishes already logged are skipped.")
+        print(f"The Fitatu session stopped working: {redact_user_id(str(exc))}. Run `fitatu-api login`, then this again: dishes already logged are skipped.")
         return 1
     except FitatuApiError as exc:  # a rate limit, maintenance, a lost connection, a server error
-        print(f"Fitatu is not available right now: {exc}. Run it again later: dishes already logged are skipped.")
+        print(f"Fitatu is not available right now: {redact_user_id(str(exc))}. Run it again later: dishes already logged are skipped.")
         return 1
     return 1 if failed else 0
 
