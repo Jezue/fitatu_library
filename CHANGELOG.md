@@ -7,6 +7,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-15
+
 ### Fixed
 
 - The Claude Desktop bundle found no session with its default setting: Claude Desktop passes the
@@ -718,5 +720,6 @@ Initial packaged repository extracted from the workspace integration code.
 - initial test suite for public API and resilience behavior
 - project metadata, MIT license, README, and contributor docs
 
-[Unreleased]: https://github.com/Jezue/fitatu_library/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Jezue/fitatu_library/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/Jezue/fitatu_library/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Jezue/fitatu_library/releases/tag/v0.5.0
