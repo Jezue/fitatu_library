@@ -169,6 +169,16 @@ instead of raising, is deprecated and will be removed in 1.0: for results that n
 
 ### Free and Premium accounts
 
+| | Free account | Premium |
+|---|---|---|
+| Diary: read, log, update, move, copy, remove food, notes, activities, water, weight, body measurements | ✅ | ✅ |
+| Search, barcode, food measures, recipe search, private recipes, favourites, recent foods | ✅ | ✅ |
+| Goals (`get_targets`), progress (`get_progress`), reports (`get_report`), range totals (`get_range_summary`) | ✅ (progress: a request per day, at most 31 days) | ✅ |
+| Weight history, fasting and habits (read), shopping list | ✅ | ✅ |
+| Top foods (`get_top_foods`, `summary.get_top_products()`) | ❌ 403: "needs Fitatu Premium" | ✅ |
+| Diary export (`fitatu-api export`, `summary.export_diary()`) | ❌ 403: "needs Fitatu Premium" | ✅ |
+| Protein / fat / carbohydrate day by day (`summary.get_nutrient_by_day()`; energy works on both) | ❌ 403 (`get_progress` reads around it) | ✅ |
+
 Nearly everything works on an account without Fitatu Premium. Fitatu answers 403 without it to
 (checked live 2026-10-15):
 
@@ -180,7 +190,7 @@ Nearly everything works on an account without Fitatu Premium. Fitatu answers 403
 refused, they read each day's own summary instead (a request per day, at most 31 days), and
 `get_report` gives `top_foods` null with a `top_foods_note`. A free account's macro goals are a
 range (`target_min` below `target_max`); on a Premium account a one-day summary gave the two
-equal (not checked yet for the day-by-day route `get_progress` reads there). `fitatu-api doctor`
+equal (the day-by-day route `get_progress` reads there agrees, checked live). `fitatu-api doctor`
 says whether the account has a premium plan. See
 [Free and Premium accounts](https://github.com/Jezue/fitatu_library/blob/main/docs/AGENTS.md#free-and-premium-accounts)
 in docs/AGENTS.md for the tools.
