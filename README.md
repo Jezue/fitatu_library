@@ -145,6 +145,10 @@ fitatu-api login
 claude mcp add fitatu --scope user -- fitatu-mcp   # fitatu-mcp --read-only: the read tools only
 ```
 
+`fitatu-mcp --http` serves the same tools over HTTP, with a token, for n8n, another computer or
+Docker (the repository has a `Dockerfile`):
+[docs/AGENTS.md](https://github.com/Jezue/fitatu_library/blob/main/docs/AGENTS.md#remote-http-and-docker).
+
 Without an account, `fitatu-mcp --demo` (or `FitatuTools.demo()`) serves a small made-up diary
 kept in memory. For Claude Desktop, each [GitHub release](https://github.com/Jezue/fitatu_library/releases/latest)
 has `fitatu-<version>.mcpb`, installed with a double click (log in with `fitatu-api login` first). Without installing anything, `uvx --from "fitatu-api[mcp]" fitatu-mcp` runs the server. It is
@@ -417,7 +421,9 @@ DEBUG call get_today`) or `FITATU_LOG_LEVEL` sets; other libraries from WARNING.
   client keeps its own). From `fitatu_api.agent`, `fitatu_api.facade` and
   `fitatu_api.mcp_server`, a call whose result reports an `unexpected` error (with the
   traceback), an `auth` or a `maintenance` error: `get_day failed (auth): ...`. From
-  `fitatu_api.auth`, a token store (usually the session file) that could not be read.
+  `fitatu_api.auth`, a token store (usually the session file) that could not be read. From
+  `fitatu_api.mcp_server` under `--http`, each request refused for its token, with the client's
+  address (never the token); uvicorn adds its start and stop lines.
 - `DEBUG` (`fitatu_api.client`): every request as JSON lines: `fitatu.request.start` (method,
   path, query parameters such as search phrases), `fitatu.request.retry` before each retry's
   wait (the failed `attempt`, `delay_seconds`, and the `reason`: the status or the network

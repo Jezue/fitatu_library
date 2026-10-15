@@ -1,5 +1,6 @@
 """MCP server: the :data:`~fitatu_api.agent.TOOLS` over stdio, for Claude Desktop, Claude Code
-and other MCP hosts. Needs the ``mcp`` extra (``pip install "fitatu-api[mcp]"``); run it as
+and other MCP hosts, or over Streamable HTTP with ``--http`` (:func:`http_app`), for n8n and other
+machines. Needs the ``mcp`` extra (``pip install "fitatu-api[mcp]"``); run it as
 ``fitatu-mcp`` or ``python -m fitatu_api.mcp_server``, with ``--read-only`` to serve only the
 tools whose ``readOnlyHint`` is true (:data:`~fitatu_api.agent.READ_ONLY_TOOLS`) and ``--tools``
 to serve only the tools named. Three prompts (:data:`PROMPTS`) give hosts Polish slash commands.
@@ -11,26 +12,34 @@ describes that envelope (:func:`output_schema`). The server's instructions are
 (``$FITATU_SESSION_JSON``, else the file ``$FITATU_SESSION`` or ``$FITATU_SESSION_PATH``, else
 ``~/.fitatu/session.json``), so a missing session reaches the model as an ``auth`` error
 instead of stopping the server. Logs go to stderr, from WARNING or the level of ``--log-level``
-(else ``$FITATU_LOG_LEVEL``); stdout carries only the protocol.
+(else ``$FITATU_LOG_LEVEL``); stdout carries only the protocol. Under ``--http`` it also logs
+uvicorn's start and stop lines and every request refused for its token, never the token.
 """
 
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import logging
+import os
 import re
 import time
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from types import NoneType, UnionType
 from typing import Any, NotRequired, Union, get_args, get_origin, get_type_hints, is_typeddict
 
 try:
     import anyio
+    import uvicorn
     from mcp import types
     from mcp.server import Server, ServerRequestContext
     from mcp.server.stdio import stdio_server
+    from mcp.server.transport_security import TransportSecuritySettings
     from mcp.shared.exceptions import MCPError
+    from starlette.responses import JSONResponse
+    from starlette.types import ASGIApp, Receive, Scope, Send
 except ImportError as exc:  # pragma: no cover
     raise ImportError('fitatu_api.mcp_server needs the mcp extra: pip install "fitatu-api[mcp]"') from exc
 
@@ -45,6 +54,9 @@ logger = logging.getLogger(__name__)
 READ_ONLY_NOTE = "- This server is read-only: it cannot change the diary. For changes, send the user to the Fitatu app.\n"
 DEMO_NOTE = "- This is a demo: the diary is made up and kept in memory, and nothing reaches Fitatu. Say so when you show it.\n"
 WEBSITE = "https://github.com/Jezue/fitatu_library"
+LOOPBACK = ("127.0.0.1", "localhost", "[::1]")
+# An HTTP token: printable ASCII without spaces, which also keeps it a valid header value.
+_TOKEN_PATTERN = r"[!-~]{32,}"
 # Claude Code asks before every call of such a tool, also where calls are otherwise allowed without
 # asking (https://code.claude.com/docs/en/mcp, "Require approval for a specific tool"): a deleted
 # recipe cannot be brought back.
@@ -248,11 +260,63 @@ def build_server(
     )
 
 
+def _http_token() -> str:
+    """The token HTTP clients must send: ``$FITATU_MCP_TOKEN``, else the file ``$FITATU_MCP_TOKEN_FILE``."""
+    token = os.environ.get("FITATU_MCP_TOKEN") or ""
+    if not token and os.environ.get("FITATU_MCP_TOKEN_FILE"):
+        try:
+            token = Path(os.environ["FITATU_MCP_TOKEN_FILE"]).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise SystemExit(f"cannot read $FITATU_MCP_TOKEN_FILE: {exc.strerror}") from None
+    if not re.fullmatch(_TOKEN_PATTERN, token):
+        raise SystemExit(
+            "fitatu-mcp --http needs FITATU_MCP_TOKEN (or FITATU_MCP_TOKEN_FILE): 32 or more printable "
+            'ASCII characters, e.g. from python -c "import secrets; print(secrets.token_urlsafe(32))"'
+        )
+    return token
+
+
+def http_app(server: Server[Any], token: str, *, hosts: Sequence[str] = ()) -> ASGIApp:
+    """``server`` over Streamable HTTP at ``/mcp``, for requests with ``Authorization: Bearer <token>``.
+
+    Stateless, so a restart leaves clients no session to lose, with JSON answers. The Host header must
+    be 127.0.0.1, localhost, [::1] or one of ``hosts`` (any port, or none), else 421; an Origin, when
+    sent, a local one, else 403 (the SDK's DNS rebinding check). Any request without the token gets
+    the same 401, before its path is looked at. A ``token`` shorter than 32 printable ASCII characters
+    raises :class:`ValueError`: an empty one would let ``Authorization: Bearer`` in.
+    """
+    if not re.fullmatch(_TOKEN_PATTERN, token):
+        raise ValueError("http_app needs a token of 32 or more printable ASCII characters")
+    names = [*LOOPBACK, *hosts]
+    app = server.streamable_http_app(
+        stateless_http=True,
+        json_response=True,
+        # The SDK's "name:*" needs a port, so the bare name is listed too.
+        transport_security=TransportSecuritySettings(
+            allowed_hosts=[*names, *(f"{name}:*" for name in names)],
+            allowed_origins=[f"http://{name}:*" for name in LOOPBACK],
+        ),
+    )
+    expected = token.encode()
+
+    async def guarded(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            # Bytes, so a non-ASCII header cannot raise; the scheme's case does not matter (RFC 7235).
+            scheme, _, given = dict(scope["headers"]).get(b"authorization", b"").partition(b" ")
+            if scheme.lower() != b"bearer" or not hmac.compare_digest(given, expected):
+                logger.warning("refused a request from %s: no or wrong token", (scope.get("client") or ("?",))[0])
+                await JSONResponse({"error": "unauthorized"}, 401, {"WWW-Authenticate": "Bearer"})(scope, receive, send)
+                return
+        await app(scope, receive, send)
+
+    return guarded
+
+
 def main(argv: Sequence[str] | None = None) -> None:
-    """``fitatu-mcp``: serve the tools over stdio until the host closes the pipe."""
+    """``fitatu-mcp``: serve the tools over stdio until the host closes the pipe, or over HTTP with ``--http``."""
     parser = argparse.ArgumentParser(
         prog="fitatu-mcp",
-        description="Serve the Fitatu diary tools to an MCP host over stdio. The session is "
+        description="Serve the Fitatu diary tools to an MCP host over stdio, or over HTTP with --http. The session is "
         "$FITATU_SESSION_JSON when set (refreshed tokens are then not saved), else the file "
         "$FITATU_SESSION (or $FITATU_SESSION_PATH), else ~/.fitatu/session.json; create it with "
         "`fitatu-api login`, and with `fitatu-api login -o <path>` for another path.",
@@ -270,8 +334,12 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 
 def serve(args: argparse.Namespace) -> None:
-    """Serve over stdio with the options :func:`main` parsed (``fitatu-api mcp`` parses the same)."""
+    """Serve over stdio, or over HTTP with ``--http``, with the options :func:`main` parsed
+    (``fitatu-api mcp`` parses the same)."""
     client_profile()  # a broken $FITATU_CLIENT_PROFILE stops the server here, not every call
+    if not args.http and (args.host or args.port or args.allow_host):
+        raise SystemExit("--host, --port and --allow-host need --http")
+    token = _http_token() if args.http else ""  # no token, no HTTP server
     server = build_server(
         FitatuTools.demo if args.demo else FitatuTools.from_session,
         read_only=args.read_only,
@@ -279,6 +347,13 @@ def serve(args: argparse.Namespace) -> None:
         call_timeout=args.call_timeout or None,
         demo=args.demo,
     )
+    if args.http:
+        host = args.host or "127.0.0.1"
+        # Clients send an IPv6 address in brackets in the Host header.
+        name = f"[{host}]" if ":" in host else host
+        # No access log: it would print a line per tool call.
+        uvicorn.run(http_app(server, token, hosts=[name, *args.allow_host]), host=host, port=args.port or 8765, log_config=None, log_level="info", access_log=False)
+        return
 
     async def run() -> None:
         async with stdio_server() as (read_stream, write_stream):

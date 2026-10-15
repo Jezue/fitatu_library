@@ -67,7 +67,7 @@ service.
 | `fitatu-api tools [--json]` | beta | Lists the agent tools with their kind (read, write, destructive) and the first sentence of their description; `--json` prints `anthropic_tools()`. |
 | `fitatu-api call NAME [JSON] [--allow-writes]` | beta | Runs one tool through `FitatuTools.call()` on the session file and prints the envelope as JSON; exits 1 when `ok` is false. Only `READ_ONLY_TOOLS` run unless `--allow-writes`. |
 | `fitatu-api export --from DATE --to DATE [--format csv\|xls\|pdf\|txt] -o PATH [--overwrite]` | stable | `summary.export_diary()` written to a new 0600 file; an existing one only with `--overwrite`. An empty range writes nothing and exits 1. Premium only: without Fitatu Premium it prints that in one line and exits 1. |
-| `fitatu-api mcp [--read-only] [--demo] [--tools NAME,...] [--call-timeout SECONDS]` | beta | The MCP server, the same as `fitatu-mcp`; for hosts that start the package by its name, such as the MCP Registry entry run with uvx. Needs the `mcp` extra. |
+| `fitatu-api mcp [--read-only] [--demo] [--tools NAME,...] [--call-timeout SECONDS] [--http [--host HOST] [--port PORT] [--allow-host NAME]...]` | beta | The MCP server, the same as `fitatu-mcp`; for hosts that start the package by its name, such as the MCP Registry entry run with uvx. Needs the `mcp` extra; with `--http`, over Streamable HTTP with a token ([AGENTS.md](AGENTS.md#remote-http-and-docker)). |
 | **Food catalog** | | |
 | `client.search_food(phrase, *, locale=None, limit=5, page=1)` | stable | Food search (products and recipes); rows carry the id as `foodId`. |
 | `client.get_product_details(product_id)` | stable | A product with its measures (`/products/{id}` only; recipes: `get_recipe`). |
@@ -154,7 +154,8 @@ service.
 | `FitatuTools.<tool>(...)` | beta | Each of the 41 tools in [AGENTS.md](AGENTS.md) as a method that raises. |
 | `fitatu_api.agent.TOOLS`, `READ_ONLY_TOOLS`, `anthropic_tools(names=None)`, `openai_tools(names=None)` | beta | Tool definitions with titles and annotations; the names of the read tools; copies of all tools, or of the ones named, in the Anthropic and OpenAI formats. |
 | `fitatu_api.agent.SYSTEM_PROMPT` | beta | The recommended system prompt for a model that uses the tools (static English text). |
-| `fitatu_api.mcp_server.build_server(open_tools=FitatuTools.from_session, *, read_only=False, tools=None, call_timeout=45, demo=False)`, `main(argv=None)`, `serve(args)` | beta | The tools as an MCP server over stdio (`fitatu-mcp [--read-only] [--demo] [--tools NAME,...] [--call-timeout SECONDS] [--log-level LEVEL]`, `python -m fitatu_api.mcp_server`) with the prompts of `PROMPTS`; logs to stderr (see the README); `open_tools` runs on the first tool call; `tools` serves only those (a warning names the ones `SYSTEM_PROMPT` mentions and it leaves out); each call gets what is left of `call_timeout` since the host sent it (`None`, or `--call-timeout 0`: no limit). Needs the `mcp` extra; see [AGENTS.md](AGENTS.md#mcp). |
+| `fitatu_api.mcp_server.build_server(open_tools=FitatuTools.from_session, *, read_only=False, tools=None, call_timeout=45, demo=False)`, `main(argv=None)`, `serve(args)` | beta | The tools as an MCP server over stdio or, with `--http`, HTTP (`fitatu-mcp [--read-only] [--demo] [--tools NAME,...] [--call-timeout SECONDS] [--http ...] [--log-level LEVEL]`, `python -m fitatu_api.mcp_server`) with the prompts of `PROMPTS`; logs to stderr (see the README); `open_tools` runs on the first tool call; `tools` serves only those (a warning names the ones `SYSTEM_PROMPT` mentions and it leaves out); each call gets what is left of `call_timeout` since the host sent it (`None`, or `--call-timeout 0`: no limit). Needs the `mcp` extra; see [AGENTS.md](AGENTS.md#mcp). |
+| `fitatu_api.mcp_server.http_app(server, token, *, hosts=())` | beta | `server` as a stateless Streamable HTTP ASGI app at `/mcp` with JSON answers: 401 without `Authorization: Bearer <token>` (constant-time check), 421 for a Host other than 127.0.0.1, localhost, [::1] or `hosts`, 403 for a non-local Origin. `ValueError` for a `token` shorter than 32 printable ASCII characters. `fitatu-mcp --http` runs it with uvicorn; `$FITATU_MCP_TOKEN` or `$FITATU_MCP_TOKEN_FILE` holds the token. |
 | `fitatu_api.mcp_server.output_schema(name)` | beta | A tool's MCP `outputSchema`: the `call()` envelope, with `data` from the method's return type (TypedDicts for the main tools). |
 | `fitatu_api.mcp_server.PROMPTS` | beta | The MCP prompts (`podsumowanie_dnia`, `przeglad_tygodnia`, `zaloguj_posilek`): Polish text for the model, English descriptions. |
 | **Facade (`FitatuLibrary`, deprecated: removed in 1.0; use `FitatuTools` or `FitatuApiClient`)** | | |
@@ -219,7 +220,7 @@ fails on a camelCase key anywhere else, and on a core result that carries a `sta
 | `planner.py` | `PlannerModule`: the diary. |
 | `service_modules.py` | Measurements, summary, foods, water, activities, fasting, habits, settings, resources. |
 | `agent.py` | `FitatuTools`, `TOOLS`, `READ_ONLY_TOOLS`, `SYSTEM_PROMPT`, `anthropic_tools()`, `openai_tools()`. |
-| `mcp_server.py` | `fitatu-mcp`: the tools over MCP (stdio); imported only with the `mcp` extra. |
+| `mcp_server.py` | `fitatu-mcp`: the tools over MCP (stdio, or Streamable HTTP with `--http`); imported only with the `mcp` extra. |
 | `_demo.py`, `demo_data.json` | The made-up diary of `FitatuTools.demo()`, read only when it is asked for. |
 | `facade.py` | `FitatuLibrary` (deprecated). |
 | `exceptions.py` | The error classes and `describe_error()`. |

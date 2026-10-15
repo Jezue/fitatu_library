@@ -9,7 +9,8 @@ web app, for accounts that have no password (Apple or Facebook sign-in).
 On that session file, ``fitatu-api tools`` lists the agent tools, ``fitatu-api call NAME
 [JSON]`` runs one through :meth:`FitatuTools.call` and prints its envelope (only the read
 tools, unless ``--allow-writes``), ``fitatu-api export`` saves the diary export to a
-private file, and ``fitatu-api mcp`` runs the MCP server, like ``fitatu-mcp``.
+private file, and ``fitatu-api mcp`` runs the MCP server, like ``fitatu-mcp`` (over stdio, or
+HTTP with ``--http``).
 ``fitatu-api status`` describes the session without a request, ``doctor`` checks it with
 Fitatu, and ``logout`` deletes the file. None of them prints a token.
 """
@@ -98,6 +99,27 @@ def add_mcp_options(parser: argparse.ArgumentParser) -> None:
         metavar="SECONDS",
         help="end every tool call within this many seconds from when the host sent it, retries and waits "
         "included, so that a host which gives up after 60 s still gets an answer; 0 for no limit (default: 45)",
+    )
+    parser.add_argument(
+        "--http",
+        action="store_true",
+        help="serve over Streamable HTTP at http://HOST:PORT/mcp instead of stdio; clients must send "
+        '"Authorization: Bearer <token>" with the token in $FITATU_MCP_TOKEN (or the file '
+        "$FITATU_MCP_TOKEN_FILE), which the server needs to start",
+    )
+    parser.add_argument(
+        "--host",
+        metavar="HOST",
+        help="with --http, the address to listen on (default: 127.0.0.1, this computer only; 0.0.0.0 for every network interface)",
+    )
+    parser.add_argument("--port", type=int, metavar="PORT", help="with --http, the port (default: 8765)")
+    parser.add_argument(
+        "--allow-host",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="with --http, another name clients reach the server by, as in their URL (e.g. the compose "
+        "service name or a LAN address); repeat for more. 127.0.0.1, localhost and --host are always allowed",
     )
 
 
@@ -549,7 +571,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     mcp = commands.add_parser(
         "mcp",
-        help="serve the agent tools to an MCP host over stdio, like fitatu-mcp",
+        help="serve the agent tools to an MCP host over stdio (or HTTP with --http), like fitatu-mcp",
         description="The same server as fitatu-mcp, for hosts that start the package by its name "
         '(e.g. uvx with an MCP Registry entry). Needs the mcp extra: pip install "fitatu-api[mcp]".',
     )

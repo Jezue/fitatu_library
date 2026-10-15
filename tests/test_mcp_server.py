@@ -1,9 +1,13 @@
-"""fitatu-mcp: the agent tools over MCP, in process against the fake server and over stdio."""
+"""fitatu-mcp: the agent tools over MCP, in process against the fake server, over stdio and over HTTP."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import os
+import socket
+import subprocess
 import sys
 import threading
 import time
@@ -16,9 +20,12 @@ import pytest
 pytest.importorskip("mcp")
 
 import anyio
+import httpx2
 from fake_server import RECORDED_USER_ID, FakeFitatuServer
 from jsonschema import Draft202012Validator
 from mcp import Client, StdioServerParameters
+from mcp.client.streamable_http import streamable_http_client
+from starlette.testclient import TestClient
 from test_agent import ARGUMENTS, DAY, SEED, fake_with_every_reply
 
 from fitatu_api import (
@@ -29,10 +36,12 @@ from fitatu_api import (
     __version__,
 )
 from fitatu_api.agent import SYSTEM_PROMPT, TOOLS
-from fitatu_api.mcp_server import READ_ONLY_NOTE, build_server, main, output_schema
+from fitatu_api.mcp_server import READ_ONLY_NOTE, build_server, http_app, main, output_schema
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 READ_ONLY = [tool["name"] for tool in TOOLS if tool["annotations"]["readOnlyHint"]]
+TOKEN = "test-token-" + "x" * 32
+BEARER = {"Authorization": f"Bearer {TOKEN}"}
 
 
 @pytest.fixture()
@@ -294,3 +303,116 @@ def test_a_broken_client_profile_stops_the_server_at_start(monkeypatch: pytest.M
     with patch("fitatu_api.mcp_server.anyio.run") as serve, pytest.raises(FitatuValidationError, match="FITATU_CLIENT_PROFILE"):
         main([])
     serve.assert_not_called()
+
+
+def _post(client: TestClient, method: str, params: dict[str, Any] | None = None, **headers: str) -> Any:
+    body = {"jsonrpc": "2.0", "id": 1, "method": method, **({"params": params} if params else {})}
+    return client.post("/mcp", json=body, headers={**BEARER, "MCP-Protocol-Version": "2025-06-18", **headers})
+
+
+def _http(**server: Any) -> TestClient:
+    # The base URL sets the Host header, which the server checks. No GET through it: a GET opens an
+    # event stream that never ends, and TestClient waits for the whole body.
+    return TestClient(http_app(build_server(FitatuTools.demo, demo=True, **server), TOKEN, hosts=["fitatu-mcp", "[fd7a::1]"]), base_url="http://127.0.0.1:8765")
+
+
+@pytest.mark.parametrize("read_only", [False, True])
+def test_http_lists_the_tools_and_answers_calls_without_a_session(read_only: bool) -> None:
+    with _http(read_only=read_only) as client:
+        listed = _post(client, "tools/list")
+        called = _post(client, "tools/call", {"name": "get_today", "arguments": {}})
+    assert listed.status_code == 200 and listed.headers["content-type"] == "application/json"
+    assert "mcp-session-id" not in listed.headers  # stateless: no session to lose when the server restarts
+    assert [tool["name"] for tool in listed.json()["result"]["tools"]] == (READ_ONLY if read_only else [tool["name"] for tool in TOOLS])
+    result = called.json()["result"]
+    assert result["isError"] is False and result["structuredContent"]["ok"] is True
+
+
+def test_http_refuses_a_request_without_the_token_and_says_nothing_more(caplog: pytest.LogCaptureFixture) -> None:
+    with _http() as client, caplog.at_level(logging.WARNING):
+        answers = [
+            client.post("/mcp", json={}),
+            client.post("/mcp", json={}, headers={"Authorization": "Bearer " + "y" * 43}),
+            client.post("/mcp", json={}, headers={"Authorization": TOKEN}),  # no scheme
+            client.get("/other"),
+        ]
+        assert _post(client, "tools/list", Authorization=f"bearer {TOKEN}").status_code == 200  # the scheme's case does not matter
+    assert [(answer.status_code, answer.json(), answer.headers["www-authenticate"]) for answer in answers] == [(401, {"error": "unauthorized"}, "Bearer")] * 4
+    assert "refused a request from testclient: no or wrong token" in caplog.text and TOKEN not in caplog.text
+
+
+def test_http_answers_only_to_its_own_host_names_and_local_origins() -> None:
+    with _http() as client:
+        hosts = {
+            host: _post(client, "tools/list", Host=host).status_code
+            for host in ["evil.example:8765", "evil.example", "fitatu-mcp:8765", "fitatu-mcp", "localhost:8765", "127.0.0.1:8765", "[fd7a::1]:8765", "[fd7a::1]"]
+        }
+        origins = {origin: _post(client, "tools/list", Origin=origin).status_code for origin in ["https://evil.example", "http://localhost:6274"]}
+    assert hosts == {"evil.example:8765": 421, "evil.example": 421, "fitatu-mcp:8765": 200, "fitatu-mcp": 200, "localhost:8765": 200, "127.0.0.1:8765": 200, "[fd7a::1]:8765": 200, "[fd7a::1]": 200}
+    assert origins == {"https://evil.example": 403, "http://localhost:6274": 200}
+
+
+def test_http_needs_a_strong_token_before_it_starts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("FITATU_MCP_TOKEN", raising=False)
+    monkeypatch.delenv("FITATU_MCP_TOKEN_FILE", raising=False)
+    with patch("fitatu_api.mcp_server.uvicorn.run") as run:
+        for env in [{}, {"FITATU_MCP_TOKEN": "short"}, {"FITATU_MCP_TOKEN_FILE": str(tmp_path / "missing")}]:
+            with monkeypatch.context() as scoped, pytest.raises(SystemExit, match="FITATU_MCP_TOKEN"):
+                for key, value in env.items():
+                    scoped.setenv(key, value)
+                main(["--http", "--demo"])
+        run.assert_not_called()
+        (tmp_path / "token").write_text(TOKEN + "\n", encoding="utf-8")  # a secret file ends with a newline
+        monkeypatch.setenv("FITATU_MCP_TOKEN_FILE", str(tmp_path / "token"))
+        main(["--http", "--demo"])
+    for weak in ["", "x" * 31, TOKEN[:-1] + " "]:  # a library caller has no CLI check: "" would let "Bearer" with no value in
+        with pytest.raises(ValueError, match="32 or more"):
+            http_app(build_server(FitatuTools.demo, demo=True), weak)
+    assert run.call_args.kwargs == {"host": "127.0.0.1", "port": 8765, "log_config": None, "log_level": "info", "access_log": False}
+
+
+def test_http_options_reach_the_server_and_need_http(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fitatu_api.__main__ import main as fitatu_api
+
+    monkeypatch.setenv("FITATU_MCP_TOKEN", TOKEN)
+    with (
+        patch("fitatu_api.mcp_server.uvicorn.run") as run,
+        patch("fitatu_api.mcp_server.build_server") as build,
+        patch("fitatu_api.mcp_server.http_app") as app,
+    ):
+        main(["--http", "--host", "0.0.0.0", "--port", "9000", "--allow-host", "fitatu-mcp", "--allow-host", "nas.local", "--read-only", "--tools", "get_today"])
+        with pytest.raises(SystemExit, match="need --http"):
+            fitatu_api(["mcp", "--port", "9000"])  # else a stdio server would start, quietly
+    assert (run.call_args.kwargs["host"], run.call_args.kwargs["port"]) == ("0.0.0.0", 9000)
+    assert app.call_args.kwargs["hosts"] == ["0.0.0.0", "fitatu-mcp", "nas.local"]
+    with patch("fitatu_api.mcp_server.uvicorn.run") as run, patch("fitatu_api.mcp_server.http_app") as app:
+        main(["--http", "--host", "fd7a:115c:a1e0::1"])
+    # uvicorn listens on the bare address; the Host header carries it in brackets.
+    assert (run.call_args.kwargs["host"], app.call_args.kwargs["hosts"]) == ("fd7a:115c:a1e0::1", ["[fd7a:115c:a1e0::1]"])
+    assert build.call_args.kwargs["read_only"] is True and build.call_args.kwargs["tools"] == ["get_today"]
+
+
+def test_fitatu_mcp_over_http_answers_with_the_token_and_never_logs_it() -> None:
+    with socket.socket() as probe:  # a free port; another process taking it in between is unlikely
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    env = {**os.environ, "PYTHONPATH": str(SRC), "FITATU_MCP_TOKEN": TOKEN, "FITATU_LOG_LEVEL": "DEBUG"}
+    process = subprocess.Popen([sys.executable, "-m", "fitatu_api.mcp_server", "--http", "--demo", "--port", str(port)], env=env, stderr=subprocess.PIPE, text=True)
+    url = f"http://127.0.0.1:{port}/mcp"
+
+    async def run() -> tuple[list[Any], Any]:
+        async with httpx2.AsyncClient(headers=BEARER) as http, Client(streamable_http_client(url, http_client=http)) as session:
+            return (await session.list_tools()).tools, await session.call_tool("get_today", {})
+
+    try:
+        for _ in range(100):  # up to 20 s for the interpreter and uvicorn to start
+            with contextlib.suppress(OSError), socket.create_connection(("127.0.0.1", port), 0.2):
+                break
+            time.sleep(0.2)
+        listed, today = anyio.run(run)
+    finally:
+        process.terminate()
+        err = process.communicate(timeout=10)[1]
+    assert [tool.name for tool in listed] == [tool["name"] for tool in TOOLS]
+    assert _envelope(today)["ok"] is True
+    assert f"Uvicorn running on http://127.0.0.1:{port}" in err and TOKEN not in err
