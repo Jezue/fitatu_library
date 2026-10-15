@@ -2,6 +2,15 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Jezue/fitatu-api",
   "title": "Fitatu",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/Jezue/fitatu_library/main/docs/assets/logo.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "512x512"
+      ]
+    }
+  ],
   "description": "Unofficial Fitatu calorie counter: read and log food, weight, water and workouts.",
   "repository": {
     "url": "https://github.com/Jezue/fitatu_library",

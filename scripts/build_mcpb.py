@@ -45,6 +45,7 @@ def build(out_dir: Path) -> Path:
         archive.writestr("pyproject.toml", PYPROJECT)
         archive.write(ROOT / "mcpb" / "server" / "main.py", "server/main.py")
         archive.write(ROOT / "LICENSE", "LICENSE")
+        archive.write(ROOT / "docs" / "assets" / "logo.png", "icon.png")
     return bundle
 
 

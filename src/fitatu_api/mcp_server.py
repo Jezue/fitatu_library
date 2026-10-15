@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 READ_ONLY_NOTE = "- This server is read-only: it cannot change the diary. For changes, send the user to the Fitatu app.\n"
 DEMO_NOTE = "- This is a demo: the diary is made up and kept in memory, and nothing reaches Fitatu. Say so when you show it.\n"
 WEBSITE = "https://github.com/Jezue/fitatu_library"
+ICON = "https://raw.githubusercontent.com/Jezue/fitatu_library/main/docs/assets/logo.png"  # 512x512, also in server.json
 # Claude Code asks before every call of such a tool, also where calls are otherwise allowed without
 # asking (https://code.claude.com/docs/en/mcp, "Require approval for a specific tool"): a deleted
 # recipe cannot be brought back.
@@ -240,6 +241,7 @@ def build_server(
         title="Fitatu",
         description="Unofficial MCP server for the Fitatu calorie counter: food diary, meals, weight, body measurements and water.",
         website_url=WEBSITE,
+        icons=[types.Icon(src=ICON, mime_type="image/png", sizes=["512x512"])],
         instructions=SYSTEM_PROMPT + (READ_ONLY_NOTE if read_only else "") + (DEMO_NOTE if demo else ""),
         on_list_tools=list_tools,
         on_call_tool=call_tool,

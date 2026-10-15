@@ -459,10 +459,11 @@ def test_the_mcpb_bundle_names_this_version_its_tools_and_the_options_it_passes(
     spec.loader.exec_module(builder)
     bundle = builder.build(tmp_path)
     with zipfile.ZipFile(bundle) as archive:
-        assert sorted(archive.namelist()) == ["LICENSE", "manifest.json", "pyproject.toml", "server/main.py"]
+        assert sorted(archive.namelist()) == ["LICENSE", "icon.png", "manifest.json", "pyproject.toml", "server/main.py"]
         manifest = json.loads(archive.read("manifest.json"))
         pyproject = archive.read("pyproject.toml").decode()
     assert bundle.name == f"fitatu-{__version__}.mcpb" and manifest["version"] == __version__
+    assert manifest["icon"] == "icon.png"
     assert f'"fitatu-api[mcp]=={__version__}"' in pyproject  # uv run installs the release the bundle was built for
     assert [tool["name"] for tool in manifest["tools"]] == [tool["name"] for tool in TOOLS]
     assert (manifest["manifest_version"], manifest["server"]["type"], manifest["server"]["entry_point"]) == ("0.4", "uv", "server/main.py")

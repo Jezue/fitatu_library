@@ -14,6 +14,9 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Claude Code), the rules for using the tools well, common tasks, free vs Premium accounts and
   what to do on each error. A test checks it against the format and that it names only real
   tools.
+- A logo (`docs/assets/logo.png`, a pixel-art onion in a chat bubble). The server sends it as its
+  icon at start-up, the Claude Desktop bundle carries it as `icon.png`, and `server.json` lists it
+  for the MCP Registry.
 
 ## [0.5.1] - 2026-10-15
 
