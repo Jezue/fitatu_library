@@ -74,6 +74,9 @@ def test_from_session_resolves_argument_then_env_then_home(
     assert FitatuApiClient.from_session().auth.fitatu_user_id == "2"
     monkeypatch.setenv("FITATU_SESSION", str(env))
     assert FitatuApiClient.from_session().auth.fitatu_user_id == "3"
+    monkeypatch.setenv("FITATU_SESSION", "${HOME}/.fitatu/session.json")  # as Claude Desktop passes it
+    assert FitatuApiClient.from_session().auth.fitatu_user_id == "1"
+    monkeypatch.setenv("FITATU_SESSION", str(env))
     client = FitatuApiClient.from_session(explicit)
     assert client.auth.fitatu_user_id == "4"
     assert client.token_store is not None and client.token_store.path == explicit
