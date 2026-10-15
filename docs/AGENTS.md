@@ -656,6 +656,10 @@ mcp_servers:
 
 `hermes mcp test fitatu` lists the tools, and `/reload-mcp` picks up the change in a running
 session. With another session file, add `env: {FITATU_SESSION: "/path/to/session.json"}`.
+The skill [`skills/fitatu-diary`](https://github.com/Jezue/fitatu_library/tree/main/skills/fitatu-diary)
+([Agent Skills](https://agentskills.io) format, which Hermes reads) carries the setup and the
+rules of this page in one `SKILL.md`; copy that directory into Hermes' skills folder, or
+install it from a skills hub once it is published there.
 
 **Claude Desktop bundle (`.mcpb`).** Download `fitatu-<version>.mcpb` from the
 [latest release](https://github.com/Jezue/fitatu_library/releases/latest) and open it, or build one with

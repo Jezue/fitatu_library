@@ -141,7 +141,9 @@ Without an account, `fitatu-mcp --demo` (or `FitatuTools.demo()`) serves a small
 kept in memory. For Claude Desktop, each [GitHub release](https://github.com/Jezue/fitatu_library/releases/latest)
 has `fitatu-<version>.mcpb`, installed with a double click (log in with `fitatu-api login` first). Without installing anything, `uvx --from "fitatu-api[mcp]" fitatu-mcp` runs the server. It is
 listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as
-`io.github.Jezue/fitatu-api` (`server.json`).
+`io.github.Jezue/fitatu-api` (`server.json`). For Hermes Agent and other hosts that read
+[Agent Skills](https://agentskills.io), [`skills/fitatu-diary/SKILL.md`](https://github.com/Jezue/fitatu_library/blob/main/skills/fitatu-diary/SKILL.md)
+tells the agent how to set the server up and use its tools well.
 
 The host's permission prompt is the confirmation step, so keep it on for the destructive tools.
 Claude Desktop, uvx and what the server does:
