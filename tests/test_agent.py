@@ -701,6 +701,19 @@ def test_an_error_does_not_show_the_user_id(tools: FitatuTools, fake: FakeFitatu
     echoed = FitatuApiError(f"GET /x -> 403: no plan for user {RECORDED_USER_ID}", status_code=403)
     with patch.object(tools.client.summary, "get_top_products", side_effect=echoed):
         assert tools.call("get_top_foods", ARGUMENTS["get_top_foods"])["error"]["message"] == "GET /x -> 403: no plan for user <user>"
+    # Nor from the Premium check's profile read or a product change.
+
+    def fails(message: str, status: int) -> Any:
+        def reply(params: Any) -> Any:
+            raise FitatuApiError(message, status_code=status)
+
+        return reply
+
+    fake.routes[("GET", f"/users/{RECORDED_USER_ID}")] = fails(f"GET /users/{RECORDED_USER_ID} -> 503", 503)
+    assert tools.call("search_recipes", {"meal": "dinner"})["error"]["message"] == "GET /users/<user> -> 503"
+    fake.routes[("PUT", f"/products/{MY_PRODUCT_ID}")] = fails(f"PUT /products/{MY_PRODUCT_ID} -> 400: owner {RECORDED_USER_ID}", 400)
+    error = tools.call("update_food", {"food_id": MY_PRODUCT_ID, "energy_kcal": 410})["error"]
+    assert error["message"] == f"PUT /products/{MY_PRODUCT_ID} -> 400: owner <user>"
 
 
 def test_a_refusal_for_want_of_premium_is_not_trusted_for_good(tools: FitatuTools, fake: FakeFitatuServer) -> None:
