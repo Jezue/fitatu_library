@@ -140,9 +140,9 @@ Every tool but `get_top_foods` works on an account without Fitatu Premium (check
 - `get_report` reads its progress the same way, and gives `top_foods` null with a
   `top_foods_note` saying that the top foods need Premium.
 - A free account's macro goals are a range (`target_min` below `target_max`; `left` counts
-  from `target_max`). On a Premium account a one-day range summary gave the two equal; whether
-  the day-by-day route `get_progress` reads there does too is not checked yet (the live tests
-  compare the two on a Premium session). A free account's meals in `get_day` have
+  from `target_max`). On a Premium account the two are equal, and the day-by-day route
+  `get_progress` reads there gives the same goals as each day's summary (checked live
+  2026-10-15; the live tests compare the two). A free account's meals in `get_day` have
   `recommended_percent` null.
 - Catalog recipes that `search_recipes` marks `premium` can still be read with
   `get_food_measures`.
@@ -643,6 +643,19 @@ Put `"--read-only"` in `args` for the read tools only. For uvx, `command` is the
 
 Cursor (`~/.cursor/mcp.json`) and other hosts
 that read an `mcpServers` file take the same entry.
+
+**Hermes Agent** ([Nous Research](https://hermes-agent.nousresearch.com/docs/guides/use-mcp-with-hermes))
+reads MCP servers from `mcp_servers:` in its `config.yaml`:
+
+```yaml
+mcp_servers:
+  fitatu:
+    command: "uvx"
+    args: ["--from", "fitatu-api[mcp]", "fitatu-mcp"]   # add "--read-only" for the read tools only
+```
+
+`hermes mcp test fitatu` lists the tools, and `/reload-mcp` picks up the change in a running
+session. With another session file, add `env: {FITATU_SESSION: "/path/to/session.json"}`.
 
 **Claude Desktop bundle (`.mcpb`).** Download `fitatu-<version>.mcpb` from the
 [latest release](https://github.com/Jezue/fitatu_library/releases/latest) and open it, or build one with
