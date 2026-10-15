@@ -22,6 +22,16 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   arguments that put back what it changed. Checked live on an account without Premium
   (2026-10-15): manual goals and a custom split work there too, and earlier days keep their
   goals. `fitatu-mcp --read-only` does not serve it.
+- `get_measurement_history` tool: one body measurement, or body fat, over time, newest first.
+- `get_profile` tool: height, weight (current, start, target), BMI, goal and pace, activity
+  level, sex, age and whether the account has Premium, read from the settings, with nothing that
+  identifies the user.
+- `search_food` takes `locale` to search another country's catalog (the 15 Fitatu took, checked
+  live 2026-10-15).
+
+### Changed
+
+- `measurements.get_body_part_history()` takes `fat_percentage` (the route's `fatPercentage`).
 
 ## [0.5.1] - 2026-10-15
 

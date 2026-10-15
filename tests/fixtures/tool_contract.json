@@ -37,6 +37,16 @@
       "openWorldHint": false
     }
   },
+  "get_profile": {
+    "parameters": {},
+    "required": [],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
   "get_range_summary": {
     "parameters": {
       "from_date": "string",
@@ -122,6 +132,7 @@
   "search_food": {
     "parameters": {
       "limit": "integer",
+      "locale": "string",
       "phrase": "string"
     },
     "required": [
@@ -238,6 +249,23 @@
       "to_date": "string"
     },
     "required": [],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "get_measurement_history": {
+    "parameters": {
+      "body_part": "string",
+      "from_date": "string",
+      "limit": "integer",
+      "to_date": "string"
+    },
+    "required": [
+      "body_part"
+    ],
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,

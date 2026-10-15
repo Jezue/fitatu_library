@@ -28,6 +28,7 @@ def demo_arguments(tools: FitatuTools) -> dict[str, dict[str, Any]]:
         "get_today": {},
         "get_day": {"date": day},
         "get_targets": {"date": day},
+        "get_profile": {},
         "get_range_summary": {"from_date": yesterday, "to_date": day},
         "get_progress": {"from_date": yesterday, "to_date": day},
         "get_top_foods": {"from_date": yesterday, "to_date": day, "nutrient": "protein"},
@@ -42,6 +43,7 @@ def demo_arguments(tools: FitatuTools) -> dict[str, dict[str, Any]]:
         "get_my_foods": {},
         "get_weight_history": {"from_date": month_ago, "to_date": day},
         "get_body_measurements": {"from_date": month_ago, "to_date": day},
+        "get_measurement_history": {"body_part": "waist"},
         "get_water": {"date": day},
         "search_activity": {"phrase": "bieganie"},
         "get_fasting": {"from_date": yesterday, "to_date": day},
@@ -111,6 +113,15 @@ def test_goals_set_in_the_demo_show_in_its_targets_progress_and_water() -> None:
     assert back["ok"] and back["automatic"] and back["energy"] == 2000
 
 
+def test_the_demo_profile_follows_a_weigh_in_for_today_and_the_sizes_come_newest_first() -> None:
+    tools = FitatuTools.demo()
+    assert [entry["value"] for entry in tools.get_measurement_history("waist")] == [90, 92]
+    profile = tools.get_profile()
+    assert profile["weight_kg"] == 80.5 and profile["goal"] == "lose" and profile["premium"]["active"]
+    tools.log_weight(tools.get_today()["date"], 79.9)
+    assert tools.get_profile()["weight_kg"] == 79.9
+
+
 def test_the_demo_refuses_what_fitatu_would_and_names_what_it_does_not_serve() -> None:
     tools = FitatuTools.demo()
     assert tools.call("delete_recipe", {"recipe_id": 3000001})["error"]["error_type"] == "validation"  # a catalog recipe
@@ -118,7 +129,7 @@ def test_the_demo_refuses_what_fitatu_would_and_names_what_it_does_not_serve() -
     error = tools.call("add_food", {"date": "2027-01-03", "meal": "snack", "food_id": 1, "food_type": "RECIPE", "quantity": 1})["error"]
     assert error["error_type"] == "sync_rejected"
     with pytest.raises(Exception, match="the demo does not serve"):
-        tools.client.request("GET", "/users/1000001/subscriptions")
+        tools.client.request("GET", "/users/1000001/measurements/chart/weight")
 
 
 def test_the_demo_data_is_small_and_made_up() -> None:

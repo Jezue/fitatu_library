@@ -335,12 +335,25 @@ class DemoBackend:
         for macro, kcal in (("protein", 4), ("fat", 9), ("carbohydrate", 4)):
             grams = sum(targets[macro]) / 2
             diet |= {f"{macro}Weight": grams, f"{macro}Percentage": round(grams * kcal * 100 / targets["energy"])}
+        profile = _DATA["profile"]
+        diet |= {"weightChangeDirection": profile["direction"], "weightChangeSpeedKg": profile["pace_kg"]}
         diet |= {"manualEnergyTarget": self.manual is not None, **(self.manual or {})}
         since = (self.today - dt.timedelta(days=30)).isoformat()
+        # The profile's current weight is the newest weigh-in up to today, so a log_weight for today shows, as live.
+        today = self.today.isoformat()
+        weight = next((values["weight"] for day, values in sorted(self.measurements.items(), reverse=True) if day <= today and values.get("weight")), None)
         return {
             "date": f"{since}T00:00:00+00:00",
+            "userSettings": {
+                "sex": profile["sex"],
+                "age": profile["age"],
+                "heightCm": profile["height_cm"],
+                "weightStartKg": profile["start_kg"],
+                "weightTargetKg": profile["target_kg"],
+                "weightCurrentKg": weight,
+            },
             "userDietSettings": diet,
-            "calculatedValues": {"BMR": targets["bmr"], "TMR": targets["tmr"]},
+            "calculatedValues": {"BMR": targets["bmr"], "TMR": targets["tmr"], "PAL": round(targets["tmr"] / targets["bmr"], 2)},
             "waterSettings": {"unitCapacity": self.glass_ml},
         }
 
@@ -419,6 +432,16 @@ class DemoBackend:
         page, limit = int(params.get("page", 1)), int(params.get("limit", 41))
         return entries[(page - 1) * limit : page * limit]
 
+    def size_history(self, *, part: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
+        end = params.get("toDate", self.today.isoformat())  # without toDate Fitatu stops at today (checked live)
+        entries = [
+            {"date": day, "value": values[part]}
+            for day, values in sorted(self.measurements.items(), reverse=True)
+            if values.get(part) is not None and params.get("fromDate", day) <= day <= end
+        ]
+        page, limit = int(params.get("page", 1)), int(params.get("limit", 41))
+        return entries[(page - 1) * limit : page * limit]
+
     def sizes(self, *, params: dict[str, Any], **_: Any) -> dict[str, Any]:
         days = [day for day in sorted(self.measurements) if params.get("fromDate", day) <= day <= params.get("toDate", day)]
         reply = {}
@@ -441,6 +464,10 @@ class DemoBackend:
 
     def profile(self, **_: Any) -> dict[str, Any]:
         return {"id": self.user_id, "timezone": "Europe/Warsaw", "weightUnit": "KG", "sizeUnit": "CM"}
+
+    def subscriptions(self, **_: Any) -> dict[str, Any]:
+        # The demo serves the Premium-only routes (get_top_foods, the macros day by day), so it has a plan.
+        return {"subscriptions": [{"startDate": self._day("-30"), "endDate": self._day("335")}]}
 
     def get_water(self, *, day: str, **_: Any) -> dict[str, Any]:
         water = _DATA["water"]
@@ -502,9 +529,11 @@ _ROUTES = [
     ("GET", rf"/diet-plan/{_U}/summary-product/(?P<nutrient>\w+)/custom", "top_foods"),
     ("GET", rf"/users/{_U}/measurements/summary/weight", "weights"),
     ("GET", rf"/users/{_U}/measurements/summary/size", "sizes"),
+    ("GET", rf"/users/{_U}/measurements/size/(?P<part>\w+)", "size_history"),
     ("GET", rf"/users/{_U}/measurements/{_D}", "measurement"),
     ("PUT", rf"/users/{_U}/measurements/{_D}", "set_measurement"),
     ("GET", rf"/users/{_U}", "profile"),
+    ("GET", rf"/users/{_U}/subscriptions", "subscriptions"),
     ("GET", rf"/water/{_U}/{_D}", "get_water"),
     ("PUT", rf"/water/{_U}/{_D}", "set_water"),
     ("GET", r"/search/activity/(?P<phrase>[^/]+)", "search_activity"),

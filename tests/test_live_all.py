@@ -945,6 +945,7 @@ class TestToolsReadOnly:
             "get_today": {},
             "get_day": {"date": test_date.isoformat()},
             "get_targets": {"date": today.isoformat()},
+            "get_profile": {},
             "get_range_summary": {"from_date": (today - timedelta(days=6)).isoformat(), "to_date": today.isoformat()},
             "get_progress": {"from_date": (today - timedelta(days=6)).isoformat(), "to_date": today.isoformat()},
             "get_top_foods": {"from_date": (today - timedelta(days=6)).isoformat(), "to_date": today.isoformat()},
@@ -959,6 +960,7 @@ class TestToolsReadOnly:
             "get_my_foods": {},
             "get_weight_history": {"limit": 5},
             "get_body_measurements": {"from_date": (today - timedelta(days=365)).isoformat(), "to_date": today.isoformat()},
+            "get_measurement_history": {"body_part": "waist", "limit": 5},
             "get_water": {"date": test_date.isoformat()},
             "search_activity": {"phrase": "bieganie", "limit": 3},
             "get_fasting": {"from_date": (today - timedelta(days=6)).isoformat(), "to_date": today.isoformat()},
@@ -989,6 +991,19 @@ class TestToolsReadOnly:
                 for error in Draft202012Validator(output_schema(name)).iter_errors(result)
             ]
             assert not misfits, misfits
+
+    def test_get_profile_leaves_out_what_identifies_the_user(self, tools: FitatuTools, client: FitatuApiClient, user_id: str) -> None:
+        profile = _ok(tools.call("get_profile", {}))
+        keys = {"height_cm", "weight_kg", "start_weight_kg", "target_weight_kg", "bmi", "goal", "pace_kg_per_week", "pal", "sex", "age", "premium"}
+        assert set(profile) == keys, "get_profile's keys changed"
+        assert profile["premium"] == client.user_settings.get_premium(user_id), "premium differs from get_premium"
+        text = json.dumps(profile)
+        assert "@" not in text and user_id not in text, "get_profile carries an e-mail or the user id"
+        assert "birthDate" not in profile and "email" not in profile, "get_profile carries a birth date or an e-mail"
+
+    def test_search_food_reads_another_countrys_catalog(self, tools: FitatuTools, client: FitatuApiClient) -> None:
+        assert _ok(tools.call("search_food", {"phrase": "eggs", "locale": "en_GB"})), "no en_GB hit for 'eggs'"
+        assert any(hit.get("lang") == "en_GB" for hit in client.search_food("eggs", locale="en_GB")), "no hit comes from the en_GB catalog"
 
 
 class TestFreeAndPremiumReadOnly:
@@ -1115,6 +1130,10 @@ class TestTools:
             # log_measurements keeps the day's weight, as its description says.
             values = tuple(None if stored.get(key) is None else float(stored[key]) for key in ("weight", "waist", "fatPercentage"))
             assert values == (70.5, 80.0, 20.0), "the day does not hold the logged weight, waist and body fat"
+            on_day = {"from_date": day.isoformat(), "to_date": day.isoformat()}
+            waist = _ok(tools.call("get_measurement_history", {"body_part": "waist", **on_day}))
+            fat = _ok(tools.call("get_measurement_history", {"body_part": "fat_percentage", **on_day}))
+            assert (waist, fat) == ([{"date": day.isoformat(), "value": 80}], [{"date": day.isoformat(), "value": 20}]), "the size history lacks the day"
         finally:
             client.measurements.delete_day(user_id, day)
             assert client.measurements.get_day(user_id, day) is None, f"cleanup failed: delete the measurement on {day} by hand"

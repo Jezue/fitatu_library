@@ -107,6 +107,7 @@ ARGUMENTS: dict[str, dict[str, Any]] = {
     "get_today": {},
     "get_day": {"date": DAY},
     "get_targets": {"date": DAY},
+    "get_profile": {},
     "get_range_summary": {"from_date": DAY, "to_date": DAY},
     "get_progress": {"from_date": DAY, "to_date": NEXT_DAY},
     "get_top_foods": {"from_date": DAY, "to_date": DAY, "nutrient": "protein"},
@@ -121,6 +122,7 @@ ARGUMENTS: dict[str, dict[str, Any]] = {
     "get_my_foods": {"phrase": "owsianka"},
     "get_weight_history": {"from_date": WEIGHT_DAY, "to_date": WEIGHT_DAY},
     "get_body_measurements": {"from_date": WEIGHT_DAY, "to_date": WEIGHT_DAY},
+    "get_measurement_history": {"body_part": "waist", "from_date": WEIGHT_DAY, "to_date": WEIGHT_DAY},
     "get_water": {"date": DAY},
     "search_activity": {"phrase": "bieganie"},
     "get_fasting": {"from_date": DAY, "to_date": DAY},
@@ -169,6 +171,7 @@ READS = {"get_today", "get_day", "get_targets", "get_range_summary", "get_progre
 READS |= {"get_recent_foods", "get_top_foods", "get_report", "get_shopping_list"}
 READS |= {"get_favorite_foods", "get_my_foods", "get_weight_history", "get_body_measurements", "get_water", "search_activity"}
 READS |= {"preview_removal", "search_recipes", "get_fasting", "get_habits", "get_good_days"}
+READS |= {"get_profile", "get_measurement_history"}
 
 
 def fake_with_every_reply() -> FakeFitatuServer:
@@ -230,8 +233,10 @@ def fake_with_every_reply() -> FakeFitatuServer:
         {"completed": False, "enrolledDate": "2027-01-01", "habit": water, "habitItems": [{"dayNumber": 3, "date": DAY}, {"dayNumber": 1, "date": "2027-01-01"}]}
     ]
     server.routes[("GET", f"/habits/{RECORDED_USER_ID}/good-days")] = ["2026-12-30", DAY, "2027-01-01"]
-    # set_targets reads today's settings and PATCHes them; the reply is the whole new settings.
+    # set_targets reads today's settings and PATCHes them; the reply is the whole new settings. get_profile
+    # reads them too, and whether the account has Premium.
     server.routes[("GET", f"/users/{RECORDED_USER_ID}/settings-new/{TODAY}")] = recorded("settings_new")
+    server.routes[("GET", f"/users/{RECORDED_USER_ID}/subscriptions")] = {"subscriptions": []}
     server.routes[("PATCH", f"/users/{RECORDED_USER_ID}/settings-new")] = settings_after(MANUAL_1800)
     return server
 
@@ -727,6 +732,13 @@ def test_food_search_hits_are_trimmed_to_what_add_food_needs(tools: FitatuTools,
     assert fake.requests[-1]["params"]["limit"] == 10
 
 
+def test_search_food_searches_another_countrys_catalog_with_locale(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    data(tools, "search_food", phrase="jajko kurze", locale="en_GB")
+    assert fake.requests[-1]["params"]["locale"] == "en_GB"
+    data(tools, "search_food", phrase="jajko kurze")
+    assert fake.requests[-1]["params"]["locale"] == "pl_PL"  # the session's own
+
+
 def test_search_recipes_sends_the_energy_filter_and_flags_premium_recipes(tools: FitatuTools, fake: FakeFitatuServer) -> None:
     hits = data(tools, "search_recipes", phrase="kurczak", max_energy_kcal=500, limit=5)
     assert [(hit["food_id"], hit["type"], hit["energy_kcal"], hit["premium"]) for hit in hits] == [
@@ -865,6 +877,41 @@ def test_get_body_measurements_lists_only_the_parts_with_values(tools: FitatuToo
         "fatPercentage": {"startValue": 20.5, "endValue": 19.8, "difference": -0.7}
     }
     assert data(tools, "get_body_measurements")["measurements"][0]["body_part"] == "fat_percentage"
+
+
+def test_get_measurement_history_reads_one_part(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    assert data(tools, "get_measurement_history", body_part="waist", from_date=WEIGHT_DAY, to_date=WEIGHT_DAY) == [{"date": WEIGHT_DAY, "value": 80}]
+    assert fake.requests[-1]["params"] == {"fromDate": WEIGHT_DAY, "toDate": WEIGHT_DAY, "page": 1, "limit": 41}
+    fake.routes[("GET", f"/users/{RECORDED_USER_ID}/measurements/size/fatPercentage")] = [{"date": WEIGHT_DAY, "value": 20}]
+    assert data(tools, "get_measurement_history", body_part="fat_percentage") == [{"date": WEIGHT_DAY, "value": 20}]
+    assert fake.requests[-1]["path"] == f"/users/{RECORDED_USER_ID}/measurements/size/fatPercentage"
+
+
+def test_get_profile_reads_the_settings_and_leaves_out_what_identifies(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    profile = data(tools, "get_profile")
+    assert profile == {
+        "height_cm": 180,
+        "weight_kg": 80,
+        "start_weight_kg": 85,
+        "target_weight_kg": 75,
+        "bmi": 24.7,
+        "goal": "maintain",
+        "pace_kg_per_week": 0,
+        "pal": 1.4,
+        "sex": "male",
+        "age": 36,
+        "premium": {"active": False, "end_date": None},
+    }
+    # GET /users/{id} carries the e-mail, username and ids; the birth date and user id are dropped
+    assert ("GET", f"/users/{RECORDED_USER_ID}") not in [(r["method"], r["path"]) for r in fake.requests]
+    assert "1990-01-01" not in json.dumps(profile) and RECORDED_USER_ID not in json.dumps(profile)
+    settings = recorded("settings_new")
+    settings["userDietSettings"]["weightChangeDirection"] = -1
+    settings["userSettings"] |= {"sex": 2, "heightCm": None}
+    fake.routes[("GET", f"/users/{RECORDED_USER_ID}/settings-new/{TODAY}")] = settings
+    assert {key: data(tools, "get_profile")[key] for key in ("goal", "sex", "bmi")} == {"goal": "lose", "sex": "female", "bmi": None}
+    settings["userSettings"]["sex"] = 0  # not known
+    assert data(tools, "get_profile")["sex"] is None
 
 
 # -- writes -------------------------------------------------------------------------------
@@ -1513,6 +1560,10 @@ def test_an_id_from_the_other_list_is_not_found_and_the_day_keeps_it(tools: Fita
         ("search_food", {"phrase": "jajko", "limit": 0}, "validation"),
         ("search_food", {"phrase": "jajko", "limit": 51}, "validation"),
         ("get_weight_history", {"limit": 42}, "validation"),
+        ("get_measurement_history", {"body_part": "knee"}, "validation"),
+        ("get_measurement_history", {"body_part": "fatPercentage"}, "validation"),
+        ("get_measurement_history", {"body_part": "waist", "limit": 42}, "validation"),
+        ("search_food", {"phrase": "jajko", "locale": "pl"}, "validation"),
         ("get_progress", {"from_date": "2027-01-01", "to_date": "2027-03-04"}, "validation"),  # 63 days
         ("preview_removal", {"date": DAY, "row_ids": []}, "validation"),
         ("search_food", {"phrase": "jajko", "limit": True}, "validation"),

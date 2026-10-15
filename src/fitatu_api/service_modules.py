@@ -473,12 +473,18 @@ class MeasurementsModule:
         page: int = 1,
         limit: int = 41,
     ) -> list[dict[str, Any]]:
-        """Return ``[{date, value}, ...]`` for one of ``BODY_PARTS``."""
+        """Return one page of ``[{date, value}, ...]`` for one of ``BODY_PARTS`` or ``"fat_percentage"``.
+
+        Newest first. Without ``from_date`` and ``to_date`` the page holds every entry up to
+        ``limit`` up to today: later days are left out (checked live 2026-10-15).
+        """
         uid = validate_numeric_id(user_id, "user_id")
-        if body_part not in self.BODY_PARTS:
-            raise FitatuValidationError(f"body_part must be one of {self.BODY_PARTS}, got {body_part!r}")
+        parts = (*self.BODY_PARTS, "fat_percentage")
+        if body_part not in parts:
+            raise FitatuValidationError(f"body_part must be one of {parts}, got {body_part!r}")
+        segment = "fatPercentage" if body_part == "fat_percentage" else body_part
         params: dict[str, Any] = {**_date_range_params(from_date, to_date), **_page_params(page, limit)}
-        data = self._client.request("GET", f"/users/{uid}/measurements/size/{body_part}", params=params)
+        data = self._client.request("GET", f"/users/{uid}/measurements/size/{segment}", params=params)
         return as_dict_list(data)
 
     def get_weight_chart(

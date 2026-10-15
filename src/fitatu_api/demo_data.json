@@ -10,6 +10,7 @@
     "supper": ["Przekąska", "21:00", 5]
   },
   "targets": {"energy": 2000, "protein": [90, 110], "fat": [60, 74], "carbohydrate": [225, 275], "bmr": 1600, "tmr": 2100},
+  "profile": {"sex": 1, "age": 34, "height_cm": 178, "start_kg": 84.0, "target_kg": 76.0, "direction": -1, "pace_kg": 0.5},
   "products": {
     "2000001": {"name": "Jajko kurze", "nutrition": [140, 12.5, 9.7, 0.6, 0, 0.6, 0.3], "measures": [[46, "piece", 60]]},
     "2000002": {"name": "Płatki owsiane", "nutrition": [370, 13, 7, 60, 10, 1, 0], "measures": [[52, "tablespoon", 10]]},

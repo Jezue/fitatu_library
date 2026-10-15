@@ -71,7 +71,7 @@ How writes, row ids and removals work: [docs/PLANNER.md](https://github.com/Jezu
 
 ## For AI agents
 
-`FitatuTools` exposes 41 tools (read the day, search food, log food, weight, water,
+`FitatuTools` exposes 43 tools (read the day, search food, log food, weight, water,
 workouts and private recipes, ...) with JSON Schema inputs and read-only / destructive / idempotent annotations.
 `call()` never raises: it returns `{"ok": true, "data": ...}` or `{"ok": false, "error":
 {"error_type", "message", "retryable", "hint", ...}}`, so the model can read what went wrong.
@@ -158,11 +158,11 @@ Claude Desktop, uvx and what the server does:
 | Activities | `planner.add_activity` / `remove_activity`, `client.activities` (catalog, search, recent) | `search_activity`, `add_activity`, `remove_activity` |
 | Foods | `search_food`, `get_product_details`, `get_recipe`, recipe catalog and its search, `client.foods` (favourites, recent) | `search_food`, `search_recipes`, `find_by_barcode`, `get_food_measures`, `get_recent_foods`, `get_favorite_foods`, `set_favorite` |
 | The user's own foods | `search_user_food`, `create_recipe`, `update_recipe`, `delete_recipe` | `get_my_foods`; `create_recipe`, `update_recipe` and `delete_recipe` for private recipes only, the user's own |
-| Measurements | `client.measurements`: weight and body sizes per day, history, charts | `get_weight_history`, `get_body_measurements`, `log_weight`, `log_measurements` |
+| Measurements | `client.measurements`: weight and body sizes per day, history, charts | `get_weight_history`, `get_body_measurements`, `get_measurement_history`, `log_weight`, `log_measurements` |
 | Water | `client.water` | `get_water`, `set_water` |
 | Summary and export | `client.summary`: range totals, nutrient per day, top products, diary export | `get_range_summary`, `get_progress`, `get_top_foods`, `get_report`, `get_shopping_list` (worked out from the planned rows) |
 | Fasting and habits | `client.fasting` (schemes, eating periods per day), `client.habits` (catalog, the user's habits, good days); read only | `get_fasting`, `get_habits`, `get_good_days` |
-| Goals and settings | `client.user_settings`: targets, BMR/TMR, profile | `get_targets`, `set_targets` (the manual or automatic goal, macro split, glass size) |
+| Goals and settings | `client.user_settings`: targets, BMR/TMR, profile | `get_targets`, `set_targets` (the manual or automatic goal, macro split, glass size), `get_profile` (height, weight, goal, BMI, Premium; nothing that identifies the user) |
 | Catalog writes | `create_product`, `create_recipe(shared=True)`, `delete_product`, `set_product_proposal`, duplicate cleanup | none, on purpose |
 
 `FitatuLibrary`, which wraps most of these as `*_via_api` methods that return `{"status": ...}`
@@ -177,7 +177,7 @@ instead of raising, is deprecated and will be removed in 1.0: for results that n
 | Diary: read, log, update, move, copy, remove food, notes, activities, water, weight, body measurements | ✅ | ✅ |
 | Search, barcode, food measures, recipe search, private recipes, favourites, recent foods | ✅ | ✅ |
 | Goals: read and set (`get_targets`, `set_targets`), progress (`get_progress`), reports (`get_report`), range totals (`get_range_summary`) | ✅ (progress: a request per day, at most 31 days) | ✅ |
-| Weight history, fasting and habits (read), shopping list | ✅ | ✅ |
+| Weight and body measurement history, profile, fasting and habits (read), shopping list | ✅ | ✅ |
 | Top foods (`get_top_foods`, `summary.get_top_products()`) | ❌ 403: "needs Fitatu Premium" | ✅ |
 | Diary export (`fitatu-api export`, `summary.export_diary()`) | ❌ 403: "needs Fitatu Premium" | ✅ |
 | Protein / fat / carbohydrate day by day (`summary.get_nutrient_by_day()`; energy works on both) | ❌ 403 (`get_progress` reads around it) | ✅ |
@@ -382,7 +382,7 @@ again afterwards to set `ok`. Requests per agent tool call, before retries and t
 |---|---|
 | 0 | `get_today` |
 | 1 | the other read tools; `set_water`; `set_favorite`; `preview_removal` and `remove_items` with `dry_run`; `delete_recipe` of a recipe already deleted |
-| 2 | `get_range_summary`, `get_fasting` (3 when the settings name the scheme by id), `get_habits`, `find_by_barcode` (1 without a product hit), `add_food` for a recipe in portions, `add_custom_item`, `log_weight`, `delete_recipe`, `set_targets`; `add_foods`, plus 1 for each item with `unit` or `measure_id`; `create_recipe`, plus 1 for each ingredient |
+| 2 | `get_range_summary`, `get_profile`, `get_fasting` (3 when the settings name the scheme by id), `get_habits`, `find_by_barcode` (1 without a product hit), `add_food` for a recipe in portions, `add_custom_item`, `log_weight`, `delete_recipe`, `set_targets`; `add_foods`, plus 1 for each item with `unit` or `measure_id`; `create_recipe`, plus 1 for each ingredient |
 | 3 | `add_food` with `unit` or `measure_id` (reads the food first), `log_measurements` (reads the size unit from the profile), `copy_meal` within a day, `remove_items`, `add_activity`, `remove_activity`, `set_note`; `update_recipe`, plus 1 for each new ingredient |
 | 4 | `update_item`, `move_item` within a day, `copy_meal` to another day |
 | 5 | `get_progress` (any range up to 62 days; without Fitatu Premium, see below) |

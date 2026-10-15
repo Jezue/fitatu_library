@@ -137,7 +137,7 @@ def test_demo_prompts_from_the_schema_and_runs_a_confirmed_write(
     future = (TODAY + timedelta(days=30)).isoformat()
     answer(
         monkeypatch,
-        "search_food", "jajko kurze", "two", "2",  # "two" is not a JSON integer: asked again
+        "search_food", "jajko kurze", "two", "2", "",  # "two" is not a JSON integer: asked again; skip locale
         "add_custom_item", future, "supper", "Kanapka", "250", "10", "8.5", "30", "", "",  # skip eaten, row_id
         "y",
         "q",

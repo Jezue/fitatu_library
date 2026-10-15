@@ -71,6 +71,9 @@ from the hit or from `get_food_measures`. Several foods at once: `add_foods`.
 
 **"I scanned 5900…"** `find_by_barcode`, then `add_food` with its `food_id`.
 
+**"A chocolate I bought in Germany."** `search_food` with `locale` (e.g. `de_DE`) searches that
+country's catalog; log a hit with `add_food` as usual.
+
 **"I ate a 350 kcal sandwich."** `add_custom_item` with `energy_kcal: 350`; estimate protein,
 fat and carbohydrate from the food and say they are estimates.
 
@@ -83,7 +86,11 @@ Undo: re-add from the removed row (`add_food`, or `add_custom_item` when `food_i
 weight change, top foods).
 
 **Weight, water, body:** `log_weight`, `set_water` (the day's total in ml; `get_water` gives
-the glass size), `log_measurements`, `get_weight_history`, `get_body_measurements`.
+the glass size), `log_measurements`, `get_weight_history`, `get_body_measurements`, and
+`get_measurement_history` for one measurement over time ("how has my waist changed?").
+
+**"Is my goal realistic?", "how fast am I losing?"** `get_profile` (height, weight, BMI, goal
+and pace per week, activity level, age) with `get_targets` for the daily goals.
 
 **"Set my goal to 1800 kcal", "40/30/30 macros", "back to automatic", "my glass is 300 ml".**
 `set_targets`, from today on (earlier days keep their goals). With only kcal it keeps the
@@ -100,7 +107,7 @@ days (from today to Sunday for "this week").
 Everything works on a free Fitatu account except `get_top_foods` and the diary export, which
 need Fitatu Premium (a `forbidden` error whose hint says so - tell the user, do not retry).
 `get_progress` and `get_report` work on any account; on a free one the report's `top_foods`
-is null with a note.
+is null with a note. `get_profile` says whether the account has Premium.
 
 ## When something fails
 
