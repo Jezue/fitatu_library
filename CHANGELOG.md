@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-10-15
+
+More of the diary as tools, 47 now: the goals can be set, the user's own products made from a
+nutrition label, recipes read in full and searched with the catalog's filters, and the body
+measurement history and profile read. The tools follow the Fitatu app on what needs Premium, the
+MCP server also runs over HTTP with a token (and in Docker), and error results no longer carry the
+account's user id. See "Upgrading from 0.5" at the end of this section.
 
 ### Added
 
@@ -33,15 +39,17 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   another computer or a phone on your network. It listens on 127.0.0.1:8765 unless `--host` and
   `--port` say otherwise, does not start without a token (`FITATU_MCP_TOKEN` or the file
   `FITATU_MCP_TOKEN_FILE`, at least 32 characters) and answers only requests that send it as
-  `Authorization: Bearer <token>`, checks the Host header (127.0.0.1, localhost, `--host` and each
-  `--allow-host`) and the Origin, and keeps no sessions, so a restart breaks no client.
-  `--read-only`, `--tools`, `--demo` and `--call-timeout` work as over stdio. No new dependency:
-  uvicorn and starlette come with `mcp`. `fitatu_api.mcp_server.http_app()` is the ASGI app.
+  `Authorization: Bearer <token>`, checks the Host header (127.0.0.1, localhost, `[::1]`, `--host`
+  and each `--allow-host`) and the Origin (only a local page), and keeps no sessions, so a restart
+  breaks no client. `--read-only`, `--tools`, `--demo` and `--call-timeout` work as over stdio. No
+  new dependency: uvicorn and starlette come with `mcp`. `fitatu_api.mcp_server.http_app()` is the
+  ASGI app; it raises `ValueError` for a token shorter than 32 printable ASCII characters.
 - `Dockerfile`: an image that runs `fitatu-mcp --http` as a non-root user, with the session in the
   volume `/data`. CI builds it and checks that it answers; it is not published to a registry.
 - A logo (`docs/assets/logo.png`, a pixel-art onion in a chat bubble). The server sends it as its
   icon at start-up, the Claude Desktop bundle carries it as `icon.png`, and `server.json` lists it
-  for the MCP Registry.
+  for the MCP Registry. The README opens with a banner (`docs/assets/banner.png`), linked by its
+  raw.githubusercontent.com URL so that it shows on PyPI too.
 - `get_measurement_history` tool: one body measurement, or body fat, over time, newest first.
 - `get_profile` tool: height, weight (current, start, target), BMI, goal and pace, activity
   level, sex, age and whether the account has Premium, read from the settings, with nothing that
@@ -82,7 +90,9 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - `measurements.get_body_part_history()` takes `fat_percentage` (the route's `fatPercentage`).
-- The demo's ml measure has Fitatu's id, 17.
+- The demo's ml measure has Fitatu's id, 17 (it was 2).
+- The README sums up in one table what works on a free account and what needs Premium, and
+  docs/AGENTS.md shows the `config.yaml` entry for Hermes Agent, which reads MCP servers natively.
 
 ### Fixed
 
@@ -101,6 +111,38 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   words are matched in the library, in the user's first 50 foods.
 - `create_product()`'s docs: it makes a private product, not a catalog one, and its measures work
   with the app's upper-case keys (the 404 came from a wrong key).
+
+### Upgrading from 0.5
+
+- agent tools: 7 new (`set_targets`, `get_measurement_history`, `get_profile`, `get_recipe`,
+  `create_food`, `update_food`, `delete_food`; 47 in all, 26 read-only) and new optional
+  parameters of `search_food` and `search_recipes`, a minor change under the tool policy
+  (docs/RELEASING.md): no tool or parameter is renamed, removed or made required.
+  `READ_ONLY_TOOLS`, and so `fitatu-mcp --read-only`, gains `get_measurement_history`,
+  `get_profile` and `get_recipe`; an allowlist (`tools=`, `--tools`) serves none of the new tools
+  until it names them, and saved MCP permissions do not cover them
+- public API: new `FitatuPremiumRequiredError` (a `FitatuApiError`, `error_type` `forbidden`,
+  `status_code` None), `describe_error(exc, *, user_id=None)`, `client.update_product()`,
+  `client.search_recipes()`' filters, `client.create_product(measures=, barcode=)` with `brand`
+  optional, `fat_percentage` in `measurements.get_body_part_history()`,
+  `fitatu_api.exceptions.redact_user_id(text, user_id=None)` and `fitatu_api.mcp_server.http_app()`;
+  nothing is renamed or removed
+- auth and sessions: logging in, the session file and the token refresh are unchanged, so a 0.5
+  session file works as it is. `fitatu-mcp --http` adds a token of its own, `FITATU_MCP_TOKEN`
+  or `FITATU_MCP_TOKEN_FILE`, which guards the server and is not a Fitatu credential; the Docker
+  image keeps the session in the `/data` volume (`FITATU_SESSION=/data/session.json`). The
+  Premium check reads `GET /users/{id}` with the session and keeps only its `accessControl`
+  flags, for 10 minutes; `get_profile` does not read that route
+- not backwards compatible: on an account without Fitatu Premium, `get_food_measures`, `add_food`
+  and `add_foods` of a premium catalog recipe now answer a `forbidden` error, which 0.5 served,
+  and `get_shopping_list` lists such a recipe with `expanded` false and without its ingredients.
+  `describe_error()`'s `message` writes the user id as `<user>` after the user-scoped routes even
+  without `user_id` (code that looked for the id there finds `<user>`), and `fitatu-api doctor`
+  prints `<user>` for `<user id>`. `client.search_recipes(max_energy=)` sends whole kcal, rounded
+  down. `get_my_foods` with `phrase` now returns only the matching foods among the user's first 50.
+  `add_food` and `add_foods` of a recipe in portions make one more request (`GET /users/{id}`, at
+  most once per 10 minutes) on every account, Premium included, and fail when it fails. The demo's
+  ml measure id is 17, not 2
 
 ## [0.5.1] - 2026-10-15
 
@@ -815,6 +857,7 @@ Initial packaged repository extracted from the workspace integration code.
 - initial test suite for public API and resilience behavior
 - project metadata, MIT license, README, and contributor docs
 
-[Unreleased]: https://github.com/Jezue/fitatu_library/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/Jezue/fitatu_library/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Jezue/fitatu_library/releases/tag/v0.6.0
 [0.5.1]: https://github.com/Jezue/fitatu_library/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Jezue/fitatu_library/releases/tag/v0.5.0

@@ -5,7 +5,7 @@ license: MIT
 compatibility: Needs the fitatu-mcp MCP server (pip install "fitatu-api[mcp]", or uvx --from "fitatu-api[mcp]" fitatu-mcp) and a Fitatu session from `fitatu-api login`. Built for Hermes Agent; works in any MCP host (Claude Desktop, Claude Code, Cursor). Over HTTP (fitatu-mcp --http, with a token) for an agent on another machine. Needs network access to Fitatu.
 metadata:
   author: Jezue
-  version: "0.5.1"
+  version: "0.6.0"
   homepage: https://github.com/Jezue/fitatu_library
 ---
 

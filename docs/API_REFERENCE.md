@@ -190,6 +190,7 @@ service.
 | `FitatuPlannerSyncError` | stable | The day sync rejected a day (HTTP 202); `results`. |
 | `FitatuPremiumRequiredError` | beta | A `FitatuTools` tool refused what the Fitatu app keeps for Premium (the account's `accessControl` lacks it), though the API would serve it: `search_recipes`' filters but `max_energy_kcal`, `get_recipe`, `get_food_measures`, `add_food` and `add_foods` of a premium recipe. `status_code` None. |
 | `describe_error(exc, *, user_id=None)` | stable | Any exception as a JSON-safe dict with `error_type`, `retryable` and `hint`; the user id in its `message` is `<user>`. |
+| `redact_user_id(text, user_id=None)` | beta | `text` with the account's user id as `<user>`, as `describe_error()` writes its `message`; for what a script prints. |
 
 ## Naming
 
