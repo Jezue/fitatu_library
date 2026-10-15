@@ -5,6 +5,8 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
 ## [0.6.0] - 2026-10-15
 
 More of the diary as tools, 47 now: the goals can be set, the user's own products made from a
