@@ -143,5 +143,8 @@ It prints route and key names, never values. A missing key, a changed type or a 
 drift (exit 1): refresh the recording, update the fakes and fix the code that reads the route. A
 key that is only new is counted but does not fail (`--show-new` lists them): the recording drops
 personal fields on purpose. Null matches any type, an empty list or object says nothing about its
-items, and keys that are dates, ids or meal names count as one. The weekly *Live contract*
+items, and keys that are dates, ids or meal names count as one. On an account without a premium
+plan, the routes Fitatu keeps for Premium (`PREMIUM_ONLY` in the script) are not called and print
+`skipped (premium)`; a key only some accounts' replies have (`ACCOUNT_KEYS`, e.g. a meal's
+`recommendedPercent`, which a free account's day lacks) is not drift when it is missing. The weekly *Live contract*
 workflow runs it ([CONTRIBUTING.md](../../CONTRIBUTING.md#detecting-api-changes)).

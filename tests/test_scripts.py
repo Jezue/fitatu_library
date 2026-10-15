@@ -308,14 +308,21 @@ def test_the_drift_check_compares_keys_and_types_only() -> None:
     assert check.compare(check.shape([{"a": 1}]), check.shape({"a": 1})) == [("type", "(reply): list -> object")]
 
 
-def test_the_drift_check_names_routes_and_keys_never_values(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    check, user_id, day = _checker(), "7654321", "2027-06-01"
+def _drift_check_against_replies(
+    monkeypatch: pytest.MonkeyPatch, user_id: str, day: str, *, premium: bool
+) -> tuple[Any, dict[str, Any], dict[tuple[str, str], Any], list[tuple[str, str, bool]]]:
+    """The drift check, its routes, the replies FitatuApiClient.request gives (each route's expected
+    one, the account's plan as ``premium`` says) and the requests sent."""
+    check = _checker()
     monkeypatch.setenv("FITATU_SESSION_JSON", json.dumps({"bearer_token": JWT, "fitatu_user_id": user_id}))
     recording = json.loads((ROOT / "tests" / "fixtures" / "api_recording.json").read_text(encoding="utf-8"))
     examples = json.loads((ROOT / "tests" / "fixtures" / "contract_shapes.json").read_text(encoding="utf-8"))
     routes = check.probes(recording, examples, {"user_id": user_id, "day": day, "app_os": "WEB", "app_version": "4.13.1"})
     assert len(routes) == len(check.RECORDED) + len(examples)
     replies = {(path, json.dumps(query, sort_keys=True)): reply for path, query, _, reply in routes.values()}
+    subscriptions, _, _, example = routes["subscriptions"]
+    plans = [{**example["subscriptions"][0], "startDate": "2000-01-01", "endDate": "2999-12-31"}] if premium else []
+    replies[(subscriptions, "null")] = {"subscriptions": plans}
     sent: list[tuple[str, str, bool]] = []
 
     def request(client: FitatuApiClient, method: str, path: str, *, params: Any = None, include_auth: bool = True, **kwargs: Any) -> Any:
@@ -326,6 +333,13 @@ def test_the_drift_check_names_routes_and_keys_never_values(monkeypatch: pytest.
         return json.loads(json.dumps(reply))
 
     monkeypatch.setattr(FitatuApiClient, "request", request)
+    return check, routes, replies, sent
+
+
+def test_the_drift_check_names_routes_and_keys_never_values(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    user_id, day = "7654321", "2027-06-01"
+    check, routes, replies, sent = _drift_check_against_replies(monkeypatch, user_id, day, premium=True)
+    recording = json.loads((ROOT / "tests" / "fixtures" / "api_recording.json").read_text(encoding="utf-8"))
     assert check.main(["--day", day]) == 0
     assert capsys.readouterr().out.endswith(f"no drift in {len(routes)} routes\n")
     assert {method for method, _, _ in sent} == {"GET"}
@@ -353,6 +367,28 @@ def test_the_drift_check_names_routes_and_keys_never_values(monkeypatch: pytest.
     replies[(routes["day_empty"][0], "null")] = FitatuAuthError("GET -> 401", status_code=401)
     assert check.main(["--day", day]) == 2  # at the first route
     assert capsys.readouterr().err == "stopped at day_empty: FitatuAuthError (status 401)\n"
+
+
+def test_the_drift_check_skips_premium_routes_and_account_keys_on_a_free_account(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    user_id, day = "7654321", "2027-06-01"
+    check, routes, replies, sent = _drift_check_against_replies(monkeypatch, user_id, day, premium=False)
+    # A free account's day: its meals lack recommendedPercent, which a missing key elsewhere would not be.
+    day_path, _, _, day_reply = routes["day_empty"]
+    meals = {meal: {key: value for key, value in fields.items() if key != "recommendedPercent"} for meal, fields in day_reply["dietPlan"].items()}
+    replies[(day_path, "null")] = {**day_reply, "dietPlan": meals}
+    assert check.main(["--day", day]) == 0
+    out = capsys.readouterr().out
+    premium_only = sorted(check.PREMIUM_ONLY)
+    assert premium_only and all(f"skipped (premium) {name}\n" in out for name in premium_only) and "ok day_empty\n" in out
+    assert not {routes[name][0] for name in premium_only} & {path for _, path, _ in sent}
+    assert out.endswith(f"no drift in {len(routes) - len(premium_only)} routes, {len(premium_only)} skipped (premium)\n")
+    # Any other missing key is still drift.
+    settings_path, _, _, settings = routes["settings_new"]
+    replies[(settings_path, "null")] = {key: value for key, value in settings.items() if key != "date"}
+    assert check.main(["--day", day]) == 1
+    assert "DRIFT settings_new\n    missing date\n" in capsys.readouterr().out
 
 
 # -- scripts/eval_agent.py: the harness, without the API -----------------------------------

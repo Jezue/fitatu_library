@@ -34,6 +34,10 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `summary.get_top_products()` and `summary.export_diary()`. README and docs/AGENTS.md have a
   "Free and Premium accounts" section. `search_recipes` no longer says a premium catalog recipe
   may be unreadable on a free account: its details read fine there (checked live 2026-10-15).
+- `scripts/check_contract.py` no longer reports drift on an account without Premium: it skips
+  the Premium-only routes there (`skipped (premium)`, from `user_settings.get_premium()`), and a
+  key only some accounts' replies have, such as a meal's `recommendedPercent` in the day GET, is
+  not drift when it is missing.
 
 ## [0.5.0] - 2026-10-14
 

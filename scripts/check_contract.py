@@ -20,6 +20,11 @@ Rules: null matches any type (a value is often null on an empty day) and int and
 both "number"; an empty list or object says nothing about its contents (PHP sends an empty
 map as ``[]``); keys made of digits and dashes (dates, ids) and meal names count as one
 key, ``*``.
+
+The account decides two things. On an account without a premium plan
+(``user_settings.get_premium()``), the routes Fitatu keeps for Premium (``PREMIUM_ONLY``) are
+not called and print "skipped (premium)". And a key that only some accounts' replies have
+(``ACCOUNT_KEYS``) is not drift when it is missing.
 """
 
 from __future__ import annotations
@@ -42,6 +47,10 @@ RECORDED = (
     "export_csv", "measurement_weight_history", "measurement_weight_chart", "measurement_body_part_waist",
     "measurement_size_summary", "settings_new", "user_info", "activities_catalog", "activity_search",
 )
+# Fitatu answers these with 403 on an account without Premium (checked live 2026-10-15).
+PREMIUM_ONLY = {"summary_nutrient_protein", "summary_top_products_energy", "summary_top_products_protein", "export_csv"}
+# Keys some accounts' replies lack, by route: a free account's meals have no recommendedPercent (checked live 2026-10-15).
+ACCOUNT_KEYS = {"day_empty": {"dietPlan.*.recommendedPercent"}}
 
 
 def shape(value: Any) -> Any:
@@ -142,9 +151,17 @@ def main(argv: list[str] | None = None) -> int:
     recording = json.loads((FIXTURES / "api_recording.json").read_text(encoding="utf-8"))
     examples = json.loads((FIXTURES / "contract_shapes.json").read_text(encoding="utf-8"))
 
-    routes, drift = probes(recording, examples, context), 0
+    routes, drift, skipped = probes(recording, examples, context), 0, 0
     with client:
+        try:
+            premium = client.user_settings.get_premium(context["user_id"])["active"]
+        except FitatuApiError:  # unknown: check every route (a session problem stops at the first one)
+            premium = True
         for name, (path, query, include_auth, expected) in routes.items():
+            if name in PREMIUM_ONLY and not premium:
+                skipped += 1
+                print(f"skipped (premium) {name}")
+                continue
             try:
                 reply = client.request("GET", path, params=query, include_auth=include_auth)
             except (FitatuAuthError, FitatuRateLimitError, FitatuMaintenanceError, FitatuConnectionError) as exc:
@@ -156,13 +173,16 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"DRIFT {name}: the request failed with status {exc.status_code}")
                 continue
             diffs = compare(shape(expected), shape(reply))
-            breaking = [f"{kind} {where}" for kind, where in diffs if kind != "new"]
+            optional = ACCOUNT_KEYS.get(name, set())
+            breaking = [f"{kind} {where}" for kind, where in diffs if kind != "new" and not (kind == "missing" and where in optional)]
             new = [where for kind, where in diffs if kind == "new"]
             drift += bool(breaking)
             print(f"{'DRIFT' if breaking else 'ok'} {name}" + (f" ({len(new)} new keys)" if new else ""))
             for line in breaking + ([f"new {where}" for where in new] if args.show_new else []):
                 print(f"    {line}")
-    print(f"{drift} of {len(routes)} routes drifted" if drift else f"no drift in {len(routes)} routes")
+    checked = len(routes) - skipped
+    outcome = f"{drift} of {checked} routes drifted" if drift else f"no drift in {checked} routes"
+    print(outcome + (f", {skipped} skipped (premium)" if skipped else ""))
     return 1 if drift else 0
 
 
