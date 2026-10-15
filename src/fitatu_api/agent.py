@@ -227,7 +227,8 @@ TOOLS: list[dict[str, Any]] = [
         "Works on every account; without Fitatu Premium it reads each day on its own, so it covers at "
         "most 31 days, and each day has eaten too. "
         "Answers 'what is left today', 'did I hit protein' and how each day went; a summary of a "
-        "week or month with weight and top foods, or of a longer range, is get_report.",
+        "week or month with weight and top foods, or of a longer range, is get_report (over 31 days "
+        "without Fitatu Premium, get_range_summary).",
         {"from_date": _DATE, "to_date": _DATE},
         ("from_date", "to_date"),
         read_only=True,
@@ -1214,7 +1215,8 @@ class FitatuTools:
         if (end - start).days >= _PROGRESS_DAYS:
             raise FitatuValidationError(
                 f"get_progress covers at most {_PROGRESS_DAYS} days, got {(end - start).days + 1}; for a longer "
-                "range, get_report gives the totals and daily averages, or ask for shorter ranges"
+                "range, get_report gives the totals and daily averages (without Fitatu Premium, get_range_summary "
+                "gives the totals), or ask for shorter ranges"
             )
         return self._progress(start, end)
 

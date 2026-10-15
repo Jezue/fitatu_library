@@ -379,7 +379,7 @@ def test_every_integer_with_a_limit_is_checked_and_every_list_limit_has_a_maximu
     error = tools.call("get_top_foods", {"from_date": DAY, "to_date": DAY, "limit": 500})["error"]
     assert error["message"] == "limit must be at most 50, got 500"
     error = tools.call("get_progress", {"from_date": "2026-01-01", "to_date": "2026-12-31"})["error"]
-    assert "at most 62 days, got 365" in error["message"] and "get_report" in error["message"]
+    assert "at most 62 days, got 365" in error["message"] and "get_report" in error["message"] and "get_range_summary" in error["message"]
 
 
 def test_arguments_cover_every_tool() -> None:

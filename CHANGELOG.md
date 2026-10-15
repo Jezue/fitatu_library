@@ -21,7 +21,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   too; `FitatuTools` remembers the refusal for 10 minutes and goes straight to it on later calls
   (a `get_top_foods` that succeeds ends it, so a plan bought meanwhile shows). Without
   Premium this covers at most 31 days (a request per day), and a longer range is a validation
-  error that points to `get_range_summary`. `get_report` gives `top_foods` null with a
+  error that points to `get_range_summary`; so do `get_progress`'s description and its error
+  over 62 days, which named only `get_report`. `get_report` gives `top_foods` null with a
   `top_foods_note` instead of failing, as the top foods are Premium-only too.
 - `fitatu-api export` on an account without Fitatu Premium printed the API's 403 and a hint that
   listed three possible causes. The diary export is Premium-only (checked live 2026-10-15), so it
