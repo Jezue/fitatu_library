@@ -73,6 +73,9 @@ def demo_arguments(tools: FitatuTools) -> dict[str, dict[str, Any]]:
         "create_recipe": {"name": "Jajecznica", "ingredients": [{"food_id": 2000001, "food_type": "PRODUCT", "quantity": 3, "measure_id": 46}]},
         "update_recipe": {"recipe_id": 3000003, "name": "Koktajl", "servings": 2},
         "delete_recipe": {"recipe_id": 3000003},
+        "create_food": {"name": "Baton", "energy_kcal": 420, "protein_g": 9, "fat_g": 18, "carbohydrate_g": 55, "servings": [{"name": "bar", "weight": 45}]},
+        "update_food": {"food_id": 2000015, "energy_kcal": 410},
+        "delete_food": {"food_id": 2000015},
     }
 
 
@@ -130,9 +133,22 @@ def test_the_demo_recipe_search_filters_and_get_recipe_tells_the_users_own() -> 
     assert tools.get_recipe(3000003)["own"] is True and tools.get_recipe(3000001)["own"] is False
 
 
+def test_a_product_created_in_the_demo_logs_by_its_serving_and_is_one_of_the_users_foods() -> None:
+    tools = FitatuTools.demo()
+    day = tools.get_today()["date"]
+    created = tools.create_food("Baton proteinowy", 380, 30, 12, 35, servings=[{"name": "bar", "weight": 50}], barcode="2900000000018")
+    assert [measure["measure_id"] for measure in created["measures"]] == [1, 54]
+    added = tools.add_food(day, "snack", created["food_id"], "PRODUCT", 1, measure_id=54)
+    assert added["measure_name"] == "bar" and created["food_id"] in {hit["food_id"] for hit in tools.get_my_foods("proteinowy")}
+    assert tools.find_by_barcode("2900000000018")["food_id"] == created["food_id"]
+    assert tools.delete_food(created["food_id"])["previous"]["servings"] == [{"name": "bar", "weight": 50}]
+    assert tools.get_my_foods("proteinowy") == []
+
+
 def test_the_demo_refuses_what_fitatu_would_and_names_what_it_does_not_serve() -> None:
     tools = FitatuTools.demo()
     assert tools.call("delete_recipe", {"recipe_id": 3000001})["error"]["error_type"] == "validation"  # a catalog recipe
+    assert tools.call("delete_food", {"food_id": 2000004})["error"]["error_type"] == "validation"  # a catalog product
     assert tools.call("get_food_measures", {"food_id": 1, "food_type": "PRODUCT"})["error"]["error_type"] == "not_found"
     error = tools.call("add_food", {"date": "2027-01-03", "meal": "snack", "food_id": 1, "food_type": "RECIPE", "quantity": 1})["error"]
     assert error["error_type"] == "sync_rejected"

@@ -37,9 +37,12 @@ With FITATU_LIVE_RUN_WRITE_ACCOUNT=1 also:
 - the daily goals and the glass size (`set_targets`): a manual goal, then the automatic one,
   then the settings read before are sent back whole. Fitatu keeps them as a new version from
   today, equal to the old one.
-- a product in Fitatu's shared food catalog and a private recipe: created, then deleted;
+- a private product and a private recipe: created, then deleted;
 - a private recipe made with the tools: created, logged on FITATU_LIVE_DAY, removed and
-  deleted. Recipes are deleted softly: Fitatu keeps them, marked deleted, out of your foods.
+  deleted. Recipes and products are deleted softly: Fitatu keeps them, marked deleted, out of
+  your foods.
+- a private product made with the tools, with a made-up in-store barcode: created, logged on
+  FITATU_LIVE_DAY, changed (Fitatu may keep the change as a new product), removed and deleted.
 
 Optional env vars:
     FITATU_LIVE_DAY              YYYY-MM-DD after today       (default: a year from today)
@@ -75,6 +78,7 @@ SEARCH_FALLBACK_PHRASE = "jajko kurze"
 TEST_PRODUCT_NAME = "__fitatu_api_live_test_product__"
 TEST_RECIPE_NAME = "__fitatu_api_live_test_recipe__"
 TOOLS_RECIPE_NAME = "fitatu api live test recipe"  # words, for get_my_foods to find it by
+TOOLS_PRODUCT_NAME = "fitatu api live test product"
 
 
 def _env(key: str, default: str | None = None) -> str | None:
@@ -114,8 +118,7 @@ def _water_ml(client: FitatuApiClient, user_id: str, day: date) -> int:
 def _assert_deleted(client: FitatuApiClient, path: str, what: str) -> None:
     """Fail unless ``GET path`` now answers 404 or, for a soft delete, ``"deleted": true``.
 
-    Fitatu deletes recipes softly (checked live): the GET still answers 200, marked deleted.
-    Product details carry ``deleted`` as well, so a product may go the same way.
+    Fitatu deletes recipes and products softly (checked live): the GET still answers 200, marked deleted.
     """
     try:
         reply = client.request("GET", path)
@@ -1181,6 +1184,40 @@ class TestTools:
         assert _ok(deleted) == {"recipe_id": recipe_id, "name": TOOLS_RECIPE_NAME, "already_deleted": False, "ok": True}
         assert _ok(tools.call("delete_recipe", {"recipe_id": recipe_id}))["already_deleted"] is True
         assert recipe_id not in {hit["food_id"] for hit in _ok(tools.call("get_my_foods", {"phrase": TOOLS_RECIPE_NAME}))}
+
+    def test_private_product_created_logged_updated_and_deleted(
+        self, tools: FitatuTools, client: FitatuApiClient, test_date: date, meal_key: str, added_rows: list[str]
+    ) -> None:
+        _require_account_writes()
+        day = test_date.isoformat()
+        digits = "29" + f"{uuid.uuid4().int % 10**10:010d}"  # an in-store EAN-13, which no product in the shops has
+        barcode = digits + str(-sum(int(digit) * (3 if index % 2 else 1) for index, digit in enumerate(digits)) % 10)
+        label = {"name": TOOLS_PRODUCT_NAME, "energy_kcal": 400, "protein_g": 10, "fat_g": 15, "carbohydrate_g": 55}
+        created = _ok(tools.call("create_food", {**label, "servings": [{"name": "bar", "weight": 45}], "barcode": barcode}))
+        food_ids = [created["food_id"]]
+        try:
+            assert created["ok"] and 54 in {m["measure_id"] for m in created["measures"] or []}, "create_food did not confirm, or a bar is not measure 54"
+            assert _ok(tools.call("find_by_barcode", {"barcode": barcode}))["food_id"] == created["food_id"], "find_by_barcode did not find it"
+            mine = _ok(tools.call("get_my_foods", {"phrase": TOOLS_PRODUCT_NAME}))
+            assert (created["food_id"], "PRODUCT") in {(hit["food_id"], hit["type"]) for hit in mine}, "the product is not in get_my_foods"
+            row_id = _new_row(added_rows)
+            added = _ok(tools.call("add_food", {
+                "date": day, "meal": meal_key, "food_id": created["food_id"], "food_type": "PRODUCT", "quantity": 50, "unit": "g", "row_id": row_id,
+            }))
+            assert added["ok"], _why(added)
+            # New values of a product already logged: Fitatu kept them as a new product (checked live 2026-10-15); either is fine.
+            updated = _ok(tools.call("update_food", {"food_id": created["food_id"], "energy_kcal": 390}))
+            food_ids.append(updated["food_id"])
+            assert updated["previous"]["energy_kcal"] == 400 and updated["replaced_food_id"] in (None, created["food_id"]), "update_food's previous is wrong"
+            assert client.get_product_details(updated["food_id"]).get("energy") == 390, "the change did not land"
+            removed = _ok(tools.call("remove_items", {"date": day, "row_ids": [row_id]}))["removed"]
+            assert [row["row_id"] for row in removed] == [row_id]
+        finally:
+            for food_id in dict.fromkeys(food_ids):  # a replaced one is already deleted
+                tools.call("delete_food", {"food_id": food_id})
+                _assert_deleted(client, f"/products/{int(food_id)}", f"product {food_id} {TOOLS_PRODUCT_NAME!r}")
+        assert _ok(tools.call("delete_food", {"food_id": food_ids[-1]}))["already_deleted"] is True
+        assert not {hit["food_id"] for hit in _ok(tools.call("get_my_foods", {"phrase": TOOLS_PRODUCT_NAME}))} & set(food_ids)
 
     def test_add_and_remove_activity(
         self, tools: FitatuTools, client: FitatuApiClient, user_id: str, test_date: date

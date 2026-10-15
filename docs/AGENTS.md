@@ -92,11 +92,11 @@ repeating the same call has no further effect.
 | `search_food` | Catalog search; each hit has `food_id`, `type` (PRODUCT or RECIPE), name, brand, its default measure, `times_used` (how often the user logged it, when the server says) and `favorite`. `locale` searches another country's catalog (15 that Fitatu takes, e.g. `de_DE`); the user's own logged foods show up there too, and every hit can be logged. | read | no | yes |
 | `search_recipes` | Recipe catalog search for meal ideas, by words and per-portion filters (`max_energy_kcal`, `min_protein_g`, `max_carbohydrate_g`, `max_cooking_time` of 10 or 30 minutes, `diets`, which must all apply, and `meal`): "a quick vegan breakfast", "a dinner under 500 kcal with chicken". Hits are shaped like `search_food` RECIPE hits (energy and measure of one portion) plus `cooking_time`, `preparation_time`, `rating` and `premium`, whether the app keeps the recipe for Fitatu Premium (`get_recipe` and `get_food_measures` read it on any account). | read | no | yes |
 | `get_recipe` | One catalog recipe or one of the user's own in full: `servings`, `ingredients` for the whole recipe (`food_id`, `food_type`, `quantity` and `measure_id` as `create_recipe` takes them, plus name, `measure_name` and `weight_g`), `description` (the steps), `per_serving` (the portion measure as `get_food_measures` lists it), `cooking_time`, `preparation_time`, `meals`, `tags`, `rating`, `premium`, `deleted` and `own` (whether `update_recipe` and `delete_recipe` take it). Another user's private recipe is `not_found`, and the author's name and id are never returned. | read | no | yes |
-| `find_by_barcode` | The catalog product with a barcode (8 to 14 digits), in the shape of a search hit: the first product hit of a search for the digits, confirmed by its details' `barcode`; otherwise `not_found`, and the model searches by name. | read | no | yes |
+| `find_by_barcode` | The catalog product with a barcode (8 to 14 digits), or the user's own product with that barcode, in the shape of a search hit: the first product hit of a search for the digits, confirmed by its details' `barcode` (an own product's `currentUserPrivateBarcode`); otherwise `not_found`, and the model searches by name. | read | no | yes |
 | `get_food_measures` | The measures a food can be logged in (`measure_id`, name, weight or capacity, energy, protein, fat and carbohydrate of one measure; a macro is null when the details do not give it). | read | no | yes |
 | `get_recent_foods` | Foods recently logged in a meal, shaped like search hits. | read | no | yes |
 | `get_favorite_foods` | The user's favourite products and recipes, shaped like search hits. | read | no | yes |
-| `get_my_foods` | The foods the user created (their recipes and products), shaped like search hits; `phrase` narrows them by name. | read | no | yes |
+| `get_my_foods` | The foods the user created (their recipes and products), shaped like search hits; `phrase` narrows them by name (matched here: Fitatu ignores it). | read | no | yes |
 | `get_weight_history` | Logged body weights (`date`, `value` in the user's weight unit, `difference`, `direction`), newest first, up to `limit` entries (41, the most) of a range; without one, the newest entries however old (there is no default period). | read | no | yes |
 | `get_body_measurements` | How body sizes and fat percentage changed over a range: per `body_part` the first and last value (`start_value`, `end_value`) and the `difference`, sizes in the user's size unit; parts with nothing logged are left out. The server's summary has no dates per value. | read | no | yes |
 | `get_measurement_history` | One body measurement (`waist`, ..., or `fat_percentage`) over time: `{date, value}` newest first, in the user's size unit, up to `limit` (41); without a range, the newest entries up to today. | read | no | yes |
@@ -124,6 +124,9 @@ repeating the same call has no further effect.
 | `create_recipe` | Save a private recipe from catalog products (each checked like an `add_food` item first) and the number of servings they make; returns its `recipe_id` and `per_serving`, its portion measure with the kcal and macros of one serving. See [Private recipes](#private-recipes). | write | no | no |
 | `update_recipe` | Change one of the user's own private recipes: name, ingredients (the whole new list, each checked like a `create_recipe` ingredient), servings and/or description; the rest is sent back as it was read. Any other recipe is refused. Returns `per_serving` and the `previous` values, which undo it. Beta: not checked against the live API yet. | write | yes | yes |
 | `delete_recipe` | Delete one of the user's own private recipes; any other recipe is refused. A recipe already deleted gives `ok` true and `already_deleted` true. | write | yes | yes |
+| `create_food` | Save a private product from its nutrition label: per 100 g (or ml) energy, protein, fat and carbohydrate, optionally sugars, fibre, salt, saturated fat, `servings` such as a 45 g bar, and a barcode; checked before anything is sent (macros at most 100 g together, sugars within carbohydrate, saturated fat within fat). Returns `food_id` and its `measures` for `add_food`. See [Private products](#private-products). | write | no | no |
+| `update_food` | Change one of the user's own products; the rest is sent back as it was read. Returns `food_id` (a new one when Fitatu saved the change as a new product, `replaced_food_id` the old) and `previous`, which undoes it. Any other product is refused. | write | yes | yes |
+| `delete_food` | Delete one of the user's own products; any other is refused. Rows logged with it keep their values. Already deleted: `ok` true, `already_deleted` true; `previous` re-creates it with `create_food`. | write | yes | yes |
 
 The full descriptions the model sees are in `TOOLS`; read them once, they say where every id
 comes from.
@@ -175,7 +178,7 @@ a person.
 | `FitatuLibrary.clear_session()` (deprecated), `FitatuApiClient.clear_auth()` | Drop the tokens and, by default, delete the session file. |
 | `FitatuApiClient.login()`, `refresh_access_token()` | Take a password or mint new session tokens. |
 | `FitatuApiClient.request()`, `planner.sync_days()`, `planner.sync_single_day()` | Raw requests and raw day payloads skip every check the tools make. |
-| `create_product()`, `delete_product()`, `set_product_proposal()`, `set_product_raw_ingredients()`, `cleanup_duplicate_user_products()`, `create_recipe()`, `update_recipe()`, `delete_recipe()`, their `*_via_api` wrappers (deprecated with `FitatuLibrary`), and `add_user_dish_via_api()` (the wrapper of `create_recipe()`) | Write to the food catalog (products, change proposals for catalog products, recipes that can be shared) or change and delete products and recipes by id without checking whose they are. The `create_recipe`, `update_recipe` and `delete_recipe` tools are the safe way: private recipes of the user only. |
+| `create_product()`, `delete_product()`, `set_product_proposal()`, `set_product_raw_ingredients()`, `cleanup_duplicate_user_products()`, `create_recipe()`, `update_recipe()`, `delete_recipe()`, their `*_via_api` wrappers (deprecated with `FitatuLibrary`), and `add_user_dish_via_api()` (the wrapper of `create_recipe()`) | Change or delete products and recipes by id without checking whose they are, or write to the shared catalog (change proposals for catalog products, recipes that can be shared). The `create_food`, `update_food`, `delete_food` and recipe tools are the safe way: the user's own private foods only. |
 | `user_settings.get_profile()` | Returns the account's e-mail, username, ids and sign-in details. The `get_profile` tool reads the settings instead and leaves out whatever identifies the user. |
 | `user_settings.update_profile()`, `update_new()`, `update_water_settings()` | Change account settings, not the diary: `update_new()` writes any part of them (body data, meal schema, fasting) unchecked. The `set_targets` tool is the safe way to change the goals and the glass size. |
 | `measurements.delete_day()`, `planner.remove_day_items_by_kind(all_meals=True)` without `row_ids` | Delete a whole day's measurements or every row of a day. `remove_items` always names its rows. |
@@ -212,9 +215,9 @@ a person.
    safe; `ok` is false when anything was missing or is still there (`failed`).
 5. **Verify by re-reading.** Every write result carries `ok`: for updates, moves, removals,
    activities and `set_note` it is the outcome of a re-read. Food adds, `log_weight`, `log_measurements`,
-   `set_water`, `set_favorite` and `delete_recipe` are not read back, and `create_recipe` and
-   `update_recipe` read the recipe back only for `per_serving`: their `ok` only says the server
-   accepted the value. `set_targets`' `ok` says the settings Fitatu answered with (the whole new
+   `set_water`, `set_favorite`, `delete_recipe` and `delete_food` are not read back, `create_recipe` and
+   `update_recipe` read the recipe back only for `per_serving`, and `create_food` and `update_food`
+   the product only for `measures`: their `ok` only says the server accepted the value. `set_targets`' `ok` says the settings Fitatu answered with (the whole new
    settings, as a re-read gives them) show the change. A `measure_id` the food does not have is
    refused before the add (that check reads the food once; the error lists its measures).
    Before telling the user something changed, check `ok` and, when the food, measure or amount
@@ -234,7 +237,7 @@ a person.
    undone by adding each row of its `removed` again: `add_food` with the row's `meal`,
    `food_id`, `food_type`, `measure_id`, `eaten` and its `measure_quantity` as `quantity` (a
    custom row has no `food_id`: `add_custom_item` with its `meal`, name, `eaten` and the
-   `energy`, `protein`, `fat` and `carbohydrate` the removed row carries). `update_item` and `update_recipe` are undone by calling them again with the `previous` they returned, and
+   `energy`, `protein`, `fat` and `carbohydrate` the removed row carries). `update_item`, `update_recipe` and `update_food` are undone by calling them again with the `previous` they returned, `delete_food` by `create_food` with its `previous` (a new `food_id`), and
    `move_item` by moving the new row back, `set_note` by calling it with the `previous` note, `set_targets` by calling
    it with its `previous` (empty when it only set a glass size the account did not have). A row added again gets a new `row_id`.
 
@@ -266,6 +269,25 @@ the app's, not yet checked against the live API (the live suite does when it run
 the session user's; a catalog recipe or another user's is a `validation` error and nothing is
 deleted. Fitatu deletes recipes softly: the recipe stays, marked `deleted`, and leaves the user's
 foods and searches, so deleting it again gives `ok` true and `already_deleted` true.
+
+## Private products
+
+`create_food` saves a product from its nutrition label, e.g. a bar the catalog does not have.
+Fitatu keeps it private: only the user sees it, in their own foods and searches, and other
+accounts do not find it, its barcode included (checked live 2026-10-15). The values are per
+100 g, or per 100 ml with `unit` `ml`, as the label gives them; `servings` adds measures such as
+a 45 g bar, which `add_food` then takes by `measure_id`. Fitatu itself takes nearly any numbers,
+so the tool refuses a label that cannot be right: more than 100 g of protein, fat and
+carbohydrate in 100 g, more than 900 kcal, sugars above carbohydrate, saturated fat above fat. A
+failed create may still have made the product: look for it with `get_my_foods` first.
+
+`update_food` and `delete_food` read the product first and act only on a private product of the
+session user. A change goes back whole with `PUT /products/{id}`, every value read included, as
+Fitatu clears what is left out. Fitatu may keep a change as a new product (new values of a
+product already logged, a serving removed): `food_id` is then the new id and `replaced_food_id`
+the retired one, and rows logged before keep the old values. Deletes are soft, as for recipes.
+`previous` undoes `update_food`; `create_food` with `delete_food`'s `previous` makes the product
+again under a new id.
 
 ## Day notes
 
@@ -331,7 +353,7 @@ MCP host asks only about `remove_items` itself. (Before `preview_removal`, the p
 `call()` returns `{"ok": true, "data": ...}` or `{"ok": false, "error": {...}}`. The envelope's
 `ok` says whether the call ran. For updates, moves, removals and activity writes, `data.ok` says
 whether a re-read confirmed the effect; food adds, `log_weight`, `log_measurements`, `set_water`,
-`set_favorite`, `create_recipe`, `update_recipe` and `delete_recipe` report `data.ok` once the server accepted the value, without a re-read; `set_targets`' `data.ok` says the settings Fitatu answered with show the change. The error is `describe_error()` of the exception:
+`set_favorite`, `create_recipe`, `update_recipe`, `delete_recipe`, `create_food`, `update_food` and `delete_food` report `data.ok` once the server accepted the value, without a re-read; `set_targets`' `data.ok` says the settings Fitatu answered with show the change. The error is `describe_error()` of the exception:
 
 ```json
 {
@@ -348,9 +370,9 @@ whether a re-read confirmed the effect; food adds, `log_weight`, `log_measuremen
 An add-type call (`add_food`, `add_foods`, `add_custom_item`, `copy_meal`, `add_activity`) that
 fails after something may have been sent also has `retry_row_id`: the `row_id` to repeat it
 with (rule 2 of [Writing safely](#writing-safely)). The rows below say "an add" for these.
-A `create_recipe` that fails with anything but `validation`, `not_found` or `rate_limit` may
-have made the recipe, so it says `retryable: false` and its `hint` says to look for the recipe
-with `get_my_foods` before creating it again.
+A `create_recipe` or `create_food` that fails with anything but `validation`, `not_found` or
+`rate_limit` may have made the recipe or product, so it says `retryable: false` and its `hint`
+says to look for it with `get_my_foods` before creating it again.
 
 | `error_type` | Meaning | Who acts | What to do |
 |---|---|---|---|
@@ -359,7 +381,7 @@ with `get_my_foods` before creating it again.
 | `auth` | The session is gone (refresh rejected, no session file, no user id). | host | Renew the session where the process runs: `fitatu-api login` (`fitatu-api import-session` for an account without a password); a running `FitatuTools` picks it up without a restart. The model can only tell the user. An add: repeat it later with its `retry_row_id`. |
 | `rate_limit` | 429, after the client's own retries or because the server asked to wait more than 30 s. | host | Wait `retry_after` seconds, or a few seconds when it is null (`hint` says so), then repeat once; an add with its `retry_row_id`. A model cannot wait: it tells the user to try again shortly. |
 | `maintenance` | Fitatu is in a technical break. | host | Stop; `hint` says until when. Retrying or logging in again does not help. An add: repeat it afterwards with its `retry_row_id`. |
-| `network` | No HTTP response. | host | Repeat (`retryable` is true), except an add: repeat it with its `retry_row_id`; and except a `create_recipe` (`retryable` is false): see its `hint`. |
+| `network` | No HTTP response. | host | Repeat (`retryable` is true), except an add: repeat it with its `retry_row_id`; and except a `create_recipe` or `create_food` (`retryable` is false): see its `hint`. |
 | `sync_rejected` | The day sync answered 202 but rejected the day; nothing was saved. | model | Fix what `message` names and send it again. |
 | `forbidden` | 403: a premium-only feature, a used-up AI quota (see `codename`) or a wrong API key; `call()` then reads the account's plan once (`user_settings.get_premium()`), and `hint` says "a premium feature" when no premium plan runs, or that it is not a premium matter when one does. Or a firewall in front of Fitatu blocked the request (an HTML page, and `hint` says so). | model | Do not retry; tell the user. |
 | `server` | A 5xx or another API error. | host | Repeat a few times when `retryable`; otherwise report it. An add: use its `retry_row_id`. |
@@ -551,7 +573,8 @@ error that names it. As it is:
   a route's reply may be a function of the request's `params` (`tests/test_agent.py`'s
   `range_summary` answers each day's summary);
 - `get_water`, `set_water`, `get_recent_foods`, `get_favorite_foods`, `set_favorite`,
-  `get_my_foods`, `create_recipe`, `update_recipe`, `delete_recipe`, `search_recipes`,
+  `get_my_foods`, `create_recipe`, `update_recipe`, `delete_recipe`, `create_food`,
+  `update_food`, `delete_food`, `search_recipes`,
   `get_fasting`, `get_habits` and `get_good_days` need `fake.routes` (`tests/test_agent.py` has
   replies for them);
 - `set_targets` needs `fake.routes` for today's `settings-new` GET and the PATCH, `get_profile`
@@ -698,7 +721,7 @@ What the server does:
   `inputSchema`, the annotations as they are, and `title` as the tool's title and as
   `annotations.title` (older hosts read that one), so a host can show "Remove logged foods" in
   its permission prompt instead of `remove_items`. A tool added to `TOOLS` is served without a
-  change to the server. `delete_recipe`, which cannot be undone, also carries
+  change to the server. `delete_recipe` and `delete_food`, which cannot be undone, also carry
   `_meta["anthropic/requiresUserInteraction"]: true`: Claude Code then asks before every call of
   it, even where calls are otherwise allowed without asking, and offers no "don't ask again".
   No resources are served, and nothing from

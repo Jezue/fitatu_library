@@ -29,7 +29,14 @@ from fitatu_api import (
     FitatuValidationError,
     describe_error,
 )
-from fitatu_api.agent import READ_ONLY_TOOLS, SYSTEM_PROMPT, TOOLS, anthropic_tools, openai_tools
+from fitatu_api.agent import (
+    _PRODUCT_FORM,
+    READ_ONLY_TOOLS,
+    SYSTEM_PROMPT,
+    TOOLS,
+    anthropic_tools,
+    openai_tools,
+)
 
 DAY = "2027-01-03"  # the recorded day
 WEIGHT_DAY = "2020-01-01"  # the recorded measurement date
@@ -37,6 +44,8 @@ PRODUCT_ID = recorded("product_details")["id"]  # the first catalog hit the reco
 RECIPE_ID = 590200  # fixed in the recorder
 BARCODE = "5901234123457"  # an example EAN-13; the fake gives it to the first 'jajko kurze' hit
 MY_RECIPE_ID = 98765432  # a private recipe of the session's user, as the fake serves it
+MY_PRODUCT_ID = 98765433  # a private product of the session's user, as the fake serves it
+GRAM_BASE = {"measureKey": "GRAM", "measureUnit": "g", "weight": 100}  # the first measure: the values stay per 100 g
 
 # The recorded day with a product (breakfast), a recipe (lunch), a custom row (snack) and an activity.
 SEED = {**recorded("day_three_rows"), "activityPlan": recorded("day_after_activity")["activityPlan"]}
@@ -167,6 +176,11 @@ ARGUMENTS: dict[str, dict[str, Any]] = {
     },
     "update_recipe": {"recipe_id": MY_RECIPE_ID, "name": "Owsianka z kakao", "servings": 2},
     "delete_recipe": {"recipe_id": MY_RECIPE_ID},
+    "create_food": {
+        "name": "Baton owsiany", "energy_kcal": 420, "protein_g": 9, "fat_g": 18, "carbohydrate_g": 55, "servings": [{"name": "bar", "weight": 45}]
+    },
+    "update_food": {"food_id": MY_PRODUCT_ID, "energy_kcal": 410},
+    "delete_food": {"food_id": MY_PRODUCT_ID},
 }
 READS = {"get_today", "get_day", "get_targets", "get_range_summary", "get_progress", "search_food", "find_by_barcode", "get_food_measures"}
 READS |= {"get_recent_foods", "get_top_foods", "get_report", "get_shopping_list"}
@@ -216,6 +230,18 @@ def fake_with_every_reply() -> FakeFitatuServer:
     server.routes[("DELETE", f"/recipes/{MY_RECIPE_ID}")] = []
     # The app's route and answer (UpdatedRecipeDTO), not checked live.
     server.routes[("PUT", f"/recipes/{MY_RECIPE_ID}")] = {"id": MY_RECIPE_ID, "name": "Owsianka z kakao", "energy": 62.96}
+    # Checked live on 2026-10-15, not recorded: a product is created private (only its owner finds it) and read back
+    # with private true, visible false and the owner's userId; a PUT answers whether Fitatu saved the change as a new
+    # product, a DELETE {"deleted": true}.
+    server.routes[("POST", "/products")] = {"id": MY_PRODUCT_ID, "name": "Baton owsiany"}
+    server.routes[("GET", f"/products/{MY_PRODUCT_ID}")] = {
+        **recorded("product_details"), "id": MY_PRODUCT_ID, "name": "Baton owsiany", "brand": None,
+        "private": True, "visible": False, "verified": False, "editable": True, "userId": int(RECORDED_USER_ID), "deleted": False,
+        "energy": 420, "protein": 9, "fat": 18, "carbohydrate": 55, "sugars": 20, "fiber": 6, "salt": 0.2, "saturatedFat": 2, "cholesterol": 5,
+        "measures": [{"id": 54, "name": "bar", "energyPerUnit": 189, "weightPerUnit": 45}, {"id": 1, "name": "g", "energyPerUnit": 4.2, "weightPerUnit": 1}],
+    }
+    server.routes[("PUT", f"/products/{MY_PRODUCT_ID}")] = {"id": MY_PRODUCT_ID, "name": "Baton owsiany", "newProductCreated": False}
+    server.routes[("DELETE", f"/products/{MY_PRODUCT_ID}")] = {"deleted": True}
     # Checked live on 2026-10-14, not recorded: recipe catalog hits in the food search's shape, one portion each.
     server.routes[("GET", "/search/catalog/recipes")] = [
         {**hit, "foodId": food_id, "name": name, "energy": kcal, "premiumInRecipesCatalog": premium, "rating": 4.5, "cookingTime": 20, "preparationTime": 10}
@@ -313,6 +339,8 @@ def test_annotations_mark_reads_and_what_can_overwrite_the_diary() -> None:
     assert {name for name, hint in hints.items() if hint["destructiveHint"]} == {
         "update_recipe",
         "delete_recipe",
+        "update_food",
+        "delete_food",
         "update_item",
         "move_item",
         "remove_items",
@@ -326,6 +354,8 @@ def test_annotations_mark_reads_and_what_can_overwrite_the_diary() -> None:
     assert {name for name, hint in hints.items() if hint["idempotentHint"]} == READS | {
         "update_recipe",
         "delete_recipe",
+        "update_food",
+        "delete_food",
         "remove_items",
         "remove_activity",
         "log_weight",
@@ -856,6 +886,9 @@ def test_find_by_barcode_confirms_the_first_product_hit_by_its_details(tools: Fi
     fake.routes[("GET", f"/products/{egg['foodId']}")]["barcode"] = "5900000000000"
     error = tools.call("find_by_barcode", {"barcode": BARCODE})["error"]
     assert error["error_type"] == "not_found" and "search_food by the product's name" in error["message"]
+    # the user's own product keeps a barcode they gave it (create_food's) apart (checked live 2026-10-15)
+    fake.routes[("GET", f"/products/{egg['foodId']}")] |= {"barcode": None, "currentUserPrivateBarcode": BARCODE}
+    assert data(tools, "find_by_barcode", barcode=BARCODE)["food_id"] == egg["foodId"]
     fake.requests.clear()
     fake.search_results[BARCODE] = [hit for hit in recorded("search_food_recipe") if hit["type"] == "RECIPE"]
     assert error_type(tools, "find_by_barcode", {"barcode": BARCODE}) == "not_found"
@@ -1444,9 +1477,11 @@ def test_get_my_foods_searches_the_users_own_foods(tools: FitatuTools, fake: Fak
     assert data(tools, "get_my_foods", phrase="owsianka")[0] == data(tools, "search_food", phrase="owsianka")[0]
     request = fake.requests[-2]
     assert request["path"] == f"/search/food/user/{RECORDED_USER_ID}" and request["params"]["phrase"] == "owsianka"
-    assert request["params"]["date"] == tools.get_today()["date"] and request["params"]["limit"] == 10
-    data(tools, "get_my_foods")
-    assert fake.requests[-1]["params"]["phrase"] == ""
+    assert request["params"]["date"] == tools.get_today()["date"] and request["params"]["limit"] == 50
+    assert len(data(tools, "get_my_foods")) == 10 and fake.requests[-1]["params"]["phrase"] == ""
+    # The route answers every own food whatever the phrase (checked live 2026-10-15): the words are matched here.
+    assert [hit["name"] for hit in data(tools, "get_my_foods", phrase="CLASSIC owsianka")] == ["Owsianka classic", "K Classic Owsianka"]
+    assert [hit["name"] for hit in data(tools, "get_my_foods", phrase="classic", limit=1)] == ["Owsianka classic"]
 
 
 def test_create_recipe_checks_every_ingredient_and_keeps_the_recipe_private(tools: FitatuTools, fake: FakeFitatuServer) -> None:
@@ -1481,26 +1516,27 @@ def test_a_created_recipe_that_cannot_be_read_back_is_still_reported_created(too
     assert (created["recipe_id"], created["per_serving"], created["ok"]) == (MY_RECIPE_ID, None, True)
 
 
+@pytest.mark.parametrize(("tool", "post"), [("create_recipe", "/recipes"), ("create_food", "/products")])
 @pytest.mark.parametrize(
     ("failure", "retryable"),
     [
         (FitatuConnectionError("read timeout"), False),
-        (FitatuApiError("POST /recipes -> 502", status_code=502), False),
-        (FitatuRateLimitError("POST /recipes -> 429", status_code=429, retry_after=5), True),  # refused: nothing created
+        (FitatuApiError("POST -> 502", status_code=502), False),
+        (FitatuRateLimitError("POST -> 429", status_code=429, retry_after=5), True),  # refused: nothing created
     ],
     ids=["network", "server", "rate_limit"],
 )
-def test_a_create_recipe_that_may_have_made_the_recipe_is_not_retryable(
-    tools: FitatuTools, fake: FakeFitatuServer, failure: FitatuApiError, retryable: bool
+def test_a_create_that_may_have_made_the_food_is_not_retryable(
+    tools: FitatuTools, fake: FakeFitatuServer, failure: FitatuApiError, retryable: bool, tool: str, post: str
 ) -> None:
-    # The POST is sent once: after a timeout or a 5xx the recipe may exist, and repeating it would make a second one.
+    # The POST is sent once: after a timeout or a 5xx the food may exist, and repeating it would make a second one.
     def server(method: str, path: str, **kwargs: Any) -> Any:
-        if (method, path) == ("POST", "/recipes"):
+        if (method, path) == ("POST", post):
             raise failure
         return fake.request(method, path, **kwargs)
 
     tools.client.request = server  # type: ignore[method-assign]
-    error = tools.call("create_recipe", ARGUMENTS["create_recipe"])["error"]
+    error = tools.call(tool, ARGUMENTS[tool])["error"]
     assert error["retryable"] is retryable and ("get_my_foods" in (error["hint"] or "")) is not retryable
 
 
@@ -1564,6 +1600,121 @@ def test_update_recipe_checks_new_ingredients_and_refuses_other_recipes(tools: F
     fake.routes[("GET", f"/recipes/{MY_RECIPE_ID}")]["deleted"] = True
     assert error_type(tools, "update_recipe", {"recipe_id": MY_RECIPE_ID, "name": "x"}) == "not_found"
     assert "PUT" not in {r["method"] for r in fake.requests}
+
+
+def test_create_food_sends_the_label_per_100_g_with_a_gram_base(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    created = data(tools, "create_food", **ARGUMENTS["create_food"])
+    post = next(r for r in fake.requests if r["method"] == "POST")
+    assert (post["path"], post["json_data"]) == ("/products", {
+        "name": "Baton owsiany", "energy": 420, "protein": 9, "fat": 18, "carbohydrate": 55,  # no brand key without one
+        "measures": [GRAM_BASE, {"measureKey": "BAR", "measureUnit": "g", "weight": 45}],
+    })
+    # its measures read back, for add_food
+    measures = data(tools, "get_food_measures", food_id=MY_PRODUCT_ID, food_type="PRODUCT")["measures"]
+    assert created == {"food_id": MY_PRODUCT_ID, "name": "Baton owsiany", "measures": measures, "ok": True}
+    assert [m["measure_id"] for m in measures] == [54, 1]
+    fake.requests.clear()
+    data(tools, "create_food", **ARGUMENTS["create_food"], brand="Domowy", sugars_g=20, barcode="2900000000018", unit="ml")
+    body = fake.requests[0]["json_data"]
+    assert (body["brand"], body["sugars"], body["barcode"]) == ("Domowy", 20, "2900000000018")
+    assert [(m["measureKey"], m["measureUnit"]) for m in body["measures"]] == [("MILLILITER", "ml"), ("BAR", "ml")]
+
+
+def test_a_created_product_that_cannot_be_read_back_is_still_reported_created(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    def server(method: str, path: str, **kwargs: Any) -> Any:
+        if path == f"/products/{MY_PRODUCT_ID}":
+            raise FitatuConnectionError("read timeout")
+        return fake.request(method, path, **kwargs)
+
+    tools.client.request = server  # type: ignore[method-assign]
+    created = data(tools, "create_food", **ARGUMENTS["create_food"])
+    assert (created["food_id"], created["measures"], created["ok"]) == (MY_PRODUCT_ID, None, True)
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"protein_g": 30, "fat_g": 20, "carbohydrate_g": 51}, "add up to more than 100 g in 100 g"),
+        ({"sugars_g": 56}, "sugars_g is part of carbohydrate_g"),
+        ({"saturated_fat_g": 19}, "saturated_fat_g is part of fat_g"),
+        ({"energy_kcal": 901}, "energy_kcal must be at most 900"),  # most likely kJ
+        ({"brand": "x" * 256}, "brand must be at most 255 characters"),  # Fitatu answers it with a 500
+        ({"name": " "}, "name must not be empty"),
+        ({"servings": [{"name": "bar", "weight": 45}, {"name": "bar", "weight": 50}]}, "servings names bar twice"),
+        ({"servings": [{"name": "bar", "weight": 0}]}, "servings[0]: weight must be more than 0"),
+        ({"servings": [{"name": "tablespoon", "weight": 10}]}, "servings[0]: name must be one of"),
+        ({"barcode": "12ab"}, "barcode must be the 8 to 14 digits"),
+    ],
+)
+def test_create_food_refuses_labels_fitatu_would_take(tools: FitatuTools, fake: FakeFitatuServer, change: dict[str, Any], message: str) -> None:
+    error = tools.call("create_food", {**ARGUMENTS["create_food"], **change})["error"]
+    assert error["error_type"] == "validation" and message in error["message"]
+    assert fake.requests == []
+
+
+def test_update_food_sends_the_whole_product_with_only_the_changes(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    stored = fake.routes[("GET", f"/products/{MY_PRODUCT_ID}")]
+    stored["currentUserPrivateBarcode"] = "2900000000018"
+    updated = data(tools, "update_food", food_id=MY_PRODUCT_ID, energy_kcal=410)
+    put = next(r for r in fake.requests if r["method"] == "PUT")
+    # Fitatu clears what a PUT leaves out (checked live): the rest goes back as read, cholesterol included.
+    assert put["path"] == f"/products/{MY_PRODUCT_ID}" and put["json_data"] == {
+        **{key: stored[key] for key in _PRODUCT_FORM},
+        "energy": 410,
+        "measures": [GRAM_BASE, {"measureKey": "BAR", "measureUnit": "g", "weight": 45}],
+        "barcode": "2900000000018",
+    }
+    previous = {
+        "name": "Baton owsiany", "energy_kcal": 420, "protein_g": 9, "fat_g": 18, "carbohydrate_g": 55, "sugars_g": 20, "fiber_g": 6,
+        "salt_g": 0.2, "saturated_fat_g": 2, "servings": [{"name": "bar", "weight": 45}], "barcode": "2900000000018",
+    }
+    assert (updated["food_id"], updated["replaced_food_id"], updated["previous"], updated["ok"]) == (MY_PRODUCT_ID, None, previous, True)
+    assert [m["measure_id"] for m in updated["measures"]] == [54, 1]
+    fake.requests.clear()
+    data(tools, "update_food", food_id=MY_PRODUCT_ID, servings=[])  # servings replaces the list
+    assert next(r for r in fake.requests if r["method"] == "PUT")["json_data"]["measures"] == [GRAM_BASE]
+
+
+def test_update_food_reports_a_replaced_product(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    # e.g. new values of a product already logged: Fitatu keeps them as a new product and retires the old one
+    new_id = MY_PRODUCT_ID + 1
+    fake.routes[("PUT", f"/products/{MY_PRODUCT_ID}")] = {"id": new_id, "name": "Baton owsiany", "newProductCreated": True}
+    fake.routes[("GET", f"/products/{new_id}")] = {**fake.routes[("GET", f"/products/{MY_PRODUCT_ID}")], "id": new_id, "energy": 410}
+    updated = data(tools, "update_food", food_id=MY_PRODUCT_ID, energy_kcal=410)
+    assert (updated["food_id"], updated["replaced_food_id"]) == (new_id, MY_PRODUCT_ID)
+    assert fake.requests[-1]["path"] == f"/products/{new_id}"  # the measures are the new product's
+
+
+def test_update_and_delete_food_refuse_other_products(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    for name, arguments in (("update_food", {"food_id": PRODUCT_ID, "name": "x"}), ("delete_food", {"food_id": PRODUCT_ID})):
+        error = tools.call(name, arguments)["error"]  # a catalog product: private false, userId 0
+        assert error["error_type"] == "validation" and "not a product this user created" in error["message"], name
+    stored = fake.routes[("GET", f"/products/{MY_PRODUCT_ID}")]
+    stored["userId"] = int(RECORDED_USER_ID) + 1  # another user's private product
+    assert error_type(tools, "delete_food", {"food_id": MY_PRODUCT_ID}) == "validation"
+    assert error_type(tools, "update_food", {"food_id": MY_PRODUCT_ID}) == "validation"  # nothing to change
+    stored |= {"userId": int(RECORDED_USER_ID), "deleted": True}
+    assert error_type(tools, "update_food", {"food_id": MY_PRODUCT_ID, "name": "x"}) == "not_found"
+    assert data(tools, "delete_food", food_id=MY_PRODUCT_ID)["already_deleted"] is True
+    # a measure update_food cannot send back, which a PUT would drop
+    stored |= {"deleted": False, "measures": [*stored["measures"], {"id": 52, "name": "tablespoon", "energyPerUnit": 42, "weightPerUnit": 10}]}
+    error = tools.call("update_food", {"food_id": MY_PRODUCT_ID, "name": "x"})["error"]
+    assert error["error_type"] == "validation" and "(tablespoon)" in error["message"]
+    assert {r["method"] for r in fake.requests} == {"GET"}
+    deleted = data(tools, "delete_food", food_id=MY_PRODUCT_ID)  # deleting it leaves the measure out of previous
+    assert deleted["already_deleted"] is False and deleted["previous"]["servings"] == [{"name": "bar", "weight": 45}]
+
+
+def test_delete_food_previous_makes_it_again(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    deleted = data(tools, "delete_food", food_id=MY_PRODUCT_ID)
+    assert [(r["method"], r["path"]) for r in fake.requests] == [("GET", f"/products/{MY_PRODUCT_ID}"), ("DELETE", f"/products/{MY_PRODUCT_ID}")]
+    assert (deleted["food_id"], deleted["name"], deleted["already_deleted"], deleted["ok"]) == (MY_PRODUCT_ID, "Baton owsiany", False, True)
+    fake.requests.clear()
+    data(tools, "create_food", **deleted["previous"])
+    assert fake.requests[0]["json_data"] == {
+        "name": "Baton owsiany", "energy": 420, "protein": 9, "fat": 18, "carbohydrate": 55, "sugars": 20, "fiber": 6, "salt": 0.2,
+        "saturatedFat": 2, "measures": [GRAM_BASE, {"measureKey": "BAR", "measureUnit": "g", "weight": 45}],
+    }
 
 
 def test_add_and_remove_an_activity(tools: FitatuTools) -> None:

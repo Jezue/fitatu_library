@@ -38,15 +38,30 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   minutes, the catalog's two steps), `diets` (all must apply) and `meal`, per portion as Fitatu
   applies them (checked live 2026-10-15). `client.search_recipes()` takes them as
   `min_protein`, `max_carbohydrate`, `max_cooking_time`, `tags` and `meals`.
+- `create_food`, `update_food` and `delete_food` tools: the user's own products from a
+  nutrition label (per 100 g or 100 ml, servings such as a 45 g bar, an optional barcode). Fitatu
+  keeps them private: checked live 2026-10-15 that another account's search does not find one or
+  its barcode. The tools check the label before anything is sent (Fitatu takes nearly any
+  numbers), act only on the user's own products, send a change back whole (Fitatu clears what is
+  left out) and report when Fitatu saved it as a new product (`replaced_food_id`). `delete_food`
+  asks in Claude Code like `delete_recipe`.
+- `client.update_product()`; `client.create_product()` takes `measures` and `barcode`, and
+  `brand` is optional.
 
 ### Changed
 
 - `measurements.get_body_part_history()` takes `fat_percentage` (the route's `fatPercentage`).
+- The demo's ml measure has Fitatu's id, 17.
 
 ### Fixed
 
 - `search_recipes` with a decimal `max_energy_kcal` (e.g. 499.5) failed with a 400: Fitatu takes
   whole kcal only, so it is rounded down now.
+- `find_by_barcode` finds the user's own product by the barcode they gave it.
+- `get_my_foods` narrows by `phrase` again: Fitatu ignores it (checked live 2026-10-15), so the
+  words are matched in the library, in the user's first 50 foods.
+- `create_product()`'s docs: it makes a private product, not a catalog one, and its measures work
+  with the app's upper-case keys (the 404 came from a wrong key).
 
 ## [0.5.1] - 2026-10-15
 

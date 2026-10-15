@@ -25,7 +25,8 @@
     "2000011": {"name": "Masło", "nutrition": [735, 0.7, 82.5, 0.7, 0, 0.7, 0], "measures": [[53, "teaspoon", 5]]},
     "2000012": {"name": "Ser żółty", "nutrition": [350, 26, 27, 1, 0, 1, 1.6], "measures": [[47, "slice", 20]]},
     "2000013": {"name": "Pomidor", "nutrition": [18, 0.9, 0.2, 3.9, 1.2, 2.6, 0], "measures": [[46, "piece", 150]]},
-    "2000014": {"name": "Twaróg półtłusty", "nutrition": [133, 18.7, 4.7, 3.7, 0, 3.7, 0.1], "measures": [[39, "portion", 100]]}
+    "2000014": {"name": "Twaróg półtłusty", "nutrition": [133, 18.7, 4.7, 3.7, 0, 3.7, 0.1], "measures": [[39, "portion", 100]]},
+    "2000015": {"name": "Baton owsiany domowy", "brand": "Domowy", "nutrition": [420, 9, 18, 55, 6, 20, 0.2], "measures": [[54, "bar", 45]], "own": true}
   },
   "recipes": {
     "3000001": {"name": "Owsianka z bananem", "weight": 350, "nutrition": [380, 12, 8, 65, 7, 18, 0.2], "cooking_time": 10, "meals": ["breakfast", "second_breakfast"], "tags": ["vegetarian", "high_fibre"], "items": [[2000002, 52, 5], [2000003, 40, 1], [2000004, 46, 1]], "description": "1. Ugotuj płatki na mleku.\n2. Dodaj pokrojonego banana."},

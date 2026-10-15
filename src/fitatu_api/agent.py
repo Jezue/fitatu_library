@@ -73,7 +73,8 @@ _FOOD_ID = {
     "type": "integer",
     "minimum": 1,
     "description": "food_id of a search_food, search_recipes, find_by_barcode, get_recent_foods, get_favorite_foods or "
-    "get_my_foods hit, create_recipe's recipe_id (RECIPE), or a get_day row's product_id (PRODUCT) or recipe_id (RECIPE).",
+    "get_my_foods hit, create_food's food_id (PRODUCT), create_recipe's recipe_id (RECIPE), or a get_day row's product_id "
+    "(PRODUCT) or recipe_id (RECIPE).",
 }
 _FOOD_TYPE = {"type": "string", "enum": list(FOOD_TYPES), "description": "type of that search hit, or the get_day row's food_type."}
 _LIMIT = {"type": "integer", "minimum": 1, "maximum": 50, "default": 10, "description": "Maximum number of hits."}
@@ -130,6 +131,54 @@ _INGREDIENT = {
     },
 }
 _PORTION = 39  # a recipe's portion measure, the one add_food logs a recipe in by default
+# A product's servings besides g or ml, by the app's measureKey and the measure_id Fitatu gives them (checked live 2026-10-15).
+_SERVINGS = {"piece": ("PIECE", 46), "package": ("PACKAGE", 2), "portion": ("PORTION", 39), "slice": ("SLICE", 8), "bar": ("BAR", 54)}
+_SERVING_NAMES = {measure_id: name for name, (_, measure_id) in _SERVINGS.items()}
+_SERVING = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "enum": list(_SERVINGS), "description": "What the label calls one serving."},
+        "weight": {"type": "number", "exclusiveMinimum": 0, "description": "Grams in one (ml for a drink), e.g. 45 for a 45 g bar."},
+    },
+    "required": ["name", "weight"],
+    "additionalProperties": False,
+}
+_PER_100 = "in 100 g (100 ml for a drink), as the label gives it"
+_LABEL_G = {"type": "number", "minimum": 0, "maximum": 100}
+# create_food's arguments but unit, its required ones first; update_food takes them all as changes.
+_LABEL: dict[str, Any] = {
+    "name": {"type": "string", "maxLength": 255, "description": "The product's name, e.g. 'Baton owsiany'."},
+    "energy_kcal": {"type": "number", "minimum": 0, "maximum": 900, "description": f"Energy in kcal, not kJ, {_PER_100}."},
+    "protein_g": {**_LABEL_G, "description": f"Protein in g {_PER_100}."},
+    "fat_g": {**_LABEL_G, "description": f"Fat in g {_PER_100}."},
+    "carbohydrate_g": {**_LABEL_G, "description": f"Carbohydrate in g {_PER_100}."},
+    "brand": {"type": "string", "maxLength": 255, "description": "Its brand, if the label has one."},
+    "sugars_g": {**_LABEL_G, "description": "Of which sugars, in g; at most carbohydrate_g."},
+    "fiber_g": {**_LABEL_G, "description": "Fibre in g."},
+    "salt_g": {**_LABEL_G, "description": "Salt in g."},
+    "saturated_fat_g": {**_LABEL_G, "description": "Of which saturated fat, in g; at most fat_g."},
+    "servings": {
+        "type": "array",
+        "items": _SERVING,
+        "maxItems": len(_SERVINGS),
+        "description": "Its servings, each name once, e.g. [{'name': 'bar', 'weight': 45}]; add_food then logs them by measure_id.",
+    },
+    "barcode": {"type": "string", "description": "The 8 to 14 digits under the bars. Only the user sees it; find_by_barcode then finds this product."},
+}
+# The API names of the label values.
+_LABEL_KEYS = {
+    "energy_kcal": "energy", "protein_g": "protein", "fat_g": "fat", "carbohydrate_g": "carbohydrate",
+    "sugars_g": "sugars", "fiber_g": "fiber", "salt_g": "salt", "saturated_fat_g": "saturatedFat",
+}
+# The app's ProductFormRequest keys a product's details carry; a PUT clears every one it leaves out (checked live).
+_PRODUCT_FORM = (
+    "name", "brand", "energy", "protein", "fat", "carbohydrate", "saturatedFat", "sugars", "fiber", "salt",
+    "monounsaturatedFat", "polyunsaturatedFat", "omega3", "omega6", "cholesterol", "caffeine", "vitaminA", "vitaminB1",
+    "vitaminB2", "vitaminB5", "vitaminB6", "vitaminB7", "folicAcid", "vitaminB12", "vitaminC", "vitaminD", "vitaminE",
+    "vitaminPP", "vitaminK", "zinc", "phosphorus", "iodine", "magnesium", "copper", "potassium", "selenium", "sodium",
+    "calcium", "iron", "vegetableProtein", "animalProtein", "category", "rawIngredients",
+)
+_OWN_FOOD_ID = {"type": "integer", "minimum": 1, "description": "create_food's food_id, or a get_my_foods PRODUCT hit's food_id."}
 
 
 def _seed_row_id_schema(rows: str, call: str) -> dict[str, Any]:
@@ -390,8 +439,9 @@ TOOLS: list[dict[str, Any]] = [
     _tool(
         "find_by_barcode",
         "Find a product by barcode",
-        "Find the catalog product with a barcode (the EAN or UPC digits printed under the bars). "
-        "Returns it in the same shape as a search_food hit, for add_food and get_food_measures. "
+        "Find the catalog product with a barcode (the EAN or UPC digits printed under the bars), or the user's own "
+        "product with it (create_food's barcode). Returns it in the same shape as a search_food hit, for add_food and "
+        "get_food_measures. "
         "A barcode that no product has is not_found: then search_food by the product's name.",
         {"barcode": {"type": "string", "description": "The 8 to 14 digits, without spaces, e.g. '5901234123457'."}},
         ("barcode",),
@@ -429,9 +479,9 @@ TOOLS: list[dict[str, Any]] = [
     _tool(
         "get_my_foods",
         "List the user's own foods",
-        "List the foods the user created, their own recipes (create_recipe makes them) and "
-        "products, in the same shape as search_food hits: a RECIPE hit's food_id is what "
-        "delete_recipe takes.",
+        "List the foods the user created, their own recipes (create_recipe) and products (create_food), in the same "
+        "shape as search_food hits: a RECIPE hit's food_id is what update_recipe and delete_recipe take, a PRODUCT "
+        "hit's what update_food and delete_food take.",
         {"phrase": {"type": "string", "description": "Words of the name; omit it for all of them."}, "limit": _LIMIT},
         read_only=True,
     ),
@@ -548,8 +598,8 @@ TOOLS: list[dict[str, Any]] = [
         "add_food",
         "Log a food",
         "Log a catalog food in a meal; returns its row_id. food_id and food_type come from a "
-        "search_food, search_recipes, find_by_barcode, get_recent_foods, get_favorite_foods or get_my_foods hit, or "
-        "create_recipe's recipe_id (RECIPE). For a PRODUCT give either unit 'g' "
+        "search_food, search_recipes, find_by_barcode, get_recent_foods, get_favorite_foods or get_my_foods hit, "
+        "create_food's food_id (PRODUCT) or create_recipe's recipe_id (RECIPE). For a PRODUCT give either unit 'g' "
         "or 'ml' with quantity in grams or millilitres, or measure_id (from the hit or "
         "get_food_measures) with quantity = how many of that measure. A RECIPE is logged in "
         "portions unless measure_id names another of its measures; unit is for products only. "
@@ -867,6 +917,53 @@ TOOLS: list[dict[str, Any]] = [
         destructive=True,
         idempotent=True,
     ),
+    _tool(
+        "create_food",
+        "Create a private product",
+        "Save a product in the user's own foods from its nutrition label, e.g. a bar the catalog does not have, to "
+        "log it by weight or by its servings. Only the user sees it; it never goes to the shared catalog. Values are "
+        "per 100 g (100 ml with unit ml), as the label gives them: when it gives only a serving's, scale them to 100 g. "
+        "Energy in kcal, not kJ. Returns food_id and measures, its measures as get_food_measures lists them (null when "
+        "it could not be read back). Log it with add_food: food_id, food_type PRODUCT, and unit g (ml) with the amount, "
+        "or a measure_id with the count. Each call creates another product: when one fails with anything but a "
+        "validation or rate_limit error, look for it with get_my_foods before creating it again.",
+        {
+            **_LABEL,
+            "unit": {"type": "string", "enum": ["g", "ml"], "default": "g", "description": "ml for a drink whose label gives values per 100 ml."},
+        },
+        ("name", "energy_kcal", "protein_g", "fat_g", "carbohydrate_g"),
+    ),
+    _tool(
+        "update_food",
+        "Change a private product",
+        "Change one of the user's own products (create_food's food_id or a get_my_foods PRODUCT hit's food_id): any "
+        "value create_food takes but unit; what is not given stays as it is, and servings replaces the list. Any other "
+        "product is refused before anything is changed (that check reads it). Fitatu may save the change as a new "
+        "product (e.g. new values of a product already logged): food_id is then the new id and replaced_food_id the "
+        "old one, which is retired; rows logged before keep the old values. Returns measures as create_food does and "
+        "previous, which update_food takes on food_id to undo the change. data.ok says the server accepted it.",
+        {
+            "food_id": _OWN_FOOD_ID,
+            **_LABEL,
+            "servings": {**_LABEL["servings"], "description": "Every serving of it, each name once; replaces the list."},
+        },
+        ("food_id",),
+        destructive=True,
+        idempotent=True,
+    ),
+    _tool(
+        "delete_food",
+        "Delete a private product",
+        "Delete one of the user's own products: create_food's food_id or a get_my_foods PRODUCT hit's food_id. Any "
+        "other product (a catalog one or another user's) is refused before anything is changed (that check reads "
+        "it). Rows already logged with it keep their name and values. Fitatu keeps a deleted product marked deleted, "
+        "out of the user's foods and searches; deleting it again gives data.ok true with already_deleted true. "
+        "previous holds what create_food takes to make it again (under a new food_id).",
+        {"food_id": _OWN_FOOD_ID},
+        ("food_id",),
+        destructive=True,
+        idempotent=True,
+    ),
 ]
 
 _SCHEMAS = {tool["name"]: tool["input_schema"] for tool in TOOLS}
@@ -881,8 +978,8 @@ and water (posiłki, dziennik, waga, pomiary, woda). You keep them with these to
 - Dates: for today, yesterday, this week or a weekday, call get_today and count from its date; \
 "this week" runs from Monday to today, but for a shopping list from today to Sunday.
 - Read before you change anything: row_ids come from get_day; food_ids from search_food, \
-search_recipes, find_by_barcode, get_recent_foods, get_favorite_foods, get_my_foods, create_recipe's recipe_id or a \
-get_day row's product_id or recipe_id. Never guess an id.
+search_recipes, find_by_barcode, get_recent_foods, get_favorite_foods, get_my_foods, create_food's food_id, \
+create_recipe's recipe_id or a get_day row's product_id or recipe_id. Never guess an id.
 - Meals: the keys ({', '.join(MEALS)}) are only slots, which users rename. Match the user's words \
 against get_day's meal_name and pass that meal's meal_key.
 - What the user ate, what is left and their goals: get_progress for the day or range; a weekly or \
@@ -905,7 +1002,8 @@ never without it.
 - Undo: remove rows you just added or copied by their row_ids; add a removed row again with \
 add_food from its meal, food_id, food_type, measure_id, measure_quantity and eaten (food_id null: \
 add_custom_item from its meal, name, energy, protein, fat, carbohydrate and eaten); call \
-update_item, set_note, update_recipe or set_targets with its result's previous.
+update_item, set_note, update_recipe, update_food or set_targets with its result's previous; delete_food's \
+previous goes to create_food.
 - When the user gives only kcal for a custom item, estimate its protein, fat and carbohydrate and \
 say they are estimates.
 - Units: energy in kcal; nutrients and weight in g; water in ml. log_weight takes kg; \
@@ -1000,7 +1098,69 @@ def _checked_arguments(schema: dict[str, Any], arguments: Any) -> dict[str, Any]
             raise FitatuValidationError(f"{key} must be at most {prop['maximum']}, got {value!r}")
         if "exclusiveMinimum" in prop and value <= prop["exclusiveMinimum"]:
             raise FitatuValidationError(f"{key} must be more than {prop['exclusiveMinimum']}, got {value!r}")
+        if "maxLength" in prop and len(value) > prop["maxLength"]:  # Fitatu answers a 256-character brand with a 500
+            raise FitatuValidationError(f"{key} must be at most {prop['maxLength']} characters, got {len(value)}")
     return args
+
+
+def _check_barcode(barcode: str) -> None:
+    if not (barcode.isascii() and barcode.isdigit() and 8 <= len(barcode) <= 14):
+        raise FitatuValidationError(f"barcode must be the 8 to 14 digits under the bars, got {barcode!r}")
+
+
+def _label_checks(values: dict[str, Any]) -> None:
+    """Refuse a label (create_food's arguments) that cannot be right: Fitatu takes nearly any numbers (checked live).
+
+    No check of the energy against the macros: polyols, alcohol and erythritol make honest labels fail it.
+    """
+    if not str(values.get("name") or "").strip():
+        raise FitatuValidationError("name must not be empty")
+    if sum(values.get(key) or 0 for key in ("protein_g", "fat_g", "carbohydrate_g")) > 100:
+        raise FitatuValidationError(
+            "protein_g, fat_g and carbohydrate_g add up to more than 100 g in 100 g: are these a serving's values? Scale them to 100 g"
+        )
+    for part, whole in (("sugars_g", "carbohydrate_g"), ("saturated_fat_g", "fat_g")):
+        if (values.get(part) or 0) > (values.get(whole) or 0):
+            raise FitatuValidationError(f"{part} is part of {whole} and cannot be more")
+    names = []
+    for index, serving in enumerate(values.get("servings") or []):
+        try:
+            names.append(_checked_arguments(_SERVING, serving)["name"])
+        except FitatuValidationError as exc:
+            raise FitatuValidationError(f"servings[{index}]: {exc}") from None
+    if twice := sorted({name for name in names if names.count(name) > 1}):
+        raise FitatuValidationError(f"servings names {', '.join(twice)} twice; give each serving once")
+    if values.get("barcode") is not None:
+        _check_barcode(values["barcode"])
+
+
+def _label_measures(servings: list[dict[str, Any]] | None, unit: str) -> list[dict[str, Any]]:
+    """create_food's servings as the app's measures. The values are per the first measure (checked live): 100 g
+    (or ml) first keeps them per 100 g."""
+    base = {"measureKey": "MILLILITER" if unit == "ml" else "GRAM", "measureUnit": unit, "weight": 100}
+    return [base, *({"measureKey": _SERVINGS[s["name"]][0], "measureUnit": unit, "weight": s["weight"]} for s in servings or ())]
+
+
+def _label_of(details: dict[str, Any], *, strict: bool) -> dict[str, Any]:
+    """A product's details as create_food's arguments but unit, without the values it lacks. A measure that is
+    not g, ml or a serving cannot be sent back: strict refuses it (a PUT would drop it), else it is left out."""
+    servings = []
+    for measure in as_dict_list(details.get("measures")):
+        if measure.get("id") in _SERVING_NAMES:
+            servings.append({"name": _SERVING_NAMES[measure["id"]], "weight": measure.get("weightPerUnit")})
+        elif strict and measure.get("id") not in (1, 17):  # g and ml, the base the values are per
+            raise FitatuValidationError(
+                f"food {details.get('id')} has a measure update_food cannot send back ({measure.get('name')}); "
+                "change this product in the Fitatu app"
+            )
+    label = {
+        "name": details.get("name"),
+        "brand": details.get("brand") or None,
+        **{tool: details.get(api) for tool, api in _LABEL_KEYS.items()},
+        "servings": servings,
+        "barcode": details.get("currentUserPrivateBarcode"),  # a barcode the user gave stays theirs (checked live)
+    }
+    return {key: value for key, value in label.items() if value is not None}
 
 
 class FoodHit(TypedDict):
@@ -1285,8 +1445,8 @@ class FitatuTools:
         its error carries the ``row_id`` to repeat it with as ``retry_row_id``, also when the
         caller gave it. With a ``row_id`` picked here, the error is not ``retryable`` (the same
         call without it would log the food again) and its hint names the ``row_id`` too.
-        Likewise a ``create_recipe`` that fails with anything but a ``validation``, ``not_found``
-        or ``rate_limit`` error may have created the recipe: it is not ``retryable``, and its
+        Likewise a ``create_recipe`` or ``create_food`` that fails with anything but a ``validation``,
+        ``not_found`` or ``rate_limit`` error may have created it: it is not ``retryable``, and its
         hint says to look for it with ``get_my_foods`` first. A call that runs out of
         ``call_timeout`` stops retrying and reports the last error, a ``network`` one when no time
         was left to send a request.
@@ -1313,9 +1473,9 @@ class FitatuTools:
                 error["retry_row_id"] = row_id
                 if picked:
                     retry = f"The add may have been saved: repeat it with row_id {row_id!r} (retry_row_id), which cannot log it twice."
-            # POST /recipes is sent once and has no id to make a repeat safe; a 429 means it was not taken.
-            elif name == "create_recipe" and error["error_type"] not in ("validation", "not_found", "rate_limit"):
-                retry = "The recipe may have been created: look for it with get_my_foods before creating it again."
+            # POST /recipes and /products are sent once and have no id to make a repeat safe; a 429 means it was not taken.
+            elif name in ("create_recipe", "create_food") and error["error_type"] not in ("validation", "not_found", "rate_limit"):
+                retry = f"The {name.removeprefix('create_')} may have been created: look for it with get_my_foods before creating it again."
             if retry:
                 error["retryable"] = False
                 error["hint"] = f"{error['hint']} {retry}" if error["hint"] else retry
@@ -1648,13 +1808,14 @@ class FitatuTools:
         }
 
     def find_by_barcode(self, barcode: str) -> FoodHit:
-        if not (barcode.isascii() and barcode.isdigit() and 8 <= len(barcode) <= 14):
-            raise FitatuValidationError(f"barcode must be the 8 to 14 digits under the bars, got {barcode!r}")
+        _check_barcode(barcode)
         hit = next((hit for hit in self.client.search_food(barcode) if hit.get("type") == "PRODUCT"), None)
         # A barcode as the phrase finds its product first (checked live), but the search also matches
-        # names: only the product's own details can confirm the barcode.
-        if hit is None or str(self.client.get_product_details(hit["foodId"]).get("barcode")) != barcode:
-            raise FitatuNotFoundError(f"no catalog product has barcode {barcode}; search_food by the product's name instead")
+        # names: only the product's own details can confirm the barcode. The user's own product keeps
+        # one they gave it in currentUserPrivateBarcode (checked live).
+        details = {} if hit is None else self.client.get_product_details(hit["foodId"])
+        if hit is None or barcode not in (str(details.get("barcode")), str(details.get("currentUserPrivateBarcode"))):
+            raise FitatuNotFoundError(f"no product has barcode {barcode}; search_food by the product's name instead")
         return _food(hit)
 
     def get_food_measures(self, food_id: int, food_type: str) -> dict[str, Any]:
@@ -1670,7 +1831,11 @@ class FitatuTools:
         return _foods(self.client.foods.get_favorites(self._user_id, limit=limit))
 
     def get_my_foods(self, phrase: str = "", limit: int = 10) -> list[FoodHit]:
-        return _foods(self.client.search_user_food(self._user_id, phrase, self.get_today()["date"], limit=limit))
+        # The route ignores phrase (checked live 2026-10-15): the words are matched here.
+        # shortcut: only the first 50 own foods are searched; page through them if users have more.
+        hits = self.client.search_user_food(self._user_id, phrase, self.get_today()["date"], limit=50)
+        words = phrase.casefold().split()
+        return _foods([hit for hit in hits if all(word in str(hit.get("name") or "").casefold() for word in words)])[:limit]
 
     def get_weight_history(self, from_date: str | None = None, to_date: str | None = None, limit: int = 41) -> list[dict[str, Any]]:
         return self.client.measurements.get_weight_history(self._user_id, from_date=from_date, to_date=to_date, limit=limit)
@@ -2203,3 +2368,104 @@ class FitatuTools:
         if not already_deleted:
             self.client.delete_recipe(recipe_id)
         return {"recipe_id": recipe_id, "name": recipe.get("name"), "already_deleted": already_deleted, "ok": True}
+
+    def _read_measures(self, food_id: int) -> list[dict[str, Any]] | None:
+        """A product's measures as get_food_measures lists them; None when it cannot be read."""
+        try:
+            return self.get_food_measures(food_id, "PRODUCT")["measures"]
+        except FitatuApiError:  # it was written all the same: an error here would invite a second write
+            return None
+
+    def _own_product(self, food_id: int, change: str) -> dict[str, Any]:
+        """The product, read once, when it is a private product of this user; any other is refused."""
+        product = self.client.get_product_details(food_id)
+        if product.get("private") is not True or str(product.get("userId")) != self._user_id:
+            raise FitatuValidationError(f"food {food_id} is not a product this user created; only those can be {change} (get_my_foods lists them)")
+        return product
+
+    def create_food(
+        self,
+        name: str,
+        energy_kcal: float,
+        protein_g: float,
+        fat_g: float,
+        carbohydrate_g: float,
+        brand: str | None = None,
+        sugars_g: float | None = None,
+        fiber_g: float | None = None,
+        salt_g: float | None = None,
+        saturated_fat_g: float | None = None,
+        servings: list[dict[str, Any]] | None = None,
+        barcode: str | None = None,
+        unit: str = "g",
+    ) -> dict[str, Any]:
+        _label_checks(
+            {"name": name, "protein_g": protein_g, "fat_g": fat_g, "carbohydrate_g": carbohydrate_g, "sugars_g": sugars_g,
+             "saturated_fat_g": saturated_fat_g, "servings": servings, "barcode": barcode}
+        )
+        # Private whatever is sent: only the user sees it (checked live).
+        created = self.client.create_product(
+            name=name, brand=brand, energy=energy_kcal, protein=protein_g, fat=fat_g, carbohydrate=carbohydrate_g, sugars=sugars_g,
+            fiber=fiber_g, salt=salt_g, saturated_fat=saturated_fat_g, measures=_label_measures(servings, unit), barcode=barcode,
+        )
+        if not created.get("id"):
+            raise FitatuApiError("POST /products answered without an id; look for the product with get_my_foods before creating it again")
+        food_id = int(created["id"])
+        return {"food_id": food_id, "name": created.get("name") or name, "measures": self._read_measures(food_id), "ok": True}
+
+    def update_food(
+        self,
+        food_id: int,
+        name: str | None = None,
+        energy_kcal: float | None = None,
+        protein_g: float | None = None,
+        fat_g: float | None = None,
+        carbohydrate_g: float | None = None,
+        brand: str | None = None,
+        sugars_g: float | None = None,
+        fiber_g: float | None = None,
+        salt_g: float | None = None,
+        saturated_fat_g: float | None = None,
+        servings: list[dict[str, Any]] | None = None,
+        barcode: str | None = None,
+    ) -> dict[str, Any]:
+        given = {
+            key: value
+            for key, value in {
+                "name": name, "brand": brand, "energy_kcal": energy_kcal, "protein_g": protein_g, "fat_g": fat_g,
+                "carbohydrate_g": carbohydrate_g, "sugars_g": sugars_g, "fiber_g": fiber_g, "salt_g": salt_g,
+                "saturated_fat_g": saturated_fat_g, "servings": servings, "barcode": barcode,
+            }.items()
+            if value is not None
+        }
+        if not given:
+            raise FitatuValidationError("pass the values to change")
+        details = self._own_product(food_id, "changed")
+        if details.get("deleted") is True:
+            raise FitatuNotFoundError(f"food {food_id} was deleted; create_food makes a new one")
+        # shortcut: previous cannot clear a value that was empty before (null counts as not given); upgrade if asked.
+        previous = _label_of(details, strict=True)
+        values = {**previous, **given}
+        _label_checks(values)
+        # The app sends the whole product: Fitatu clears every key left out (checked live), so the rest goes back as read.
+        body = {key: details.get(key) for key in _PRODUCT_FORM}
+        body |= {_LABEL_KEYS.get(key, key): value for key, value in values.items() if key not in ("servings", "barcode")}
+        body |= {"measures": _label_measures(values.get("servings"), "ml" if details.get("liquid") else "g"), "barcode": values.get("barcode")}
+        # Fitatu may keep the change as a new product and retire this one (e.g. new values of a product already logged).
+        new_id = int(self.client.update_product(food_id, body).get("id") or food_id)
+        return {
+            "food_id": new_id,
+            "replaced_food_id": None if new_id == food_id else food_id,
+            "name": values["name"],
+            "measures": self._read_measures(new_id),
+            "previous": previous,
+            "ok": True,
+        }
+
+    def delete_food(self, food_id: int) -> dict[str, Any]:
+        details = self._own_product(food_id, "deleted")
+        already_deleted = details.get("deleted") is True  # deletes are soft: the product stays, marked deleted
+        if not already_deleted:
+            self.client.delete_product(food_id)
+        previous = {**_label_of(details, strict=False), "unit": "ml" if details.get("liquid") else "g"}
+        return {"food_id": food_id, "name": details.get("name"), "already_deleted": already_deleted, "previous": previous, "ok": True}

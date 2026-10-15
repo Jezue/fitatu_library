@@ -714,5 +714,75 @@
       "idempotentHint": true,
       "openWorldHint": false
     }
+  },
+  "create_food": {
+    "parameters": {
+      "barcode": "string",
+      "brand": "string",
+      "carbohydrate_g": "number",
+      "energy_kcal": "number",
+      "fat_g": "number",
+      "fiber_g": "number",
+      "name": "string",
+      "protein_g": "number",
+      "salt_g": "number",
+      "saturated_fat_g": "number",
+      "servings": "array",
+      "sugars_g": "number",
+      "unit": "string"
+    },
+    "required": [
+      "carbohydrate_g",
+      "energy_kcal",
+      "fat_g",
+      "name",
+      "protein_g"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  "update_food": {
+    "parameters": {
+      "barcode": "string",
+      "brand": "string",
+      "carbohydrate_g": "number",
+      "energy_kcal": "number",
+      "fat_g": "number",
+      "fiber_g": "number",
+      "food_id": "integer",
+      "name": "string",
+      "protein_g": "number",
+      "salt_g": "number",
+      "saturated_fat_g": "number",
+      "servings": "array",
+      "sugars_g": "number"
+    },
+    "required": [
+      "food_id"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "delete_food": {
+    "parameters": {
+      "food_id": "integer"
+    },
+    "required": [
+      "food_id"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
   }
 }

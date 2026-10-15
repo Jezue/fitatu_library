@@ -75,13 +75,14 @@ service.
 | `client.get_recipe(recipe_id)` | stable | A recipe with ingredients and nutrition (numeric id only). Fitatu serves any user's private recipe by id, with the author's `username` and `userId` (checked live 2026-10-15): the `get_recipe` tool answers `not_found` for another user's. |
 | `client.get_recipes_catalog()` | stable | The recipe catalog home (categories with recipes). |
 | `client.get_recipes_catalog_category(category_id)` | stable | One catalog category by id or slug. |
-| `client.search_user_food(user_id, phrase, day, *, page=1, limit=50)` | beta | Search the user's own products and recipes. |
+| `client.search_user_food(user_id, phrase, day, *, page=1, limit=50)` | beta | Search the user's own products and recipes. Fitatu ignores `phrase` (checked live 2026-10-15): it answers every own food. |
 | `client.find_matching_user_product(user_id, phrase, day, *, nutrition, brand=None, ...)` | beta | The user's first product matching brand and nutrition within a tolerance, or `None`. |
 | `client.nutrition_values_match()`, `client.product_nutrition_matches()` | stable | Local helpers for comparing nutrition values. |
 | `client.normalize_recipe_items(items)` | stable | Local helper: ingredient dicts in the shape `create_recipe` sends. |
-| `client.create_product(*, name, brand, energy, protein, fat, carbohydrate, ...)` | stable | Create a product in the Fitatu catalog (values per 100 g). |
+| `client.create_product(*, name, energy, protein, fat, carbohydrate, brand=None, ..., measures=None, barcode=None)` | stable | Create a private product of the user's (values per 100 g, or per the first of `measures`; `barcode` stays private). |
+| `client.update_product(product_id, product)` | stable | Replace a product the user created with the whole body (`PUT /products/{id}`); a key left out is cleared; answers `newProductCreated` (checked live 2026-10-15). |
 | `client.create_recipe(*, name, items, ...)` | stable | Create a recipe from `{"foodId", "measureId", "measureQuantity"}` items. |
-| `client.delete_product(product_id)` | beta | Delete a product the user created. |
+| `client.delete_product(product_id)` | beta | Delete a product the user created. Soft, like recipes. |
 | `client.update_recipe(recipe_id, *, name, items, ...)` | beta | Replace a recipe the user created with `create_recipe`'s body (`PUT /recipes/{id}`): the app sends the whole recipe, so pass what `get_recipe()` returned for the fields to keep. The app's route and body, not checked live yet. |
 | `client.delete_recipe(recipe_id)` | beta | Delete a recipe the user created. Fitatu deletes it softly: `get_recipe()` still returns it, with `"deleted": true`, and it leaves the user's searches. |
 | `client.set_product_proposal(product_id, *, property_name, property_value)` | beta | Propose a change to a catalog product; only `rawIngredients` is accepted. |
@@ -151,7 +152,7 @@ service.
 | `FitatuTools.from_session(path=None, *, tools=None, call_timeout=45, **client_kwargs)`, `FitatuTools(client, *, tools=None, call_timeout=45)` | beta | The tool layer over a client; `tools` is an allowlist of tool names for `call()`; `call_timeout` (also an attribute) is the seconds one `call()` may take, retries included (`None`: no limit). |
 | `FitatuTools.demo(*, tools=None)` | beta | The tools over a small made-up diary kept in memory (`fitatu_api/demo_data.json`): nothing is sent, no session is read, writes last as long as the instance. |
 | `FitatuTools.call(name, arguments)` | beta | Run a tool by name within `call_timeout`; never raises, and refuses a tool outside the allowlist. |
-| `FitatuTools.<tool>(...)` | beta | Each of the 44 tools in [AGENTS.md](AGENTS.md) as a method that raises. |
+| `FitatuTools.<tool>(...)` | beta | Each of the 47 tools in [AGENTS.md](AGENTS.md) as a method that raises. |
 | `fitatu_api.agent.TOOLS`, `READ_ONLY_TOOLS`, `anthropic_tools(names=None)`, `openai_tools(names=None)` | beta | Tool definitions with titles and annotations; the names of the read tools; copies of all tools, or of the ones named, in the Anthropic and OpenAI formats. |
 | `fitatu_api.agent.SYSTEM_PROMPT` | beta | The recommended system prompt for a model that uses the tools (static English text). |
 | `fitatu_api.mcp_server.build_server(open_tools=FitatuTools.from_session, *, read_only=False, tools=None, call_timeout=45, demo=False)`, `main(argv=None)`, `serve(args)` | beta | The tools as an MCP server over stdio (`fitatu-mcp [--read-only] [--demo] [--tools NAME,...] [--call-timeout SECONDS] [--log-level LEVEL]`, `python -m fitatu_api.mcp_server`) with the prompts of `PROMPTS`; logs to stderr (see the README); `open_tools` runs on the first tool call; `tools` serves only those (a warning names the ones `SYSTEM_PROMPT` mentions and it leaves out); each call gets what is left of `call_timeout` since the host sent it (`None`, or `--call-timeout 0`: no limit). Needs the `mcp` extra; see [AGENTS.md](AGENTS.md#mcp). |

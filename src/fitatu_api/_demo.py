@@ -25,6 +25,8 @@ from .planner import _new_row_id
 
 _DATA = json.loads(resources.files("fitatu_api").joinpath("demo_data.json").read_text(encoding="utf-8"))
 _SIZES = ("neck", "chest", "waist", "stomach", "hips", "thigh", "calf", "biceps", "fatPercentage")
+# A product's measures by the app's measureKey, with the ids Fitatu gives them (checked live).
+_MEASURE_KEYS = {"PIECE": (46, "piece"), "PACKAGE": (2, "package"), "PORTION": (39, "portion"), "SLICE": (8, "slice"), "BAR": (54, "bar")}
 
 
 def _fold(text: str) -> str:
@@ -49,12 +51,7 @@ class DemoBackend:
             self.today = dt.date.today()
         self.foods: dict[tuple[str, int], dict[str, Any]] = {}
         for key, product in _DATA["products"].items():
-            measures = [{"id": 1, "name": "g", "weight": 1, "capacity": None}]
-            if product.get("liquid"):
-                measures.append({"id": 2, "name": "ml", "weight": 1, "capacity": 1})
-            for measure_id, name, weight in product["measures"]:
-                measures.append({"id": measure_id, "name": name, "weight": weight, "capacity": weight if product.get("liquid") else None})
-            self._add_food("PRODUCT", int(key), product, base=100, measures=measures)
+            self._add_product(int(key), product)
         for key, recipe in _DATA["recipes"].items():
             self._add_recipe(int(key), recipe)
         self.favorites = {(kind, food_id) for kind, food_id in _DATA["favorites"]}
@@ -84,6 +81,14 @@ class DemoBackend:
     def _day(self, offset: str) -> str:
         return (self.today + dt.timedelta(days=int(offset))).isoformat()
 
+    def _add_product(self, product_id: int, product: dict[str, Any]) -> None:
+        measures = [{"id": 1, "name": "g", "weight": 1, "capacity": None}]
+        if product.get("liquid"):
+            measures.append({"id": 17, "name": "ml", "weight": 1, "capacity": 1})
+        for measure_id, name, weight in product["measures"]:
+            measures.append({"id": measure_id, "name": name, "weight": weight, "capacity": weight if product.get("liquid") else None})
+        self._add_food("PRODUCT", product_id, product, base=100, measures=measures)
+
     def _add_food(self, kind: str, food_id: int, data: dict[str, Any], *, base: float, measures: list[dict[str, Any]]) -> None:
         self.foods[kind, food_id] = {
             "id": food_id,
@@ -96,6 +101,8 @@ class DemoBackend:
             "barcode": data.get("barcode"),
             "own": data.get("own", False),
             "deleted": False,
+            "liquid": data.get("liquid", False),
+            "saturatedFat": data.get("saturatedFat"),
         }
 
     def _add_recipe(self, recipe_id: int, recipe: dict[str, Any]) -> None:
@@ -165,15 +172,19 @@ class DemoBackend:
             for m in food["measures"]
         ]
         own = {"private": True, "shared": False, "userId": int(self.user_id)} if food["own"] else {"private": False, "shared": True, "userId": 1}
+        # A barcode the user gave their own product stays theirs, as live.
+        barcode = {"barcode": None, "currentUserPrivateBarcode": food["barcode"]} if food["own"] else {"barcode": food["barcode"]}
         return {
             "id": food["id"],
             "name": food["name"],
             "brand": food["brand"],
             "foodType": food["type"],
             "measures": measures,
-            "barcode": food["barcode"],
+            **barcode,
             "weight": food["base"],
             **food["nutrition"],
+            "saturatedFat": food["saturatedFat"],
+            "liquid": food["liquid"],
             **own,
             "deleted": food["deleted"],
             **(self._recipe_fields(food) if food["type"] == "RECIPE" else {}),
@@ -325,6 +336,33 @@ class DemoBackend:
     def delete_recipe(self, *, food_id: str, **_: Any) -> list[Any]:
         self.foods["RECIPE", int(food_id)]["deleted"] = True  # soft, as Fitatu does
         return []
+
+    def create_product(self, *, body: dict[str, Any], **_: Any) -> dict[str, Any]:
+        return self._save_product(max(food_id for _, food_id in self.foods) + 1, body)
+
+    def update_product(self, *, food_id: str, body: dict[str, Any], **_: Any) -> dict[str, Any]:
+        return {**self._save_product(int(food_id), body), "newProductCreated": False}  # the demo changes it in place
+
+    def _save_product(self, product_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        # shortcut: the values are taken per 100 g or ml, as the tools send them (base measure first); Fitatu takes
+        # them per the first measure, whatever it is.
+        base, *servings = body.get("measures") or [{"measureUnit": "g"}]
+        product = {
+            "name": body["name"],
+            "brand": body.get("brand"),
+            "nutrition": [body.get(field) or 0 for field in MACRO_FIELDS],
+            "measures": [[*_MEASURE_KEYS[measure["measureKey"]], measure["weight"]] for measure in servings],
+            "liquid": base["measureUnit"] == "ml",
+            "saturatedFat": body.get("saturatedFat"),
+            "barcode": body.get("barcode"),
+            "own": True,
+        }
+        self._add_product(product_id, product)
+        return {"id": product_id, "name": body["name"]}
+
+    def delete_product(self, *, food_id: str, **_: Any) -> dict[str, Any]:
+        self.foods["PRODUCT", int(food_id)]["deleted"] = True  # soft, as Fitatu does
+        return {"deleted": True}
 
     def my_foods(self, *, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
         phrase = str(params.get("phrase") or "")
@@ -533,6 +571,9 @@ _ROUTES = [
     ("GET", r"/search/new/food", "search"),
     ("GET", r"/search/catalog/recipes", "search_recipes"),
     ("GET", r"/products/(?P<food_id>\d+)", "product"),
+    ("POST", r"/products", "create_product"),
+    ("PUT", r"/products/(?P<food_id>\d+)", "update_product"),
+    ("DELETE", r"/products/(?P<food_id>\d+)", "delete_product"),
     ("GET", r"/recipes/(?P<food_id>\d+)", "recipe"),
     ("POST", r"/recipes", "create_recipe"),
     ("PUT", r"/recipes/(?P<food_id>\d+)", "update_recipe"),

@@ -47,8 +47,8 @@ DEMO_NOTE = "- This is a demo: the diary is made up and kept in memory, and noth
 WEBSITE = "https://github.com/Jezue/fitatu_library"
 # Claude Code asks before every call of such a tool, also where calls are otherwise allowed without
 # asking (https://code.claude.com/docs/en/mcp, "Require approval for a specific tool"): a deleted
-# recipe cannot be brought back.
-_TOOL_META = {"delete_recipe": {"anthropic/requiresUserInteraction": True}}
+# recipe or product cannot be brought back (create_food makes it again under a new id).
+_TOOL_META = {name: {"anthropic/requiresUserInteraction": True} for name in ("delete_recipe", "delete_food")}
 
 # Slash commands for the user, in Polish like the app; the text tells the model which tools to use.
 # A prompt is listed only when the server serves every tool its text (with its defaults) names.
