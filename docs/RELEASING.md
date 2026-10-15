@@ -56,7 +56,7 @@ re-run on its own.
 
    ```bash
    rm -rf dist                # python -m build adds to dist/ and never removes older builds
-   hatch run all              # ruff, mypy (src, demo.py, example.py), pytest, python -m build
+   hatch run all              # ruff, mypy (src, demo.py, example.py, catering_sync.py), pytest, python -m build
    pre-commit run --all-files
    ```
 

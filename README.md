@@ -68,6 +68,9 @@ with FitatuApiClient.from_session() as client:  # closes the HTTP connections at
 
 How writes, row ids and removals work: [docs/PLANNER.md](https://github.com/Jezue/fitatu_library/blob/main/docs/PLANNER.md).
 
+To copy a catering diet's menu into the diary (safe to run again), use `catering_sync.py` from
+the repository: [Importing a catering menu](https://github.com/Jezue/fitatu_library/blob/main/docs/PLANNER.md#importing-a-catering-menu).
+
 ## For AI agents
 
 `FitatuTools` exposes 40 tools (read the day, search food, log food, weight, water,

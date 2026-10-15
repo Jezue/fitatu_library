@@ -20,6 +20,12 @@ replayed by the offline tests (`tests/fixtures/api_recording.json`, see
   row re-sent without `eaten` comes back with `eaten: false`.
 - A row sent with `deletedAt` (`"YYYY-MM-DD HH:MM:SS"`) disappears from the day GET. There is no
   DELETE route for diary rows.
+- A row id belongs to one day: sent again into another meal it moves the row there, and the
+  same id on another day is another row. Sending the id of a deleted row brings the row back.
+  Any UUID of version 1 is taken, also one made from a hash with no real time in it, and a meal
+  lists its rows in the order they were added. An id without dashes is not refused but saved
+  under a new id the server makes, so the library always sends the dashed lower-case form
+  (checked live 2026-10-15, not recorded).
 - Product and recipe rows need only `productId` / `recipeId` plus the measure; the server fills
   in name and nutrition.
 - The answer is HTTP 202 with `[{"date", "revision", "errorMessage"}]`, one entry per day. A
@@ -158,6 +164,70 @@ Never pass a row id read from the day to an add; to change a row, use `update_da
 `rollback_added_item(user_id, day, *, meal_type, item_id)` deletes the row an add returned
 (`item_id=added["row_id"]`) and only that row; for a row that never landed it returns the
 "not found" removal result below.
+
+### Importing a catering menu
+
+`catering_sync.py`, a script in the repository (not in the package), copies a catering diet's
+menu into the diary and can be run again without logging a dish twice. The menu is a JSON list,
+or a CSV file (comma or semicolon separated, decimal point or comma), with one dish per entry:
+
+| Key | Meaning |
+|---|---|
+| `date` | The day the dish is eaten, `YYYY-MM-DD`. Required. |
+| `meal` | A meal key (`breakfast`, `second_breakfast`, `lunch`, `dinner`, `snack`, `supper`) or the name of the meal in your Fitatu, in any case (`Obiad`). Required. |
+| `name` | The dish as the provider names it. Required. |
+| `energy_kcal`, `protein_g`, `fat_g`, `carbohydrate_g` | The whole portion, logged as a custom row. A macro left out counts as 0 g. |
+| `grams` with `barcode` or `search` | Logs a catalog product: the one with that barcode, else the first product the search finds. With `energy_kcal` too, a product that is not found is logged as a custom row. |
+
+A dish needs `energy_kcal`, or `grams` with a `barcode` or `search`. Other keys are ignored.
+Every entry is checked before anything is read from Fitatu.
+
+```bash
+python catering_sync.py menu.json --dry-run   # what it would log; writes nothing
+python catering_sync.py menu.json
+```
+
+Each dish's `row_id` is a UUID v1 made from a hash of its date, its name and how many dishes of
+that name come before it that day. The script reads each day once and skips the dishes whose row
+is already there, so a run that stopped half-way (a timeout, a rate limit) is finished by running
+it again. It never changes or removes a row: one marked eaten on the phone stays so, a dish
+renamed in a later menu is a new row next to the old one, and a dish deleted in the app comes
+back when the same menu is run again (see the day contract). Dishes are logged as planned. A
+dish that cannot be logged (a meal the day does not have, a product that is not found) is
+reported, the others are logged, and the exit code is 1. Custom rows keep no grams: Fitatu
+stores one as a portion.
+
+#### Writing an adapter for a catering provider
+
+An adapter turns the provider's export into this list; it does not talk to Fitatu. Providers
+(Dietly, Kuchnia Vikinga, Maczfit) give each delivered dish's name and meal and its kcal,
+protein, fat and carbohydrate for the whole portion, which make a custom row:
+
+```python
+import json
+
+# A made-up export: [{"day": "2026-10-20", "dishes": [{"meal": "Obiad", "title": "...",
+#                     "kcal": 650, "protein": 40, "fat": 20, "carbs": 70}]}]
+with open("export.json", encoding="utf-8") as file:
+    export = json.load(file)
+menu = [
+    {"date": day["day"], "meal": dish["meal"], "name": dish["title"], "energy_kcal": dish["kcal"],
+     "protein_g": dish["protein"], "fat_g": dish["fat"], "carbohydrate_g": dish["carbs"]}
+    for day in export
+    for dish in day["dishes"]
+]
+with open("menu.json", "w", encoding="utf-8") as file:
+    json.dump(menu, file, ensure_ascii=False, indent=1)
+```
+
+- Keep the dish name as the provider gives it: the row id follows from it, so a name that
+  changes between runs logs the dish again.
+- Pass the provider's meal names when your meals in Fitatu have the same names (`get_day` lists
+  them as `meal_name`; an account checked on 2026-10-15 had Śniadanie, II śniadanie, Lunch,
+  Obiad, Przekąska and Kolacja) and map the others to a meal key, such as `Podwieczorek` to
+  `snack`. Providers do not agree on which slot their Obiad is, so let your own meal names decide.
+- Leave out the dishes that are not delivered (paused or skipped days).
+- Write barcodes as text, so a leading 0 stays.
 
 ## Updates
 

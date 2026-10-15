@@ -14,6 +14,13 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Claude Code), the rules for using the tools well, common tasks, free vs Premium accounts and
   what to do on each error. A test checks it against the format and that it names only real
   tools.
+- `catering_sync.py` (in the repository, not the package) copies a catering menu into the diary:
+  a JSON list or a CSV file of dishes (date, meal, name, and kcal with macros, or grams with a
+  barcode or a search phrase). Each dish's row id is made from its date and name, so a second
+  run skips what is already logged instead of logging it twice; `--dry-run` shows what it would
+  log. docs/PLANNER.md says how to write an adapter for a catering provider's export. Checked
+  live (2026-10-15): Fitatu takes any UUID of version 1 as a row id, also one made from a hash,
+  and row ids belong to one day.
 
 ## [0.5.1] - 2026-10-15
 

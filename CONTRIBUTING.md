@@ -19,7 +19,7 @@ request:
 
 ```bash
 ruff check .
-mypy src demo.py example.py
+mypy src demo.py example.py catering_sync.py
 pytest -q
 pre-commit run --all-files
 ```
