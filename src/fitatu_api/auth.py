@@ -24,9 +24,10 @@ logger = logging.getLogger(__name__)
 
 def resolve_session_path(path: str | Path | None = None) -> Path:
     """The session file to use: ``path``, else ``$FITATU_SESSION`` (or its alias
-    ``$FITATU_SESSION_PATH``), else ``~/.fitatu/session.json``; ``~`` is expanded."""
+    ``$FITATU_SESSION_PATH``), else ``~/.fitatu/session.json``; ``~`` and variables such as
+    ``${HOME}`` are expanded (Claude Desktop passes an extension's ``${HOME}`` default as it is)."""
     raw = path or os.environ.get("FITATU_SESSION") or os.environ.get("FITATU_SESSION_PATH")
-    return Path(raw or DEFAULT_SESSION_PATH).expanduser()
+    return Path(os.path.expandvars(raw or DEFAULT_SESSION_PATH)).expanduser()
 
 
 def client_profile() -> dict[str, str]:

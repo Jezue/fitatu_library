@@ -445,3 +445,22 @@ def test_the_mcpb_entry_point_runs_fitatu_mcp_with_the_checkbox(monkeypatch: pyt
     with patch("fitatu_api.mcp_server.main") as serve:
         runpy.run_path(str(ROOT / "mcpb" / "server" / "main.py"), run_name="__main__")
     serve.assert_called_once_with(flags)
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [("${HOME}/.fitatu/session.json", "{home}/.fitatu/session.json"), ("/x/session.json", "/x/session.json"),
+     ("", None), ("${user_config.session_file}", None), (None, None)],
+)
+def test_the_mcpb_entry_point_expands_the_session_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, given: str | None, expected: str | None
+) -> None:
+    pytest.importorskip("mcp")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    if given is None:
+        monkeypatch.delenv("FITATU_SESSION", raising=False)
+    else:
+        monkeypatch.setenv("FITATU_SESSION", given)
+    with patch("fitatu_api.mcp_server.main"):
+        runpy.run_path(str(ROOT / "mcpb" / "server" / "main.py"), run_name="__main__")
+    assert os.environ.get("FITATU_SESSION") == (expected and expected.format(home=tmp_path))

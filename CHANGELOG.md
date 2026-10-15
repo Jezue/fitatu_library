@@ -7,6 +7,14 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- The Claude Desktop bundle found no session with its default setting: Claude Desktop passes the
+  default `${HOME}/.fitatu/session.json` without expanding `${HOME}`. The bundle's entry point
+  expands it (and falls back to `~/.fitatu/session.json` for an empty or unexpanded value), and
+  `resolve_session_path()` now expands variables in `$FITATU_SESSION` too. The
+  `fitatu-0.5.0.mcpb` attached to the v0.5.0 release is rebuilt with the fix.
+
 ## [0.5.0] - 2026-10-14
 
 The release that makes the library usable from an agent. The planner is rebuilt on what the day
