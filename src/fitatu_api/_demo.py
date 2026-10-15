@@ -521,7 +521,9 @@ class DemoBackend:
         return self.measurement(day=day)
 
     def profile(self, **_: Any) -> dict[str, Any]:
-        return {"id": self.user_id, "timezone": "Europe/Warsaw", "weightUnit": "KG", "sizeUnit": "CM"}
+        # Premium's recipe flags (it has a plan, see subscriptions), so the recipe filters work
+        flags = ["ROLE_FEATURE_RECIPES_CATALOG_FILTERS", "ROLE_FEATURE_RECIPES_CATALOG_PREMIUM"]
+        return {"id": self.user_id, "timezone": "Europe/Warsaw", "weightUnit": "KG", "sizeUnit": "CM", "accessControl": flags}
 
     def subscriptions(self, **_: Any) -> dict[str, Any]:
         # The demo serves the Premium-only routes (get_top_foods, the macros day by day), so it has a plan.

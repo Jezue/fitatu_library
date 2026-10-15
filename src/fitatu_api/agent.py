@@ -43,6 +43,7 @@ from .exceptions import (
     FitatuApiError,
     FitatuAuthError,
     FitatuNotFoundError,
+    FitatuPremiumRequiredError,
     FitatuValidationError,
     describe_error,
     log_caught,
@@ -82,7 +83,7 @@ _HISTORY_LIMIT = {**_LIMIT, "maximum": 41, "default": 41, "description": "Maximu
 _ROW_IDS = {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "row_ids from get_day."}
 _PROGRESS_DAYS = 62  # get_progress has an entry per day: a year of them is ~130k characters
 _FREE_PROGRESS_DAYS = 31  # without Premium a request per day: a month stays well within call_timeout
-_PREMIUM_RECHECK = 600  # seconds a refusal for want of Premium is trusted: a plan bought meanwhile shows within 10 minutes
+_PREMIUM_RECHECK = 600  # seconds a refusal for want of Premium, or the account's features, are trusted: a plan bought meanwhile shows within 10 minutes
 _SHOPPING_DAYS = 14  # get_shopping_list reads every day and every recipe: two weeks stay well within call_timeout
 _ROW_ID = {"type": "string", "description": "row_id of a food row on that day, from get_day (meals[].items[].row_id)."}
 _PCT = {"type": "integer", "minimum": 1, "maximum": 98}  # Fitatu refuses a macro of 0 g (checked live)
@@ -382,10 +383,12 @@ TOOLS: list[dict[str, Any]] = [
         "Search recipe ideas",
         "Search the Fitatu recipe catalog for meal ideas, e.g. phrase 'kurczak' with max_energy_kcal 500 for "
         "a chicken dinner of at most 500 kcal, or diets ['vegan'], meal 'breakfast' and max_cooking_time 10 "
-        "for a quick vegan breakfast. The filters are per portion and all apply together. Each hit is shaped "
+        "for a quick vegan breakfast. The filters are per portion and all apply together; all but "
+        "max_energy_kcal need Fitatu Premium (without it a forbidden error: tell the user, search by phrase "
+        "and max_energy_kcal instead). Each hit is shaped "
         "like a search_food hit of type RECIPE (food_id, name, energy_kcal and measure of one portion) plus "
         "cooking_time and preparation_time as the catalog gives them, rating, and premium: whether the app "
-        "keeps the recipe for Fitatu Premium (get_recipe and get_food_measures read it on any account). "
+        "keeps the recipe for Fitatu Premium (get_recipe reads it only with Premium). "
         "get_recipe gives a hit's ingredients and steps. Log one with add_food: food_type RECIPE, quantity "
         "the portions.",
         {
@@ -423,7 +426,7 @@ TOOLS: list[dict[str, Any]] = [
         "protein_g, fat_g and carbohydrate_g of one serving; null when it has none), cooking_time and "
         "preparation_time in minutes as the catalog gives them, meals (the meal types it suits), tags (e.g. "
         "vegan, keto, polish), rating, premium, deleted, and own: whether it is the user's private recipe, "
-        "which update_recipe and delete_recipe take. Premium recipes read on any account.",
+        "which update_recipe and delete_recipe take. A premium recipe needs Fitatu Premium: without it a forbidden error.",
         {
             "recipe_id": {
                 "type": "integer",
@@ -986,8 +989,9 @@ against get_day's meal_name and pass that meal's meal_key.
 monthly report: get_report. Eaten is its totals' eaten (rows ticked as eaten); when that is 0 but \
 logged is not, give logged and say the rows are not ticked as eaten. What is left is each day's \
 left: the goal minus everything logged, planned rows included.
-- Fitatu Premium: only get_top_foods needs it (without it, get_report's top_foods is null); every \
-other tool, get_progress and get_report included, works on any account.
+- Fitatu Premium: get_top_foods, search_recipes' filters but max_energy_kcal and get_recipe of a \
+premium recipe need it (without it, get_report's top_foods is null); every other tool, get_progress \
+and get_report included, works on any account.
 - Log food (and set copy_meal's eaten) with eaten true when the user ate it or just asks to log it; \
 false only when they plan ahead.
 - A result's top-level ok only says the call ran: say something changed only when data.ok is true.
@@ -1384,6 +1388,7 @@ class FitatuTools:
         self._allowed = tuple(tool["name"] for tool in _selected(tools))
         self.call_timeout = call_timeout
         self._premium_refused_until = 0.0  # time.monotonic() until which _without_premium holds
+        self._features: tuple[float, frozenset[str]] = (0.0, frozenset())  # (time.monotonic() until which they hold, accessControl)
 
     @property
     def _without_premium(self) -> bool:
@@ -1395,6 +1400,20 @@ class FitatuTools:
     def _without_premium(self, refused: bool) -> None:
         # Not for good: the MCP server keeps one FitatuTools while the user may buy Premium.
         self._premium_refused_until = time.monotonic() + _PREMIUM_RECHECK if refused else 0.0
+
+    def _need_premium(self, feature: str, message: str) -> None:
+        """Raise FitatuPremiumRequiredError unless the account's accessControl (``GET /users/{id}``) has ``feature``.
+
+        For what the app keeps for Premium but the API serves to any account. Only the flags are
+        kept, for 10 minutes; the rest of the profile (e-mail, name) is dropped at once.
+        """
+        until, features = self._features
+        if time.monotonic() >= until:
+            flags = self.client.user_settings.get_profile(self._user_id).get("accessControl")
+            features = frozenset(flag for flag in flags if isinstance(flag, str)) if isinstance(flags, list) else frozenset()
+            self._features = (time.monotonic() + _PREMIUM_RECHECK, features)
+        if feature not in features:
+            raise FitatuPremiumRequiredError(message)
 
     @classmethod
     def from_session(
@@ -1748,6 +1767,12 @@ class FitatuTools:
         meal: str | None = None,
         limit: int = 10,
     ) -> list[RecipeHit]:
+        if diets or any(value is not None for value in (min_protein_g, max_carbohydrate_g, max_cooking_time, meal)):
+            # max_energy_kcal stays open to any account, as it was before these; the app keeps its other filters for Premium.
+            self._need_premium(
+                "ROLE_FEATURE_RECIPES_CATALOG_FILTERS",
+                "search_recipes' min_protein_g, max_carbohydrate_g, max_cooking_time, diets and meal need Fitatu Premium; phrase and max_energy_kcal do not",
+            )
         hits = self.client.search_recipes(
             phrase,
             max_energy=max_energy_kcal,
@@ -1777,6 +1802,8 @@ class FitatuTools:
             raise FitatuNotFoundError(
                 f"recipe {recipe_id} is not a catalog recipe or one of the user's; take a recipe_id from search_recipes, get_my_foods or get_day"
             )
+        if recipe.get("premiumInRecipesCatalog") is True:  # Fitatu serves it to any account; the app only to Premium
+            self._need_premium("ROLE_FEATURE_RECIPES_CATALOG_PREMIUM", f"recipe {recipe_id} is a premium recipe, which needs Fitatu Premium")
         rating = as_dict((as_dict(recipe.get("rating")) or {}).get("rating")) or {}  # {"userVote", "rating": {"rate", "votes"}}
         return {
             "recipe_id": recipe_id,

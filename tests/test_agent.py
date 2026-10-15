@@ -87,6 +87,15 @@ DAY_SUMMARIES = {
     },
 }
 
+# Checked live on 2026-10-15 (the flag names only): a Premium account's accessControl in GET /users/{id} has the
+# recipe catalog's filter and premium flags, a free one's lacks them. The reply carries the e-mail and name too.
+FREE_FLAGS = ["ROLE_USER", "ROLE_FEATURE_RECIPE_DETAILS", "ROLE_FEATURE_SEARCH_FOOD"]
+PREMIUM_FLAGS = [*FREE_FLAGS, "ROLE_FEATURE_PREMIUM_RECIPES", "ROLE_FEATURE_RECIPES_CATALOG_FILTERS", "ROLE_FEATURE_RECIPES_CATALOG_PREMIUM"]
+
+
+def profile(flags: list[str]) -> dict[str, Any]:
+    return {**recorded("user_info"), "email": "someone@example.com", "nickname": "Someone", "accessControl": flags}
+
 
 def settings_after(diet: dict[str, Any] | None = None, glass: int | None = None) -> dict[str, Any]:
     """settings-new as the PATCH answers it: the whole new settings, as a GET then gives them (checked live
@@ -784,6 +793,7 @@ def test_search_recipes_sends_the_energy_filter_and_flags_premium_recipes(tools:
 
 
 def test_search_recipes_sends_whole_number_filters_and_refuses_the_ones_fitatu_lacks(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    fake.routes[("GET", f"/users/{RECORDED_USER_ID}")] = profile(PREMIUM_FLAGS)
     filters = {"max_energy_kcal": 499.5, "min_protein_g": 30, "max_carbohydrate_g": 0, "max_cooking_time": 30, "diets": ["vegan", "gluten_free"], "meal": "dinner"}
     data(tools, "search_recipes", phrase="kurczak", **filters)
     params = fake.requests[-1]["params"]
@@ -805,6 +815,35 @@ def test_search_recipes_sends_whole_number_filters_and_refuses_the_ones_fitatu_l
     assert "at least 1" in tools.call("search_recipes", {"min_protein_g": 0})["error"]["message"]
     assert error_type(tools, "search_recipes", {"min_protein_g": 30.5}) == "validation"
     assert fake.requests == []
+
+
+def test_recipe_filters_and_premium_recipes_need_premium_as_in_the_app(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    # Fitatu serves both to a free account; its app keeps them for Premium, and so do the tools.
+    fake.routes[("GET", f"/users/{RECORDED_USER_ID}")] = profile(FREE_FLAGS)
+    fake.routes[("GET", "/recipes/7000002")] = {**recorded("recipe_details"), "id": 7000002, "private": False, "premiumInRecipesCatalog": True}
+    # What a free account had before still works, without reading the profile.
+    assert len(data(tools, "search_recipes", phrase="kurczak", max_energy_kcal=500)) == 2
+    assert data(tools, "get_recipe", recipe_id=RECIPE_ID)["premium"] is False
+    assert f"/users/{RECORDED_USER_ID}" not in [r["path"] for r in fake.requests]
+    fake.requests.clear()
+    for name, arguments in (("search_recipes", {"phrase": "kurczak", "diets": ["vegan"]}), ("search_recipes", {"max_carbohydrate_g": 0}), ("get_recipe", {"recipe_id": 7000002})):
+        result = tools.call(name, arguments)
+        error = result["error"]
+        assert (error["error_type"], error["status_code"], error["retryable"]) == ("forbidden", None, False)
+        assert error["hint"].startswith("Needs Fitatu Premium") and not re.search(r"@|Someone|ROLE_", json.dumps(result))
+    # The flags are read once and trusted for 10 minutes; no search went out.
+    assert [r["path"] for r in fake.requests] == [f"/users/{RECORDED_USER_ID}", "/recipes/7000002"]
+    fake.routes[("GET", f"/users/{RECORDED_USER_ID}")] = profile(PREMIUM_FLAGS)
+    assert tools.call("search_recipes", {"meal": "dinner"})["error"]["error_type"] == "forbidden"
+    with patch("fitatu_api.agent.time.monotonic", return_value=time.monotonic() + 601):  # a plan bought meanwhile shows
+        hits = tools.call("search_recipes", {"phrase": "kurczak", "diets": ["vegan"], "meal": "dinner"})
+        recipe = tools.call("get_recipe", {"recipe_id": 7000002})
+    assert hits["ok"] and recipe["ok"] and recipe["data"]["premium"] is True
+    assert not re.search(r"@|Someone|ROLE_", json.dumps([hits, recipe]))
+    # A reply without accessControl grants nothing.
+    fake.routes[("GET", f"/users/{RECORDED_USER_ID}")] = recorded("user_info")
+    with patch("fitatu_api.agent.time.monotonic", return_value=time.monotonic() + 1202):
+        assert tools.call("search_recipes", {"meal": "dinner"})["error"]["error_type"] == "forbidden"
 
 
 def test_get_recipe_gives_ingredients_steps_and_the_portion_and_refuses_someone_elses_private_recipe(tools: FitatuTools, fake: FakeFitatuServer) -> None:

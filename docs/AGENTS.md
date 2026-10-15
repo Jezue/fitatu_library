@@ -90,8 +90,8 @@ repeating the same call has no further effect.
 | `get_report` | A weekly or monthly report: per nutrient the range's `logged` and `eaten` totals and `daily` (`logged` averaged over the `days_logged`, next to the average daily goal); `weight` (first and last weigh-in of the range and the `change`, null without one); `top_foods`, the 5 with the most energy and the 5 with the most protein. 8 requests, one more for every further 41 weigh-ins in the range. Without Fitatu Premium the progress is read day by day as in `get_progress` (at most 31 days), and `top_foods` is null with a `top_foods_note` saying why. | read | no | yes |
 | `get_shopping_list` | A shopping list for up to 14 days, worked out here from the rows planned and not ticked as eaten (Fitatu has no route for it): `products` summed per product and measure, with `quantity` and `weight_g`, the ingredients of each planned recipe included for its portions; `recipes` lists those recipes (`expanded` false when the recipe could not be read, e.g. a deleted one); `other_items` the custom rows as they are. It knows nothing of the user's stock or pack sizes. It should start at today ("this week" is today to Sunday), as past rows not ticked as eaten were usually eaten anyway. One request per day and one per recipe. | read | no | yes |
 | `search_food` | Catalog search; each hit has `food_id`, `type` (PRODUCT or RECIPE), name, brand, its default measure, `times_used` (how often the user logged it, when the server says) and `favorite`. `locale` searches another country's catalog (15 that Fitatu takes, e.g. `de_DE`); the user's own logged foods show up there too, and every hit can be logged. | read | no | yes |
-| `search_recipes` | Recipe catalog search for meal ideas, by words and per-portion filters (`max_energy_kcal`, `min_protein_g`, `max_carbohydrate_g`, `max_cooking_time` of 10 or 30 minutes, `diets`, which must all apply, and `meal`): "a quick vegan breakfast", "a dinner under 500 kcal with chicken". Hits are shaped like `search_food` RECIPE hits (energy and measure of one portion) plus `cooking_time`, `preparation_time`, `rating` and `premium`, whether the app keeps the recipe for Fitatu Premium (`get_recipe` and `get_food_measures` read it on any account). | read | no | yes |
-| `get_recipe` | One catalog recipe or one of the user's own in full: `servings`, `ingredients` for the whole recipe (`food_id`, `food_type`, `quantity` and `measure_id` as `create_recipe` takes them, plus name, `measure_name` and `weight_g`), `description` (the steps), `per_serving` (the portion measure as `get_food_measures` lists it), `cooking_time`, `preparation_time`, `meals`, `tags`, `rating`, `premium`, `deleted` and `own` (whether `update_recipe` and `delete_recipe` take it). Another user's private recipe is `not_found`, and the author's name and id are never returned. | read | no | yes |
+| `search_recipes` | Recipe catalog search for meal ideas, by words and per-portion filters (`max_energy_kcal`, `min_protein_g`, `max_carbohydrate_g`, `max_cooking_time` of 10 or 30 minutes, `diets`, which must all apply, and `meal`): "a quick vegan breakfast", "a dinner under 500 kcal with chicken". Every filter but `max_energy_kcal` needs Fitatu Premium. Hits are shaped like `search_food` RECIPE hits (energy and measure of one portion) plus `cooking_time`, `preparation_time`, `rating` and `premium`, whether the app keeps the recipe for Fitatu Premium (`get_recipe` reads it only with Premium). | read | no | yes |
+| `get_recipe` | One catalog recipe or one of the user's own in full: `servings`, `ingredients` for the whole recipe (`food_id`, `food_type`, `quantity` and `measure_id` as `create_recipe` takes them, plus name, `measure_name` and `weight_g`), `description` (the steps), `per_serving` (the portion measure as `get_food_measures` lists it), `cooking_time`, `preparation_time`, `meals`, `tags`, `rating`, `premium`, `deleted` and `own` (whether `update_recipe` and `delete_recipe` take it). Another user's private recipe is `not_found`, and the author's name and id are never returned. A `premium` recipe needs Fitatu Premium. | read | no | yes |
 | `find_by_barcode` | The catalog product with a barcode (8 to 14 digits), or the user's own product with that barcode, in the shape of a search hit: the first product hit of a search for the digits, confirmed by its details' `barcode` (an own product's `currentUserPrivateBarcode`); otherwise `not_found`, and the model searches by name. | read | no | yes |
 | `get_food_measures` | The measures a food can be logged in (`measure_id`, name, weight or capacity, energy, protein, fat and carbohydrate of one measure; a macro is null when the details do not give it). | read | no | yes |
 | `get_recent_foods` | Foods recently logged in a meal, shaped like search hits. | read | no | yes |
@@ -133,11 +133,26 @@ comes from.
 
 ## Free and Premium accounts
 
-Every tool but `get_top_foods` works on an account without Fitatu Premium (checked live
-2026-10-15 with a free account, and earlier with a Premium one):
+Nearly every tool works on an account without Fitatu Premium (checked live 2026-10-15 with a
+free account, and earlier with a Premium one). Without it these are a `forbidden` error, and the
+model should tell the user rather than retry:
 
-- `get_top_foods` reads a route Fitatu keeps for Premium: without it the result is a
-  `forbidden` error, whose `hint` says the account has no premium plan.
+| Needs Fitatu Premium | Who refuses it | `hint` |
+|---|---|---|
+| `get_top_foods` | Fitatu (403) | "A premium feature: the account has no active premium plan..." |
+| `search_recipes` with `min_protein_g`, `max_carbohydrate_g`, `max_cooking_time`, `diets` or `meal` | the tools, as the app does | "Needs Fitatu Premium..." |
+| `get_recipe` of a recipe marked `premium` | the tools, as the app does | "Needs Fitatu Premium..." |
+
+Fitatu serves the last two to any account, but its app keeps them for Premium, and so do the
+tools: they read the account's `accessControl` flags (`GET /users/{id}`:
+`ROLE_FEATURE_RECIPES_CATALOG_FILTERS` and `ROLE_FEATURE_RECIPES_CATALOG_PREMIUM`), only when a
+call needs them, and keep the flags alone for 10 minutes, so a plan bought meanwhile shows within
+that time. No result carries the flags or anything else of that profile. A search by `phrase` and
+`max_energy_kcal` and a recipe that is not premium work on any account as before, without that
+read; the error is a `FitatuPremiumRequiredError` for code that calls the methods.
+
+The rest works on any account, some of it differently:
+
 - `get_progress` reads the macros day by day from a Premium-only route. When Fitatu refuses
   it, `get_progress` reads each day's own summary instead, which any account may read and
   which has each day's goals: a request per day, so at most 31 days (a longer range is a
@@ -158,8 +173,6 @@ Every tool but `get_top_foods` works on an account without Fitatu Premium (check
   gets 20/30/50. With a split set, its macro goals in `get_progress` are single numbers
   (`target_min` equal to `target_max`) instead of a range; `automatic: true` brings the range
   back.
-- Catalog recipes that `search_recipes` marks `premium` can still be read in full, ingredients
-  and steps included, with `get_recipe` and `get_food_measures` (checked live 2026-10-15).
 
 Outside the tools, `summary.get_nutrient_by_day()` for protein, fat and carbohydrate,
 `summary.get_top_products()` and `summary.export_diary()` (`fitatu-api export`) are
@@ -316,7 +329,7 @@ matches the user's request against:
   with a word that nothing is ticked as eaten when `eaten` is 0; what is left is each day's
   `left`, which counts planned rows too; a weekly or monthly report is `get_report`; food is
   logged with `eaten` true unless the user plans ahead;
-- only `get_top_foods` needs Fitatu Premium (see [Free and Premium accounts](#free-and-premium-accounts));
+- `get_top_foods`, `search_recipes`' filters but `max_energy_kcal` and `get_recipe` of a premium recipe need Fitatu Premium (see [Free and Premium accounts](#free-and-premium-accounts));
 - `ok` only says the call ran, the effect is `data.ok`;
 - a direct request is the user's consent, so the model asks only about changes it inferred or
   that reach beyond what the user named, and previews removals with `preview_removal`;
@@ -383,7 +396,7 @@ says to look for it with `get_my_foods` before creating it again.
 | `maintenance` | Fitatu is in a technical break. | host | Stop; `hint` says until when. Retrying or logging in again does not help. An add: repeat it afterwards with its `retry_row_id`. |
 | `network` | No HTTP response. | host | Repeat (`retryable` is true), except an add: repeat it with its `retry_row_id`; and except a `create_recipe` or `create_food` (`retryable` is false): see its `hint`. |
 | `sync_rejected` | The day sync answered 202 but rejected the day; nothing was saved. | model | Fix what `message` names and send it again. |
-| `forbidden` | 403: a premium-only feature, a used-up AI quota (see `codename`) or a wrong API key; `call()` then reads the account's plan once (`user_settings.get_premium()`), and `hint` says "a premium feature" when no premium plan runs, or that it is not a premium matter when one does. Or a firewall in front of Fitatu blocked the request (an HTML page, and `hint` says so). | model | Do not retry; tell the user. |
+| `forbidden` | 403: a premium-only feature, a used-up AI quota (see `codename`) or a wrong API key; `call()` then reads the account's plan once (`user_settings.get_premium()`), and `hint` says "a premium feature" when no premium plan runs, or that it is not a premium matter when one does. Or a firewall in front of Fitatu blocked the request (an HTML page, and `hint` says so). Or the tools refused what the Fitatu app keeps for Premium, on an account without it (`hint` starts "Needs Fitatu Premium"; nothing was sent for it). | model | Do not retry; tell the user. |
 | `server` | A 5xx or another API error. | host | Repeat a few times when `retryable`; otherwise report it. An add: use its `retry_row_id`. |
 | `unexpected` | Any other exception, e.g. a `TypeError` from inside the library (a bug: `call()` has checked the arguments). | host | Report it; do not repeat the same call. An add may still have been saved: if it is repeated later, repeat it with its `retry_row_id`. |
 

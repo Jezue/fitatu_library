@@ -175,7 +175,8 @@ instead of raising, is deprecated and will be removed in 1.0: for results that n
 | | Free account | Premium |
 |---|---|---|
 | Diary: read, log, update, move, copy, remove food, notes, activities, water, weight, body measurements | ✅ | ✅ |
-| Search, barcode, food measures, recipe search and recipes in full (premium catalog recipes too), private recipes and products, favourites, recent foods | ✅ | ✅ |
+| Search, barcode, food measures, recipe search by words and `max_energy_kcal`, recipes in full, private recipes and products, favourites, recent foods | ✅ | ✅ |
+| Recipe search filters (`min_protein_g`, `max_carbohydrate_g`, `max_cooking_time`, `diets`, `meal`) and premium catalog recipes in full (`get_recipe`) | ❌ "needs Fitatu Premium": the tools follow the app | ✅ |
 | Goals: read and set (`get_targets`, `set_targets`), progress (`get_progress`), reports (`get_report`), range totals (`get_range_summary`) | ✅ (progress: a request per day, at most 31 days) | ✅ |
 | Weight and body measurement history, profile, fasting and habits (read), shopping list | ✅ | ✅ |
 | Top foods (`get_top_foods`, `summary.get_top_products()`) | ❌ 403: "needs Fitatu Premium" | ✅ |
@@ -188,6 +189,10 @@ Nearly everything works on an account without Fitatu Premium. Fitatu answers 403
 - `summary.get_nutrient_by_day()` for protein, fat and carbohydrate (energy works on any account);
 - `summary.get_top_products()`, and so the `get_top_foods` tool;
 - `summary.export_diary()`, and so `fitatu-api export`, which then says so in one line.
+
+Fitatu serves the recipe search filters and premium catalog recipes to any account, but its app
+keeps them for Premium, and so do the tools: they check the account's `accessControl` flags and
+answer a `forbidden` error without them. The client itself does not check.
 
 `get_progress` and `get_report` work on every account: when the macros' day-by-day route is
 refused, they read each day's own summary instead (a request per day, at most 31 days), and
@@ -355,6 +360,7 @@ exception into the JSON-safe dict that `FitatuTools.call()` (and the deprecated 
 | `FitatuConnectionError` | No HTTP response (DNS, timeout, connection reset). | `network` |
 | `FitatuMaintenanceError` | Fitatu's `technical-break` header; `display_from` / `display_to`. | `maintenance` |
 | `FitatuPlannerSyncError` | The day sync answered 202 but rejected a day; `results` has the per-day errors. | `sync_rejected` |
+| `FitatuPremiumRequiredError` | A tool for what the Fitatu app keeps for Premium, on an account without it; nothing was sent for it. | `forbidden` |
 | `FitatuApiError` | Any other HTTP error: `status_code`, `body`, `codename` (e.g. `NUMBER_OF_USES_EXCEEDED`). | `forbidden` (403), `validation` (400/409/422), `server` |
 
 Messages read `METHOD /path -> status CODENAME: server message`. A 403 whose body is an HTML page
@@ -382,7 +388,7 @@ again afterwards to set `ok`. Requests per agent tool call, before retries and t
 |---|---|
 | 0 | `get_today` |
 | 1 | the other read tools; `set_water`; `set_favorite`; `preview_removal` and `remove_items` with `dry_run`; `delete_recipe` of a recipe already deleted, `delete_food` of a product already deleted |
-| 2 | `get_range_summary`, `get_profile`, `get_fasting` (3 when the settings name the scheme by id), `get_habits`, `find_by_barcode` (1 without a product hit), `add_food` for a recipe in portions, `add_custom_item`, `log_weight`, `delete_recipe`, `set_targets`, `create_food`, `delete_food`; `add_foods`, plus 1 for each item with `unit` or `measure_id`; `create_recipe`, plus 1 for each ingredient |
+| 2 | `get_range_summary`, `get_profile`, `get_fasting` (3 when the settings name the scheme by id), `get_habits`, `find_by_barcode` (1 without a product hit), `add_food` for a recipe in portions, `add_custom_item`, `log_weight`, `delete_recipe`, `set_targets`, `create_food`, `delete_food`; `add_foods`, plus 1 for each item with `unit` or `measure_id`; `create_recipe`, plus 1 for each ingredient; `search_recipes` with a filter but `max_energy_kcal` and `get_recipe` of a premium recipe, the first such call on a `FitatuTools` in 10 minutes (it reads the account's Premium flags; 1 afterwards) |
 | 3 | `add_food` with `unit` or `measure_id` (reads the food first), `log_measurements` (reads the size unit from the profile), `copy_meal` within a day, `remove_items`, `add_activity`, `remove_activity`, `set_note`, `update_food`; `update_recipe`, plus 1 for each new ingredient |
 | 4 | `update_item`, `move_item` within a day, `copy_meal` to another day |
 | 5 | `get_progress` (any range up to 62 days; without Fitatu Premium, see below) |

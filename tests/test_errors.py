@@ -8,6 +8,7 @@ from fitatu_api import (
     FitatuMaintenanceError,
     FitatuNotFoundError,
     FitatuPlannerSyncError,
+    FitatuPremiumRequiredError,
     FitatuRateLimitError,
     FitatuValidationError,
 )
@@ -29,6 +30,7 @@ class DescribeErrorTests(unittest.TestCase):
             (FitatuMaintenanceError("break", display_to="2026-10-14 06:00"), "maintenance", False),
             (FitatuConnectionError("timeout"), "network", True),
             (FitatuPlannerSyncError("rejected", results=[]), "sync_rejected", False),
+            (FitatuPremiumRequiredError("a premium recipe"), "forbidden", False),
             (FitatuApiError("quota", status_code=403, body='{"codename": "NUMBER_OF_USES_EXCEEDED"}'), "forbidden", False),
             (FitatuApiError("gone", status_code=404), "not_found", False),
             (FitatuApiError("bad body", status_code=422), "validation", False),

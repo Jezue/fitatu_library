@@ -109,8 +109,10 @@ week").
 
 ## Free and Premium accounts
 
-Everything works on a free Fitatu account except `get_top_foods` and the diary export, which
-need Fitatu Premium (a `forbidden` error whose hint says so - tell the user, do not retry).
+Everything works on a free Fitatu account except `get_top_foods`, the diary export,
+`search_recipes`' filters other than `max_energy_kcal` and `get_recipe` of a recipe marked
+`premium`, which need Fitatu Premium (a `forbidden` error whose hint says so - tell the user, do
+not retry; search by phrase and `max_energy_kcal` instead).
 `get_progress` and `get_report` work on any account; on a free one the report's `top_foods`
 is null with a note. `get_profile` says whether the account has Premium.
 
