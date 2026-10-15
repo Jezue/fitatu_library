@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 
 def body_field(body: str | None, key: str) -> str | None:
@@ -147,9 +148,21 @@ class FitatuPlannerSyncError(FitatuApiError):
 
 # describe_error's hint for a 403 from the API; FitatuTools.call() narrows it down with the account's plan.
 FORBIDDEN_HINT = "Premium-only feature, used-up AI quota (see codename) or a wrong API key."
+# The routes whose next segment is the user id (paths in messages, URLs in network errors), and a userId= query.
+_USER_ID_IN_ROUTE = re.compile(
+    r"(/(?:users|diet-plan|diet-and-activity-plan|activity-plan|habits|intermittent-fasting|water"
+    r"|search/food(?:/user)?|search/activity)/|userId=)\d+"
+)
 
 
-def describe_error(exc: BaseException) -> dict[str, object]:
+def redact_user_id(text: str, user_id: str | None = None) -> str:
+    """``text`` with the account's user id replaced by ``<user>``: after the user-scoped routes
+    (``GET /diet-plan/<user>/days -> 403``) and, given ``user_id``, wherever else it stands alone."""
+    text = _USER_ID_IN_ROUTE.sub(r"\1<user>", text)
+    return re.sub(rf"\b{re.escape(user_id)}\b", "<user>", text) if user_id else text
+
+
+def describe_error(exc: BaseException, *, user_id: str | None = None) -> dict[str, object]:
     """Return a JSON-safe summary of *exc* for tool results and logs.
 
     ``error_type`` is one of ``auth``, ``rate_limit``, ``maintenance``, ``network``,
@@ -157,7 +170,8 @@ def describe_error(exc: BaseException) -> dict[str, object]:
     ``unexpected``. ``retryable`` says whether the same call can succeed later without
     any change (after ``retry_after`` seconds when that is set, a few seconds when it is
     not); ``hint`` says what to do instead when it cannot, and how long to wait when a 429
-    did not say.
+    did not say. ``message`` is ``str(exc)`` without the user id (:func:`redact_user_id`, which
+    finds ``user_id`` outside the user-scoped routes too), as it would go to the model provider.
     """
     status = getattr(exc, "status_code", None)
     error_type, retryable, hint = "unexpected", False, None
@@ -197,7 +211,7 @@ def describe_error(exc: BaseException) -> dict[str, object]:
             error_type, retryable = "server", status is not None and status >= 500
     return {
         "error_type": error_type,
-        "message": str(exc)[:500],
+        "message": redact_user_id(str(exc), user_id)[:500],
         "status_code": status,
         "codename": getattr(exc, "codename", None),
         "retryable": retryable,

@@ -15,6 +15,17 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   what to do on each error. A test checks it against the format and that it names only real
   tools.
 
+### Fixed
+
+- Error results passed the account's numeric Fitatu user id to the model, e.g. `get_top_foods` on
+  an account without Premium: `GET /diet-plan/1234567/summary-product/protein/custom -> 403`.
+  `describe_error()` now writes it as `<user>` after the user-scoped routes (`/users/`,
+  `/diet-plan/`, `/v2/diet-plan/`, `/diet-and-activity-plan/`, `/water/`, ...) and in a
+  `userId=` query, and with its new `user_id=` wherever else the id stands alone (e.g. echoed in
+  the server's message); `FitatuTools.call()`, and so the MCP server, pass it. Dates, food ids,
+  row ids and barcodes stay. `fitatu-api doctor` masks the id the same way (`<user>`, was
+  `<user id>`).
+
 ## [0.5.1] - 2026-10-15
 
 ### Fixed

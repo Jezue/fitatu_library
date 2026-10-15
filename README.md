@@ -354,9 +354,11 @@ exception into the JSON-safe dict that `FitatuTools.call()` (and the deprecated 
 | `FitatuPlannerSyncError` | The day sync answered 202 but rejected a day; `results` has the per-day errors. | `sync_rejected` |
 | `FitatuApiError` | Any other HTTP error: `status_code`, `body`, `codename` (e.g. `NUMBER_OF_USES_EXCEEDED`). | `forbidden` (403), `validation` (400/409/422), `server` |
 
-Messages read `METHOD /path -> status CODENAME: server message`. A 403 whose body is an HTML page
-comes from a firewall in front of the API (e.g. Cloudflare), not from Fitatu's premium or key
-checks, and its `hint` says so. Any other exception, such as a `TypeError` raised inside the
+Messages read `METHOD /path -> status CODENAME: server message`. In `describe_error()`'s message
+the user id is `<user>` (`GET /diet-plan/<user>/days -> 403`), and with `user_id=` (which
+`FitatuTools.call()` passes) wherever else it appears, so a result does not carry it to the
+model provider. A 403 whose body is an HTML page comes from a firewall in front of the API (e.g.
+Cloudflare), not from Fitatu's premium or key checks, and its `hint` says so. Any other exception, such as a `TypeError` raised inside the
 library, is `unexpected`: a bug to report, since `FitatuTools.call()` checks the arguments first.
 
 Retries: network errors, 429, 500/502/503/504 and Cloudflare's 520 to 524 are retried for `GET`, `HEAD` and `OPTIONS`,

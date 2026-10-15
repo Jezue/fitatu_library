@@ -606,7 +606,7 @@ def test_doctor_reports_each_problem_and_fails(tmp_path: Path, monkeypatch: pyte
 
     out = capsys.readouterr().out
     assert "FAIL  refresh:    failed: auth: POST /token/refresh -> 401" in out
-    assert "FAIL  profile:    not read: forbidden: GET /users/<user id> -> 403: Forbidden" in out
+    assert "FAIL  profile:    not read: forbidden: GET /users/<user> -> 403: Forbidden" in out
     assert "WARN  client:     Fitatu's web app is at 4.14.0, this library sends WEB 4.13.1;" in out
     assert "ok    plan:       no premium plan: premium-only features answer 403" in out
     assert USER not in out
@@ -627,7 +627,7 @@ def test_doctor_keeps_the_user_id_off_stderr_when_fitatu_fails(
         assert main(["doctor"]) == 1
 
     captured = capsys.readouterr()
-    assert "FAIL  profile:    not read: server: GET /users/<user id> -> 503" in captured.out
+    assert "FAIL  profile:    not read: server: GET /users/<user> -> 503" in captured.out
     # The client's warnings name the path with the id: the output goes into public issues.
     assert USER not in captured.out + captured.err and not any(USER in record.getMessage() for record in caplog.records)
 

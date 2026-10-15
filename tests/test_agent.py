@@ -620,6 +620,19 @@ def test_report_without_premium_has_progress_and_no_top_foods(tools: FitatuTools
     assert (error["error_type"], error["status_code"]) == ("forbidden", 403) and error["hint"].startswith("A premium feature")
 
 
+def test_an_error_does_not_show_the_user_id(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    # agent.py keeps the account id away from the model provider; a route's path carries it.
+    fake.free = True
+    fake.routes[("GET", f"/users/{RECORDED_USER_ID}/subscriptions")] = {"subscriptions": []}
+    error = tools.call("get_top_foods", ARGUMENTS["get_top_foods"])["error"]
+    assert error["status_code"] == 403 and error["message"] == "GET /diet-plan/<user>/summary-product/protein/custom -> 403"
+    assert RECORDED_USER_ID not in json.dumps(error)
+    # Nor when the server's own message names it.
+    echoed = FitatuApiError(f"GET /x -> 403: no plan for user {RECORDED_USER_ID}", status_code=403)
+    with patch.object(tools.client.summary, "get_top_products", side_effect=echoed):
+        assert tools.call("get_top_foods", ARGUMENTS["get_top_foods"])["error"]["message"] == "GET /x -> 403: no plan for user <user>"
+
+
 def test_a_refusal_for_want_of_premium_is_not_trusted_for_good(tools: FitatuTools, fake: FakeFitatuServer) -> None:
     # The MCP server keeps one FitatuTools for its whole life, and the user may buy Premium meanwhile.
     fake.free = True
