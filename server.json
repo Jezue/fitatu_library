@@ -17,12 +17,12 @@
     "source": "github"
   },
   "websiteUrl": "https://github.com/Jezue/fitatu_library/blob/main/docs/AGENTS.md#mcp",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "fitatu-api",
-      "version": "0.5.1",
+      "version": "0.6.0",
       "runtimeHint": "uvx",
       "runtimeArguments": [
         {
