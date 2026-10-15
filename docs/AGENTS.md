@@ -671,7 +671,7 @@ What the server does:
 - **Prompts.** Three slash commands in Polish, which hosts show as commands (Claude Code as
   `/mcp__fitatu__<name>`): `podsumowanie_dnia` (optional `date`, today without one): the day
   against the goals, the meals and water; `przeglad_tygodnia`: Monday to today with
-  `get_report`; `zaloguj_posilek` (optional `meal`, a description such as "dwa jajka i kawa na
+  `get_report` (the top foods only with Fitatu Premium; without it the model says they need it); `zaloguj_posilek` (optional `meal`, a description such as "dwa jajka i kawa na
   śniadanie"): finds the foods and logs them with one `add_foods`. Their text tells the model
   which tools to use; their descriptions are in English. A prompt is listed only when every
   tool it names is served, so `--read-only` drops `zaloguj_posilek`. Claude Code splits what

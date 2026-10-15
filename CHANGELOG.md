@@ -31,7 +31,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- The tool descriptions, `SYSTEM_PROMPT` and the docs say what needs Fitatu Premium: among the
+- The tool descriptions, `SYSTEM_PROMPT`, the `przeglad_tygodnia` MCP prompt (the top foods only
+  with Premium) and the docs say what needs Fitatu Premium: among the
   tools only `get_top_foods`; in the client `summary.get_nutrient_by_day()` for the macros,
   `summary.get_top_products()` and `summary.export_diary()`. README and docs/AGENTS.md have a
   "Free and Premium accounts" section. `search_recipes` no longer says a premium catalog recipe
