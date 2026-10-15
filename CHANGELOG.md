@@ -14,6 +14,14 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   expands it (and falls back to `~/.fitatu/session.json` for an empty or unexpanded value), and
   `resolve_session_path()` now expands variables in `$FITATU_SESSION` too. The
   `fitatu-0.5.0.mcpb` attached to the v0.5.0 release is rebuilt with the fix.
+- `get_progress` and `get_report` failed with a 403 on an account without Fitatu Premium: the
+  macros' day-by-day route they read is Premium-only (checked live 2026-10-15). When it is
+  refused, they read each day's own range summary instead, which every account may read and
+  which gives the same goals (a macro's as a range on a free account) and each day's `eaten`
+  too; `FitatuTools` remembers the refusal and goes straight to it on later calls. Without
+  Premium this covers at most 31 days (a request per day), and a longer range is a validation
+  error that points to `get_range_summary`. `get_report` gives `top_foods` null with a
+  `top_foods_note` instead of failing, as the top foods are Premium-only too.
 
 ## [0.5.0] - 2026-10-14
 

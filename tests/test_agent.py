@@ -60,6 +60,27 @@ RANGE_SUMMARY = {
     "fat": {"current": 6, "eaten": 5, "min": 120, "max": 148},
     "carbohydrate": {"current": 30, "eaten": 20, "min": 450, "max": 550},
 }
+# Checked live on 2026-10-15 with an account without Premium, which gets 403 from the macros' day-by-day
+# routes: the range summary of one day has that day's goals as min and max (a range for a macro, max only
+# for energy); current and eaten are null when nothing is logged or ticked. The days of BY_NUTRIENT again.
+DAY_SUMMARIES = {
+    DAY: {
+        "energy": {"current": 300, "eaten": 200, "min": None, "max": 2000},
+        "protein": {"current": 12, "eaten": 10, "min": 90, "max": 110},
+        "fat": {"current": 6, "eaten": 5, "min": 60, "max": 74},
+        "carbohydrate": {"current": 30, "eaten": 20, "min": 225, "max": 275},
+    },
+    NEXT_DAY: {
+        nutrient: {"current": None, "eaten": None, "min": low, "max": high}
+        for nutrient, low, high in (("energy", None, 2000), ("protein", 90, 110), ("fat", 60, 74), ("carbohydrate", 225, 275))
+    },
+}
+
+
+def range_summary(params: dict[str, Any]) -> dict[str, Any]:
+    """GET .../summary/custom by its dates: one day's summary (any day but DAY as empty as NEXT_DAY), else RANGE_SUMMARY."""
+    one_day = DAY_SUMMARIES.get(params["fromDate"], DAY_SUMMARIES[NEXT_DAY]) if params["fromDate"] == params["toDate"] else RANGE_SUMMARY
+    return {**recorded("summary_nutrition"), **one_day}
 
 # Every tool with arguments that work against the fake.
 ARGUMENTS: dict[str, dict[str, Any]] = {
@@ -476,8 +497,8 @@ def test_progress_is_each_day_against_its_goals_with_the_eaten_totals(tools: Fit
         "carbohydrate": {"logged": 30, "eaten": 20, "target_min": 450, "target_max": 550},
     }
     assert data(tools, "get_range_summary", from_date=DAY, to_date=NEXT_DAY)["eaten_nutrition"]["energy"] == 200
-    # four nutrients day by day and one range summary, whatever the range
-    assert [r["path"].split("/")[-2] for r in fake.requests[:5]] == ["energy", "protein", "fat", "carbohydrate", "summary"]
+    # four nutrients day by day (a macro first, which an account without Premium may not read) and one range summary, whatever the range
+    assert [r["path"].split("/")[-2] for r in fake.requests[:5]] == ["carbohydrate", "fat", "protein", "energy", "summary"]
     assert all(r["params"] == {"fromDate": DAY, "toDate": NEXT_DAY} for r in fake.requests[:5])
 
 
@@ -509,7 +530,7 @@ def test_report_sums_up_a_range_in_eight_requests(tools: FitatuTools, fake: Fake
         "carbohydrate": {"logged": 30, "eaten": 20, "daily": {"logged": 30, "target_min": 225, "target_max": 275}},
     }
     assert report["weight"] == {"start": {"date": DAY, "value": 80}, "end": {"date": NEXT_DAY, "value": 79.6}, "change": -0.4}
-    assert [len(report["top_foods"][n]) for n in ("energy", "protein")] == [5, 2]
+    assert [len(report["top_foods"][n]) for n in ("energy", "protein")] == [5, 2] and report["top_foods_note"] is None
     assert report["top_foods"]["protein"][0] == {"name": "fitatu-api fixture", "amount": 10, "per100": None}
     assert len(fake.requests) == 8
     weight, *top = fake.requests[5:]
@@ -535,6 +556,74 @@ def test_progress_left_is_negative_over_the_goal(tools: FitatuTools, fake: FakeF
     }
     (day,) = data(tools, "get_progress", from_date=DAY, to_date=DAY)["days"]
     assert day["fat"] == {"logged": 80.4, "target_min": 60, "target_max": 74, "left": -6.4}
+
+
+def test_progress_without_premium_reads_each_day_and_remembers_it(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    fake.free = True
+    fake.routes[("GET", f"/v2/diet-plan/{RECORDED_USER_ID}/summary/custom")] = range_summary
+    progress = data(tools, "get_progress", from_date=DAY, to_date=NEXT_DAY)
+    # The same days as with Premium, each with its own eaten too.
+    assert progress["days"] == [
+        {
+            "date": DAY,
+            "energy": {"logged": 300, "eaten": 200, "target": 2000, "left": 1700},
+            "protein": {"logged": 12, "eaten": 10, "target_min": 90, "target_max": 110, "left": 98},
+            "fat": {"logged": 6, "eaten": 5, "target_min": 60, "target_max": 74, "left": 68},
+            "carbohydrate": {"logged": 30, "eaten": 20, "target_min": 225, "target_max": 275, "left": 245},
+        },
+        {
+            "date": NEXT_DAY,
+            "energy": {"logged": None, "eaten": 0, "target": 2000, "left": 2000},
+            "protein": {"logged": None, "eaten": 0, "target_min": 90, "target_max": 110, "left": 110},
+            "fat": {"logged": None, "eaten": 0, "target_min": 60, "target_max": 74, "left": 74},
+            "carbohydrate": {"logged": None, "eaten": 0, "target_min": 225, "target_max": 275, "left": 275},
+        },
+    ]
+    assert progress["totals"]["protein"] == {"logged": 12, "eaten": 10, "target_min": 180, "target_max": 220}
+    # One refused macro, then a summary per day and one for the range.
+    assert [(r["path"].split("/")[-2], r.get("params")) for r in fake.requests] == [
+        ("carbohydrate", {"fromDate": DAY, "toDate": NEXT_DAY}),
+        ("summary", {"fromDate": DAY, "toDate": DAY}),
+        ("summary", {"fromDate": NEXT_DAY, "toDate": NEXT_DAY}),
+        ("summary", {"fromDate": DAY, "toDate": NEXT_DAY}),
+    ]
+    # Known from then on; one day is a single request, whose summary is the totals too.
+    fake.requests.clear()
+    progress = data(tools, "get_progress", from_date=DAY, to_date=DAY)
+    assert progress["totals"]["energy"] == {"logged": 300, "eaten": 200, "target": 2000}
+    assert [(r["path"].split("/")[-2], r.get("params")) for r in fake.requests] == [("summary", {"fromDate": DAY, "toDate": DAY})]
+
+
+def test_progress_without_premium_covers_31_days(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    fake.free = True
+    fake.routes[("GET", f"/v2/diet-plan/{RECORDED_USER_ID}/summary/custom")] = range_summary
+    month = data(tools, "get_progress", from_date="2027-01-01", to_date="2027-01-31")
+    assert len(month["days"]) == 31 and month["days"][2]["energy"]["logged"] == 300
+    assert len(fake.requests) == 1 + 31 + 1
+    fake.requests.clear()
+    error = tools.call("get_progress", {"from_date": "2027-01-01", "to_date": "2027-02-01"})["error"]
+    assert error["error_type"] == "validation" and "at most 31 days, got 32" in error["message"] and "get_range_summary" in error["message"]
+    assert fake.requests == []
+
+
+def test_report_without_premium_has_progress_and_no_top_foods(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    fake.free = True
+    fake.routes[("GET", f"/v2/diet-plan/{RECORDED_USER_ID}/summary/custom")] = range_summary
+    report = data(tools, "get_report", **ARGUMENTS["get_report"])
+    assert report["nutrition"]["protein"] == {"logged": 12, "eaten": 10, "daily": {"logged": 12, "target_min": 90, "target_max": 110}}
+    assert report["top_foods"] is None and "Premium" in report["top_foods_note"]
+    assert not [r for r in fake.requests if "summary-product" in r["path"]]
+    # get_top_foods itself is refused, with the hint that the account has no premium plan.
+    fake.routes[("GET", f"/users/{RECORDED_USER_ID}/subscriptions")] = {"subscriptions": []}
+    error = tools.call("get_top_foods", ARGUMENTS["get_top_foods"])["error"]
+    assert (error["error_type"], error["status_code"]) == ("forbidden", 403) and error["hint"].startswith("A premium feature")
+
+
+def test_a_firewall_403_is_not_taken_for_an_account_without_premium(tools: FitatuTools, fake: FakeFitatuServer) -> None:
+    blocked = FitatuApiError("GET -> 403", status_code=403, body="<html>blocked</html>")
+    with patch.object(tools.client.summary, "get_nutrient_by_day", side_effect=blocked):
+        error = tools.call("get_progress", {"from_date": DAY, "to_date": DAY})["error"]
+    assert error["hint"].startswith("A firewall") and tools._without_premium is False
 
 
 def test_shopping_list_sums_planned_products_and_the_ingredients_of_planned_recipes(tools: FitatuTools, fake: FakeFitatuServer) -> None:

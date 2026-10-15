@@ -352,10 +352,10 @@ again afterwards to set `ok`. Requests per agent tool call, before retries and t
 | 2 | `get_range_summary`, `get_fasting` (3 when the settings name the scheme by id), `get_habits`, `find_by_barcode` (1 without a product hit), `add_food` for a recipe in portions, `add_custom_item`, `log_weight`, `delete_recipe`; `add_foods`, plus 1 for each item with `unit` or `measure_id`; `create_recipe`, plus 1 for each ingredient |
 | 3 | `add_food` with `unit` or `measure_id` (reads the food first), `log_measurements` (reads the size unit from the profile), `copy_meal` within a day, `remove_items`, `add_activity`, `remove_activity`, `set_note`; `update_recipe`, plus 1 for each new ingredient |
 | 4 | `update_item`, `move_item` within a day, `copy_meal` to another day |
-| 5 | `get_progress` (any range up to 62 days) |
+| 5 | `get_progress` (any range up to 62 days; without Fitatu Premium, see below) |
 | 6 | `move_item` to another day |
 | 8 | `get_report` (one more for every further 41 weigh-ins in the range) |
-| 1 a day | `get_shopping_list`, plus 1 for each recipe planned in the range |
+| 1 a day | `get_shopping_list`, plus 1 for each recipe planned in the range; `get_progress` and `get_report` without Fitatu Premium, plus 1 for the range (none for a single day) and `get_report`'s weigh-ins, and the first such call on a `FitatuTools` 1 more, which Fitatu refuses |
 
 ## Privacy & logging
 

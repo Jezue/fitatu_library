@@ -71,6 +71,7 @@ _FOOD_TYPE = {"type": "string", "enum": list(FOOD_TYPES), "description": "type o
 _LIMIT = {"type": "integer", "minimum": 1, "maximum": 50, "default": 10, "description": "Maximum number of hits."}
 _ROW_IDS = {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "row_ids from get_day."}
 _PROGRESS_DAYS = 62  # get_progress has an entry per day: a year of them is ~130k characters
+_FREE_PROGRESS_DAYS = 31  # without Premium a request per day: a month stays well within call_timeout
 _SHOPPING_DAYS = 14  # get_shopping_list reads every day and every recipe: two weeks stay well within call_timeout
 _ROW_ID = {"type": "string", "description": "row_id of a food row on that day, from get_day (meals[].items[].row_id)."}
 
@@ -221,6 +222,8 @@ TOOLS: list[dict[str, Any]] = [
         "target_max in g for a macro, which is on target between the two) and left (the goal "
         "minus logged, a macro's from target_max; negative when over). totals gives the whole "
         "range: logged, eaten (only rows ticked as eaten) and the goal summed over the days. "
+        "Works on every account; without Fitatu Premium it reads each day on its own, so it covers at "
+        "most 31 days, and each day has eaten too. "
         "Answers 'what is left today', 'did I hit protein' and how each day went; a summary of a "
         "week or month with weight and top foods, or of a longer range, is get_report.",
         {"from_date": _DATE, "to_date": _DATE},
@@ -252,7 +255,9 @@ TOOLS: list[dict[str, Any]] = [
         "logged) next to the average daily goal (target for energy, target_min and target_max for "
         "a macro). weight: the first and last weigh-in of the range (date, value in the user's "
         "weight unit) and the change; null without one. top_foods: the 5 foods with the most "
-        "energy and the 5 with the most protein, as get_top_foods gives them.",
+        "energy and the 5 with the most protein, as get_top_foods gives them. Without Fitatu Premium, "
+        "top_foods is null (top_foods_note says why) and the range is at most 31 days; "
+        "get_range_summary gives the totals of a longer one.",
         {"from_date": _DATE, "to_date": _DATE},
         ("from_date", "to_date"),
         read_only=True,
@@ -1057,6 +1062,8 @@ class FitatuTools:
         self.client = client
         self._allowed = tuple(tool["name"] for tool in _selected(tools))
         self.call_timeout = call_timeout
+        # Set by the first 403 from a Premium-only route get_progress uses; from then on it reads day by day.
+        self._without_premium = False
 
     @classmethod
     def from_session(
@@ -1195,26 +1202,39 @@ class FitatuTools:
         return self._progress(start, end)
 
     def _progress(self, start: dt.date, end: dt.date) -> dict[str, Any]:
-        """:meth:`get_progress` for a range of any length."""
+        """:meth:`get_progress` for a range of any length; without Premium, of up to 31 days.
+
+        With Premium: one request per nutrient and one for the totals, whatever the range. Without
+        it (the first macro route answers 403, and the instance remembers that): one range summary
+        per day, which also gives each day's eaten, and one for the totals. Each request counts
+        against the call's time limit (``call_timeout``) like any other.
+        """
         if end < start:
             raise FitatuValidationError(f"to_date {end} is before from_date {start}")
+        dates = [(start + dt.timedelta(days=offset)).isoformat() for offset in range((end - start).days + 1)]
         summary = self.client.summary
-        by_day = {nutrient: summary.get_nutrient_by_day(self._user_id, nutrient, start, end) for nutrient in _PROGRESS}
-        totals = summary.get_nutrition(self._user_id, start, end)
+        daily = None if self._without_premium else self._daily_by_nutrient(start, end, dates)
+        if daily is None:
+            if len(dates) > _FREE_PROGRESS_DAYS:
+                raise FitatuValidationError(
+                    f"without Fitatu Premium, get_progress and get_report read each day on its own and cover at most "
+                    f"{_FREE_PROGRESS_DAYS} days, got {len(dates)}; get_range_summary gives the totals of a longer "
+                    "range, or ask for shorter ranges"
+                )
+            daily = [summary.get_nutrition(self._user_id, day, day) for day in dates]
+            totals = daily[0] if len(dates) == 1 else summary.get_nutrition(self._user_id, start, end)
+        else:
+            totals = summary.get_nutrition(self._user_id, start, end)
         days: list[dict[str, Any]] = []
-        for offset in range((end - start).days + 1):
-            day = (start + dt.timedelta(days=offset)).isoformat()
+        for day, values in zip(dates, daily, strict=True):
             entry: dict[str, Any] = {"date": day}
-            for nutrient, reply in by_day.items():
-                logged = _rounded((as_dict(reply.get("measures")) or {}).get(day))
-                if nutrient == "energy":
-                    low, high = None, (as_dict(reply.get("targets")) or {}).get(day)
-                else:
-                    bounds = as_dict((as_dict(reply.get("targetRanges")) or {}).get(day)) or {}
-                    low, high = bounds.get("min"), bounds.get("max")
-                goal = _goal(nutrient, low, high)
+            for nutrient in _PROGRESS:
+                value = as_dict(values.get(nutrient)) or {}
+                logged, high = _rounded(value.get("current")), value.get("max")
+                # Only a day's own range summary (no Premium) says what was eaten; null when no row is ticked.
+                eaten = {"eaten": _rounded(value["eaten"]) or 0} if "eaten" in value else {}
                 left = None if high is None else round(float(high) - (logged or 0), 2)
-                entry[nutrient] = {"logged": logged, **goal, "left": left}
+                entry[nutrient] = {"logged": logged, **eaten, **_goal(nutrient, value.get("min"), high), "left": left}
             days.append(entry)
         range_totals = {}
         for nutrient in _PROGRESS:
@@ -1225,6 +1245,30 @@ class FitatuTools:
                 **_goal(nutrient, total.get("min"), total.get("max")),
             }
         return {"from_date": start.isoformat(), "to_date": end.isoformat(), "days": days, "totals": range_totals}
+
+    def _daily_by_nutrient(self, start: dt.date, end: dt.date, dates: list[str]) -> list[dict[str, Any]] | None:
+        """Each day's logged (``current``) and goals (``min``, ``max``) in the range summary's shape, from
+        the Premium routes; None when Fitatu refuses them for want of Premium, which the instance remembers."""
+        replies = {}
+        try:
+            for nutrient in reversed(_PROGRESS):  # a macro first: without Premium it answers 403, energy does not
+                replies[nutrient] = self.client.summary.get_nutrient_by_day(self._user_id, nutrient, start, end)
+        except FitatuApiError as exc:
+            if exc.status_code != 403 or (exc.body or "").lstrip().startswith("<"):  # an HTML page is a firewall's
+                raise
+            self._without_premium = True
+            return None
+        daily = []
+        for day in dates:
+            values = {}
+            for nutrient, reply in replies.items():
+                if nutrient == "energy":
+                    goal = {"max": (as_dict(reply.get("targets")) or {}).get(day)}
+                else:
+                    goal = as_dict((as_dict(reply.get("targetRanges")) or {}).get(day)) or {}
+                values[nutrient] = {"current": (as_dict(reply.get("measures")) or {}).get(day), **goal}
+            daily.append(values)
+        return daily
 
     def get_top_foods(self, from_date: str, to_date: str, nutrient: str = "energy", limit: int = 10) -> dict[str, Any]:
         start, end = as_date(from_date, "from_date"), as_date(to_date, "to_date")
@@ -1261,6 +1305,11 @@ class FitatuTools:
                 "end": {"date": last, "value": weights[last]},
                 "change": round(weights[last] - weights[first], 2),
             }
+        # _progress found out whether the account has Premium, which the top foods need.
+        top_foods: dict[str, Any] | None = None
+        note: str | None = "The top foods need Fitatu Premium, which this account does not have."
+        if not self._without_premium:
+            top_foods, note = {nutrient: self.get_top_foods(start, end, nutrient, 5)["foods"] for nutrient in ("energy", "protein")}, None
         return {
             "from_date": start,
             "to_date": end,
@@ -1268,7 +1317,8 @@ class FitatuTools:
             "days_logged": days_logged,
             "nutrition": nutrition,
             "weight": weight,
-            "top_foods": {nutrient: self.get_top_foods(start, end, nutrient, 5)["foods"] for nutrient in ("energy", "protein")},
+            "top_foods": top_foods,
+            "top_foods_note": note,
         }
 
     def get_shopping_list(self, from_date: str, to_date: str) -> dict[str, Any]:

@@ -32,7 +32,8 @@ with FitatuTools.from_session() as tools:  # the `fitatu-api login` session file
 - `FitatuTools.call(name, arguments)` checks the name and the arguments against the schema
   (required arguments, types, enums, minimums and maximums, dates and the items of arrays)
   before anything is sent, runs the tool and never raises. Every `limit` has a maximum, and
-  `get_progress` covers at most 62 days, so no result outgrows what a host passes to the model.
+  `get_progress` covers at most 62 days (31 without Fitatu Premium), so no result outgrows what a
+  host passes to the model.
 - Each tool is also a method (`tools.get_day("2026-10-13")`) that returns the `data` part and
   raises the library's typed errors, for code that is not a model.
 - `FitatuTools.from_session(path=None, *, tools=None, call_timeout=45, **client_kwargs)` finds
@@ -82,9 +83,9 @@ repeating the same call has no further effect.
 | `get_day` | One diary day: per meal its `meal_key` and the user's `meal_name` with its rows (`row_id`, `food_type`, `product_id` or `recipe_id`, which `add_food` takes as `food_id`, name, measure, quantity, weight, energy and nutrients, `eaten`), meal and day `totals` (every row), `eaten_totals` (rows ticked as eaten), logged activities, the day's `note` (the user's own text, null without one) and `tags_ids`. What the user ate is `eaten_totals`, or `totals` when no row is ticked. | read | no | yes |
 | `get_targets` | Daily goals for a day: energy, protein/fat/carbohydrate in grams and percent, BMR/TMR. | read | no | yes |
 | `get_range_summary` | Fitatu's own nutrition summary and burned energy for a date range: `nutrition` counts every row like `totals`, `eaten_nutrition` only the rows ticked as eaten; both are totals over the range, not daily averages. | read | no | yes |
-| `get_progress` | Each day of a range (at most 62 days; longer is `get_report`) against the user's goals, for energy, protein, fat and carbohydrate: `logged` (every row; null on a day with nothing logged), `target` (energy) or `target_min`/`target_max` (a macro), `left` (the goal minus `logged`, a macro's from `target_max`; negative when over); range `totals` with `logged`, `eaten` (rows ticked as eaten) and the goals summed. "What is left today", "did I hit protein", how each day went; 5 requests for any range. | read | no | yes |
+| `get_progress` | Each day of a range (at most 62 days; longer is `get_report`) against the user's goals, for energy, protein, fat and carbohydrate: `logged` (every row; null on a day with nothing logged), `target` (energy) or `target_min`/`target_max` (a macro), `left` (the goal minus `logged`, a macro's from `target_max`; negative when over); range `totals` with `logged`, `eaten` (rows ticked as eaten) and the goals summed. "What is left today", "did I hit protein", how each day went; 5 requests for any range. Works on every account: without Fitatu Premium, which the macros' day-by-day route needs, it reads each day's own summary instead (at most 31 days, a request per day, and each day has `eaten` too). | read | no | yes |
 | `get_top_foods` | The foods that gave the most of a nutrient (energy by default, or protein, fat, carbohydrate, fiber, sugars, salt) over a range, most first: `name`, `amount` summed over the range and `per100`, as numbers (the server sends strings); no id, since the server does not say whether it is a product's, a recipe's or a custom row's. A recipe may show up as its ingredients. | read | no | yes |
-| `get_report` | A weekly or monthly report: per nutrient the range's `logged` and `eaten` totals and `daily` (`logged` averaged over the `days_logged`, next to the average daily goal); `weight` (first and last weigh-in of the range and the `change`, null without one); `top_foods`, the 5 with the most energy and the 5 with the most protein. 8 requests, one more for every further 41 weigh-ins in the range. | read | no | yes |
+| `get_report` | A weekly or monthly report: per nutrient the range's `logged` and `eaten` totals and `daily` (`logged` averaged over the `days_logged`, next to the average daily goal); `weight` (first and last weigh-in of the range and the `change`, null without one); `top_foods`, the 5 with the most energy and the 5 with the most protein. 8 requests, one more for every further 41 weigh-ins in the range. Without Fitatu Premium the progress is read day by day as in `get_progress` (at most 31 days), and `top_foods` is null with a `top_foods_note` saying why. | read | no | yes |
 | `get_shopping_list` | A shopping list for up to 14 days, worked out here from the rows planned and not ticked as eaten (Fitatu has no route for it): `products` summed per product and measure, with `quantity` and `weight_g`, the ingredients of each planned recipe included for its portions; `recipes` lists those recipes (`expanded` false when the recipe could not be read, e.g. a premium one); `other_items` the custom rows as they are. It knows nothing of the user's stock or pack sizes. It should start at today ("this week" is today to Sunday), as past rows not ticked as eaten were usually eaten anyway. One request per day and one per recipe. | read | no | yes |
 | `search_food` | Catalog search; each hit has `food_id`, `type` (PRODUCT or RECIPE), name, brand, its default measure, `times_used` (how often the user logged it, when the server says) and `favorite`. | read | no | yes |
 | `search_recipes` | Recipe catalog search for meal ideas, by words and/or `max_energy_kcal` per portion ("a dinner under 500 kcal with chicken"); hits are shaped like `search_food` RECIPE hits (energy and measure of one portion) plus `cooking_time`, `preparation_time`, `rating` and `premium`, since a premium recipe may not be readable or loggable on a free account. | read | no | yes |
@@ -499,7 +500,10 @@ error that names it. As it is:
   energy give the recorded reply for any dates; `get_progress` and `get_report` need
   `fake.routes` for protein, fat and carbohydrate, `get_report` also for the protein top foods
   (`GET /diet-plan/{id}/summary-product/protein/custom`), `get_top_foods` for other nutrients
-  (`tests/test_agent.py` has replies);
+  (`tests/test_agent.py` has replies); `FakeFitatuServer(free=True)` (or `fake.free = True`)
+  answers the Premium-only routes with 403, as Fitatu does for an account without Premium, and
+  a route's reply may be a function of the request's `params` (`tests/test_agent.py`'s
+  `range_summary` answers each day's summary);
 - `get_water`, `set_water`, `get_recent_foods`, `get_favorite_foods`, `set_favorite`,
   `get_my_foods`, `create_recipe`, `update_recipe`, `delete_recipe`, `search_recipes`,
   `get_fasting`, `get_habits` and `get_good_days` need `fake.routes` (`tests/test_agent.py` has
