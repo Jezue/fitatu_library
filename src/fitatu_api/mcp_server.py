@@ -55,6 +55,8 @@ READ_ONLY_NOTE = "- This server is read-only: it cannot change the diary. For ch
 DEMO_NOTE = "- This is a demo: the diary is made up and kept in memory, and nothing reaches Fitatu. Say so when you show it.\n"
 WEBSITE = "https://github.com/Jezue/fitatu_library"
 LOOPBACK = ("127.0.0.1", "localhost", "[::1]")
+# An HTTP token: printable ASCII without spaces, which also keeps it a valid header value.
+_TOKEN_PATTERN = r"[!-~]{32,}"
 # Claude Code asks before every call of such a tool, also where calls are otherwise allowed without
 # asking (https://code.claude.com/docs/en/mcp, "Require approval for a specific tool"): a deleted
 # recipe cannot be brought back.
@@ -266,8 +268,7 @@ def _http_token() -> str:
             token = Path(os.environ["FITATU_MCP_TOKEN_FILE"]).read_text(encoding="utf-8").strip()
         except OSError as exc:
             raise SystemExit(f"cannot read $FITATU_MCP_TOKEN_FILE: {exc.strerror}") from None
-    # Printable ASCII without spaces also keeps it a valid header value.
-    if not re.fullmatch(r"[!-~]{32,}", token):
+    if not re.fullmatch(_TOKEN_PATTERN, token):
         raise SystemExit(
             "fitatu-mcp --http needs FITATU_MCP_TOKEN (or FITATU_MCP_TOKEN_FILE): 32 or more printable "
             'ASCII characters, e.g. from python -c "import secrets; print(secrets.token_urlsafe(32))"'
@@ -281,8 +282,11 @@ def http_app(server: Server[Any], token: str, *, hosts: Sequence[str] = ()) -> A
     Stateless, so a restart leaves clients no session to lose, with JSON answers. The Host header must
     be 127.0.0.1, localhost, [::1] or one of ``hosts`` (any port, or none), else 421; an Origin, when
     sent, a local one, else 403 (the SDK's DNS rebinding check). Any request without the token gets
-    the same 401, before its path is looked at.
+    the same 401, before its path is looked at. A ``token`` shorter than 32 printable ASCII characters
+    raises :class:`ValueError`: an empty one would let ``Authorization: Bearer`` in.
     """
+    if not re.fullmatch(_TOKEN_PATTERN, token):
+        raise ValueError("http_app needs a token of 32 or more printable ASCII characters")
     names = [*LOOPBACK, *hosts]
     app = server.streamable_http_app(
         stateless_http=True,
@@ -345,8 +349,10 @@ def serve(args: argparse.Namespace) -> None:
     )
     if args.http:
         host = args.host or "127.0.0.1"
+        # Clients send an IPv6 address in brackets in the Host header.
+        name = f"[{host}]" if ":" in host else host
         # No access log: it would print a line per tool call.
-        uvicorn.run(http_app(server, token, hosts=[host, *args.allow_host]), host=host, port=args.port or 8765, log_config=None, log_level="info", access_log=False)
+        uvicorn.run(http_app(server, token, hosts=[name, *args.allow_host]), host=host, port=args.port or 8765, log_config=None, log_level="info", access_log=False)
         return
 
     async def run() -> None:

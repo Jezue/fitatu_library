@@ -303,7 +303,7 @@ def _post(client: TestClient, method: str, params: dict[str, Any] | None = None,
 def _http(**server: Any) -> TestClient:
     # The base URL sets the Host header, which the server checks. No GET through it: a GET opens an
     # event stream that never ends, and TestClient waits for the whole body.
-    return TestClient(http_app(build_server(FitatuTools.demo, demo=True, **server), TOKEN, hosts=["fitatu-mcp"]), base_url="http://127.0.0.1:8765")
+    return TestClient(http_app(build_server(FitatuTools.demo, demo=True, **server), TOKEN, hosts=["fitatu-mcp", "[fd7a::1]"]), base_url="http://127.0.0.1:8765")
 
 
 @pytest.mark.parametrize("read_only", [False, True])
@@ -335,10 +335,10 @@ def test_http_answers_only_to_its_own_host_names_and_local_origins() -> None:
     with _http() as client:
         hosts = {
             host: _post(client, "tools/list", Host=host).status_code
-            for host in ["evil.example:8765", "evil.example", "fitatu-mcp:8765", "fitatu-mcp", "localhost:8765", "127.0.0.1:8765"]
+            for host in ["evil.example:8765", "evil.example", "fitatu-mcp:8765", "fitatu-mcp", "localhost:8765", "127.0.0.1:8765", "[fd7a::1]:8765", "[fd7a::1]"]
         }
         origins = {origin: _post(client, "tools/list", Origin=origin).status_code for origin in ["https://evil.example", "http://localhost:6274"]}
-    assert hosts == {"evil.example:8765": 421, "evil.example": 421, "fitatu-mcp:8765": 200, "fitatu-mcp": 200, "localhost:8765": 200, "127.0.0.1:8765": 200}
+    assert hosts == {"evil.example:8765": 421, "evil.example": 421, "fitatu-mcp:8765": 200, "fitatu-mcp": 200, "localhost:8765": 200, "127.0.0.1:8765": 200, "[fd7a::1]:8765": 200, "[fd7a::1]": 200}
     assert origins == {"https://evil.example": 403, "http://localhost:6274": 200}
 
 
@@ -355,6 +355,9 @@ def test_http_needs_a_strong_token_before_it_starts(monkeypatch: pytest.MonkeyPa
         (tmp_path / "token").write_text(TOKEN + "\n", encoding="utf-8")  # a secret file ends with a newline
         monkeypatch.setenv("FITATU_MCP_TOKEN_FILE", str(tmp_path / "token"))
         main(["--http", "--demo"])
+    for weak in ["", "x" * 31, TOKEN[:-1] + " "]:  # a library caller has no CLI check: "" would let "Bearer" with no value in
+        with pytest.raises(ValueError, match="32 or more"):
+            http_app(build_server(FitatuTools.demo, demo=True), weak)
     assert run.call_args.kwargs == {"host": "127.0.0.1", "port": 8765, "log_config": None, "log_level": "info", "access_log": False}
 
 
@@ -372,6 +375,10 @@ def test_http_options_reach_the_server_and_need_http(monkeypatch: pytest.MonkeyP
             fitatu_api(["mcp", "--port", "9000"])  # else a stdio server would start, quietly
     assert (run.call_args.kwargs["host"], run.call_args.kwargs["port"]) == ("0.0.0.0", 9000)
     assert app.call_args.kwargs["hosts"] == ["0.0.0.0", "fitatu-mcp", "nas.local"]
+    with patch("fitatu_api.mcp_server.uvicorn.run") as run, patch("fitatu_api.mcp_server.http_app") as app:
+        main(["--http", "--host", "fd7a:115c:a1e0::1"])
+    # uvicorn listens on the bare address; the Host header carries it in brackets.
+    assert (run.call_args.kwargs["host"], app.call_args.kwargs["hosts"]) == ("fd7a:115c:a1e0::1", ["[fd7a:115c:a1e0::1]"])
     assert build.call_args.kwargs["read_only"] is True and build.call_args.kwargs["tools"] == ["get_today"]
 
 

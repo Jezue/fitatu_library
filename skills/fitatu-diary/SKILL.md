@@ -34,9 +34,11 @@ user's diary as tools. This skill says how to set it up and how to use the tools
    Then `hermes mcp test fitatu` (lists the tools) and `/reload-mcp` in a running session.
    Other hosts: `claude mcp add fitatu -- uvx --from "fitatu-api[mcp]" fitatu-mcp`, or the
    same command in an `mcpServers` entry. To try it without an account: add `"--demo"`.
-   An agent on another machine (or n8n): run `fitatu-mcp --http` where the session is, with
-   `FITATU_MCP_TOKEN` set, and give the host the URL `http://<that machine>:8765/mcp` and the
-   header `Authorization: Bearer <token>` (Hermes: `url:` and `headers:` in place of `command:`).
+   An agent on another machine (or n8n): run
+   `fitatu-mcp --http --host 0.0.0.0 --allow-host <that machine>` where the session is, with
+   `FITATU_MCP_TOKEN` set (add `--read-only` for reads only), and give the host the URL
+   `http://<that machine>:8765/mcp` and the header `Authorization: Bearer <token>` (Hermes:
+   `url:` and `headers:` in place of `command:`).
 3. Some hosts put the server's name in front of the tool names; the names below are without
    that prefix.
 

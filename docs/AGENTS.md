@@ -711,11 +711,12 @@ What the server does:
   error, and the model still checks `data.ok`.
 - **Session.** The file is `$FITATU_SESSION` (else `$FITATU_SESSION_PATH`, else
   `~/.fitatu/session.json`), opened on the first tool call, and refreshed tokens are written
-  back to it, as in [Long-running hosts](#long-running-hosts). In a container, pass the session
-  itself as `FITATU_SESSION_JSON` (from `fitatu-api login --print`) instead; refreshed tokens
-  then stay in memory. Without a session the server
-  still starts and lists its tools, and each call answers with an `auth` error that tells the
-  user to run `fitatu-api login`; once they have, the next call works without a restart.
+  back to it, as in [Long-running hosts](#long-running-hosts). In a container, mount a directory at
+  `/data` ([Remote (HTTP) and Docker](#remote-http-and-docker)), or pass the session itself as
+  `FITATU_SESSION_JSON` (from `fitatu-api login --print`); refreshed tokens then stay in memory.
+  Without a session the server still starts and lists its tools, and each call answers with an
+  `auth` error that tells the user to run `fitatu-api login`; once they have, the next call works
+  without a restart.
 - **One call at a time.** Calls run one after another on a worker thread. A call that is
   retrying (a 429 asks the client to wait up to 30 seconds per retry) holds the others
   meanwhile.
@@ -822,9 +823,9 @@ volumes:
 Log in once with `docker compose run --rm --entrypoint fitatu-api fitatu-mcp login`. In n8n, add an
 *AI Agent* and give it the *MCP Client Tool* with Endpoint `http://fitatu-mcp:8765/mcp`, Server
 Transport *HTTP Streamable*, and Authentication *Bearer Auth* with a credential holding the token.
-*Tools to Include* can narrow the tools further. Put `SYSTEM_PROMPT`
-(`python -c "from fitatu_api import SYSTEM_PROMPT; print(SYSTEM_PROMPT)"`) in the agent's system
-message: the agent works from its own instructions.
+*Tools to Include* can narrow the tools further. Put `SYSTEM_PROMPT` in the agent's system message,
+as the agent works from its own instructions; the image prints it:
+`docker compose run --rm --entrypoint python fitatu-mcp -c "from fitatu_api.agent import SYSTEM_PROMPT; print(SYSTEM_PROMPT)"`.
 
 **Other clients.** Claude Code:
 `claude mcp add --transport http fitatu http://nas.local:8765/mcp --header "Authorization: Bearer $FITATU_MCP_TOKEN"`.
