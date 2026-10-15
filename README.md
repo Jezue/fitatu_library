@@ -167,6 +167,23 @@ instead of raising, is deprecated and will be removed in 1.0: for results that n
 `FitatuTools` (`{"ok": true, "data": ...}`), otherwise the client. Every public call with its stability is listed in
 [docs/API_REFERENCE.md](https://github.com/Jezue/fitatu_library/blob/main/docs/API_REFERENCE.md).
 
+### Free and Premium accounts
+
+Nearly everything works on an account without Fitatu Premium. Fitatu answers 403 without it to
+(checked live 2026-10-15):
+
+- `summary.get_nutrient_by_day()` for protein, fat and carbohydrate (energy works on any account);
+- `summary.get_top_products()`, and so the `get_top_foods` tool;
+- `summary.export_diary()`, and so `fitatu-api export`, which then says so in one line.
+
+`get_progress` and `get_report` work on every account: when the macros' day-by-day route is
+refused, they read each day's own summary instead (a request per day, at most 31 days), and
+`get_report` gives `top_foods` null with a `top_foods_note`. A free account's macro goals are a
+range (`target_min` below `target_max`), a Premium one's a single number. `fitatu-api doctor`
+says whether the account has a premium plan. See
+[Free and Premium accounts](https://github.com/Jezue/fitatu_library/blob/main/docs/AGENTS.md#free-and-premium-accounts)
+in docs/AGENTS.md for the tools.
+
 ## Command line
 
 `fitatu-api` (also `python -m fitatu_api`) works on the session file, `$FITATU_SESSION` or

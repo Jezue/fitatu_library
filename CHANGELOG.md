@@ -27,6 +27,14 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now says that in one line; `summary.export_diary()` and `FitatuLibrary.export_diary_via_api()`
   add it to the error's message.
 
+### Changed
+
+- The tool descriptions, `SYSTEM_PROMPT` and the docs say what needs Fitatu Premium: among the
+  tools only `get_top_foods`; in the client `summary.get_nutrient_by_day()` for the macros,
+  `summary.get_top_products()` and `summary.export_diary()`. README and docs/AGENTS.md have a
+  "Free and Premium accounts" section. `search_recipes` no longer says a premium catalog recipe
+  may be unreadable on a free account: its details read fine there (checked live 2026-10-15).
+
 ## [0.5.0] - 2026-10-14
 
 The release that makes the library usable from an agent. The planner is rebuilt on what the day

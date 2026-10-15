@@ -236,7 +236,8 @@ TOOLS: list[dict[str, Any]] = [
         "The foods that gave the user the most of a nutrient over a date range, most first: name, "
         "amount (kcal for energy, g otherwise, summed over the range) and per100 (the food's own "
         "amount per 100 g; null for a custom item). A recipe may be listed as its ingredients. "
-        "Answers 'where does my sugar come from'.",
+        "Answers 'where does my sugar come from'. Premium only: on an account without Fitatu "
+        "Premium, Fitatu refuses it (a forbidden error); tell the user, do not retry.",
         {
             "from_date": _DATE,
             "to_date": _DATE,
@@ -298,8 +299,9 @@ TOOLS: list[dict[str, Any]] = [
         "Search the Fitatu recipe catalog for meal ideas, e.g. phrase 'kurczak' with max_energy_kcal 500 for "
         "a chicken dinner of at most 500 kcal. Each hit is shaped like a search_food hit of type RECIPE "
         "(food_id, name, energy_kcal and measure of one portion) plus cooking_time and preparation_time as "
-        "the catalog gives them, rating, and premium: a premium recipe may not be readable or loggable on "
-        "an account without premium. Log one with add_food: food_type RECIPE, quantity the portions.",
+        "the catalog gives them, rating, and premium: whether the app keeps the recipe for Fitatu Premium "
+        "(get_food_measures reads it on any account). Log one with add_food: food_type RECIPE, quantity "
+        "the portions.",
         {
             "phrase": {"type": "string", "description": "Words to look for, e.g. 'kurczak' or 'sałatka'; omit it to browse."},
             "max_energy_kcal": {"type": "number", "exclusiveMinimum": 0, "description": "Only recipes of at most this many kcal per portion."},
@@ -765,6 +767,8 @@ against get_day's meal_name and pass that meal's meal_key.
 monthly report: get_report. Eaten is its totals' eaten (rows ticked as eaten); when that is 0 but \
 logged is not, give logged and say the rows are not ticked as eaten. What is left is each day's \
 left: the goal minus everything logged, planned rows included.
+- Fitatu Premium: only get_top_foods needs it (without it, get_report's top_foods is null); every \
+other tool, get_progress and get_report included, works on any account.
 - Log food (and set copy_meal's eaten) with eaten true when the user ate it or just asks to log it; \
 false only when they plan ahead.
 - A result's top-level ok only says the call ran: say something changed only when data.ok is true.
@@ -1355,7 +1359,7 @@ class FitatuTools:
                     try:
                         details[recipe_id] = self.client.get_recipe(recipe_id) if recipe_id else {}
                     except FitatuApiError as exc:
-                        if exc.status_code not in (403, 404):  # e.g. a premium or deleted recipe; anything else is the call's error
+                        if exc.status_code not in (403, 404):  # e.g. a deleted recipe; anything else is the call's error
                             raise
                         details[recipe_id] = {}
                 recipe = details[recipe_id]
