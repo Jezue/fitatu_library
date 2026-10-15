@@ -864,7 +864,8 @@ class FitatuLibrary:
         ``xls`` as base64 in ``content_b64``, with their ``mime_type``. A file at ``path``
         is created readable by its owner only (0600), and an existing one is an error
         unless ``overwrite=True``. An empty range returns ``result`` ``None`` and writes
-        nothing.
+        nothing. The export needs Fitatu Premium: without it this is a ``forbidden`` error whose
+        message says so.
 
         Args:
             from_date: First day.

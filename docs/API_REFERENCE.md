@@ -66,7 +66,7 @@ service.
 | `fitatu-api import-session [-o PATH \| --print] [--base-url URL]` | stable | Writes the session file from tokens copied out of the web app (JSON on stdin), for accounts without a password; `--print` as for `login`. |
 | `fitatu-api tools [--json]` | beta | Lists the agent tools with their kind (read, write, destructive) and the first sentence of their description; `--json` prints `anthropic_tools()`. |
 | `fitatu-api call NAME [JSON] [--allow-writes]` | beta | Runs one tool through `FitatuTools.call()` on the session file and prints the envelope as JSON; exits 1 when `ok` is false. Only `READ_ONLY_TOOLS` run unless `--allow-writes`. |
-| `fitatu-api export --from DATE --to DATE [--format csv\|xls\|pdf\|txt] -o PATH [--overwrite]` | stable | `summary.export_diary()` written to a new 0600 file; an existing one only with `--overwrite`. An empty range writes nothing and exits 1. |
+| `fitatu-api export --from DATE --to DATE [--format csv\|xls\|pdf\|txt] -o PATH [--overwrite]` | stable | `summary.export_diary()` written to a new 0600 file; an existing one only with `--overwrite`. An empty range writes nothing and exits 1. Premium only: without Fitatu Premium it prints that in one line and exits 1. |
 | `fitatu-api mcp [--read-only] [--demo] [--tools NAME,...] [--call-timeout SECONDS]` | beta | The MCP server, the same as `fitatu-mcp`; for hosts that start the package by its name, such as the MCP Registry entry run with uvx. Needs the `mcp` extra. |
 | **Food catalog** | | |
 | `client.search_food(phrase, *, locale=None, limit=5, page=1)` | stable | Food search (products and recipes); rows carry the id as `foodId`. |
@@ -123,7 +123,7 @@ service.
 | `summary.get_nutrient_by_day(user_id, nutrient, from_date, to_date)` | stable | One nutrient day by day: `measures` (every row, planned or eaten; null on a day with nothing logged) with `targets` for energy, `targetRanges` (`min`, `max`) for protein, fat and carbohydrate (checked live 2026-10-14). |
 | `summary.get_top_products(user_id, nutrient, from_date, to_date, *, page=1, limit=20)` | stable | The foods that contributed most of a nutrient: `{list: [{id, name, amount: {current, per100}}], count}`, highest first, numbers as strings (checked live 2026-10-14). |
 | `summary.get_activities(user_id, from_date, to_date)` | stable | Burned energy and activity totals for a range. |
-| `summary.export_diary(user_id, from_date, to_date, *, fmt="csv")` | stable | The diary as `csv`, `xls`, `pdf` or `txt` bytes; `None` for an empty range. |
+| `summary.export_diary(user_id, from_date, to_date, *, fmt="csv")` | stable | The diary as `csv`, `xls`, `pdf` or `txt` bytes; `None` for an empty range. Premium only: without Fitatu Premium the API answers 403, raised as a `FitatuApiError` whose message says the export needs Premium (checked live 2026-10-15). |
 | **Water, activities, foods, fasting, habits** | | |
 | `water.get_day(user_id, day)` | beta | Water drunk on a day (web route; the app sends water inside the day sync). |
 | `water.set_day(user_id, day, water_consumption_ml)` | beta | Set the day's total in ml; safe to repeat. |
@@ -170,7 +170,7 @@ service.
 | `log_weight_via_api()` | deprecated | `measurements.set_day` with a weight (today by default). |
 | `get_weight_history_via_api()` | deprecated | Every weight entry of a range (walks the pages). |
 | `get_range_summary_via_api()` | deprecated | `summary.get_nutrition` and `summary.get_activities` for a range. |
-| `export_diary_via_api(*, from_date, to_date, fmt="csv", path=None, overwrite=False)` | deprecated | The export as text or base64, or written to a 0600 file. |
+| `export_diary_via_api(*, from_date, to_date, fmt="csv", path=None, overwrite=False)` | deprecated | The export as text or base64, or written to a 0600 file. Premium only: without Fitatu Premium a `forbidden` error whose message says so. |
 | `search_food_via_api()`, `get_recipe_via_api()`, `get_recipes_catalog_via_api()` | deprecated | Food search, a recipe, the recipe catalog or one category. |
 | `get_favorite_foods_via_api()`, `get_recent_foods_via_api()` | deprecated | Favourite foods; foods recently logged in a meal. |
 | `search_user_food_via_api()`, `find_matching_user_product_via_api()` | deprecated | The user's own foods. |

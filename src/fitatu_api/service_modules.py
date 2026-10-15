@@ -597,13 +597,19 @@ class SummaryModule:
         """Download the food diary for a date range as ``csv``, ``xls``, ``pdf`` or ``txt``.
 
         Returns the file content, or ``None`` when the range has no entries (the API
-        answers 204 in that case).
+        answers 204 in that case). Premium only: on an account without Fitatu Premium the API
+        answers 403 (checked live 2026-10-15), raised as a ``FitatuApiError`` whose message says so.
         """
         uid = validate_numeric_id(user_id, "user_id")
         if fmt not in self.EXPORT_FORMATS:
             raise FitatuValidationError(f"fmt must be one of {self.EXPORT_FORMATS}, got {fmt!r}")
         params = {"format": fmt, **_date_range_params(from_date, to_date)}
-        data = self._client.request("GET", f"/diet-plan/{uid}/export", params=params, raw=True)
+        try:
+            data = self._client.request("GET", f"/diet-plan/{uid}/export", params=params, raw=True)
+        except FitatuApiError as exc:
+            if exc.status_code != 403 or (exc.body or "").lstrip().startswith("<"):
+                raise  # an HTML page is a firewall's, not Fitatu's
+            raise FitatuApiError(f"{exc}; the diary export needs Fitatu Premium", status_code=403, body=exc.body) from exc
         return data if isinstance(data, bytes) else None
 
 

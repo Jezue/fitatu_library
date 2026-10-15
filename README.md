@@ -180,7 +180,7 @@ fitatu-api logout           # deletes the session file after asking (--yes: with
 fitatu-api tools            # the agent tools: name, read / write / destructive, what it does
 fitatu-api tools --json     # the same tools in the Anthropic API format, anthropic_tools()
 fitatu-api call get_day '{"date": "2026-10-14"}'
-fitatu-api export --from 2026-10-01 --to 2026-10-14 --format csv -o diary.csv
+fitatu-api export --from 2026-10-01 --to 2026-10-14 --format csv -o diary.csv  # needs Fitatu Premium
 ```
 
 `status` prints where the session comes from (the file and its permissions, or

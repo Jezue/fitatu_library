@@ -22,6 +22,10 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Premium this covers at most 31 days (a request per day), and a longer range is a validation
   error that points to `get_range_summary`. `get_report` gives `top_foods` null with a
   `top_foods_note` instead of failing, as the top foods are Premium-only too.
+- `fitatu-api export` on an account without Fitatu Premium printed the API's 403 and a hint that
+  listed three possible causes. The diary export is Premium-only (checked live 2026-10-15), so it
+  now says that in one line; `summary.export_diary()` and `FitatuLibrary.export_diary_via_api()`
+  add it to the error's message.
 
 ## [0.5.0] - 2026-10-14
 

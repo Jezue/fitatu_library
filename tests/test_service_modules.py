@@ -332,6 +332,17 @@ class TestSummaryModule:
         client.request.return_value = None
         assert module.export_diary(USER, date(2026, 9, 24), DAY) is None
 
+    def test_export_refused_for_want_of_premium_says_so(self) -> None:
+        client = Mock()
+        client.request.side_effect = FitatuApiError("GET -> 403", status_code=403, body='{"message": "Forbidden"}')
+        with pytest.raises(FitatuApiError, match="the diary export needs Fitatu Premium") as refused:
+            SummaryModule(client).export_diary(USER, DAY, DAY)
+        assert (refused.value.status_code, refused.value.body) == (403, '{"message": "Forbidden"}')
+        client.request.side_effect = firewall = FitatuApiError("GET -> 403", status_code=403, body="<html>blocked</html>")
+        with pytest.raises(FitatuApiError) as blocked:
+            SummaryModule(client).export_diary(USER, DAY, DAY)
+        assert blocked.value is firewall
+
     def test_export_rejects_unknown_format(self) -> None:
         with pytest.raises(FitatuValidationError, match="fmt"):
             SummaryModule(Mock()).export_diary(USER, DAY, DAY, fmt="xlsx")
