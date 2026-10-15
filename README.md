@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Jezue/fitatu_library/main/docs/assets/banner.png" alt="fitatu-api: your Fitatu food diary for AI agents (unofficial)" width="100%">
+</p>
+
 # fitatu-api
 
 <!-- mcp-name: io.github.Jezue/fitatu-api -->
