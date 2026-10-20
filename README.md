@@ -11,6 +11,7 @@
 ![Status](https://img.shields.io/badge/status-alpha-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![CI](https://github.com/Jezue/fitatu_library/actions/workflows/ci.yml/badge.svg)
+[![Fitatu MCP on mcprush](https://mcprush.com/badge/fitatu-mcp/score.svg)](https://mcprush.com/to/fitatu-mcp?ref=badge)
 
 An unofficial Python client for the API of [Fitatu](https://www.fitatu.com), the calorie
 counter, built to be driven by AI agents and scripts. It reads and writes the food diary,
