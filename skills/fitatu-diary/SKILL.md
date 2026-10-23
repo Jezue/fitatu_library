@@ -11,9 +11,9 @@ metadata:
 
 # Fitatu diary
 
-Fitatu is a Polish calorie counter. The `fitatu-mcp` server (from the open-source
-[fitatu-api](https://github.com/Jezue/fitatu_library) library, unofficial) gives you the
-user's diary as tools. This skill says how to set it up and how to use the tools well.
+Fitatu is a Polish calorie counter. The `fitatu-mcp` server, from the open-source and unofficial
+fitatu-api library ( https://github.com/Jezue/fitatu_library ), gives you the user's diary as
+tools. This skill says how to set it up and how to use the tools well.
 
 ## Setup
 
@@ -129,4 +129,4 @@ is null with a note. `get_profile` says whether the account has Premium.
 - `maintenance`: Fitatu is down for maintenance; try later.
 - `validation` / `not_found`: fix the arguments; the message lists what the day has.
 
-More: [docs/AGENTS.md](https://github.com/Jezue/fitatu_library/blob/main/docs/AGENTS.md).
+More in docs/AGENTS.md: https://github.com/Jezue/fitatu_library/blob/main/docs/AGENTS.md

@@ -7,6 +7,12 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `skills/fitatu-diary/SKILL.md`: its two links are plain URLs with a space or the line end after
+  them. Directories that show the file as plain text linked them with the closing `)` and `.`
+  of the Markdown link, which led to a page that does not exist.
+
 ## [0.6.0] - 2026-10-15
 
 More of the diary as tools, 47 now: the goals can be set, the user's own products made from a
