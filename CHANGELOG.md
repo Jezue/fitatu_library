@@ -9,6 +9,9 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `skills/fitatu-diary/SKILL.md` no longer tells an agent on another machine to listen on
+  `0.0.0.0` and send the token over plain HTTP: it keeps the default loopback address and reaches
+  it through an SSH tunnel or an HTTPS reverse proxy. docs/AGENTS.md shows the SSH tunnel too.
 - `skills/fitatu-diary/SKILL.md`: its two links are plain URLs with a space or the line end after
   them. Directories that show the file as plain text linked them with the closing `)` and `.`
   of the Markdown link, which led to a page that does not exist.

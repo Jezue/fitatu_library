@@ -829,7 +829,8 @@ start without a token: put a random one in `FITATU_MCP_TOKEN` (or a file named b
 ```bash
 export FITATU_MCP_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
 fitatu-mcp --http                                   # http://127.0.0.1:8765/mcp, this computer only
-fitatu-mcp --http --host 0.0.0.0 --allow-host nas.local --read-only   # the network, reads only
+fitatu-mcp --http --host 0.0.0.0 --allow-host nas.local --read-only   # a network you trust, reads only
+ssh -N -L 8765:127.0.0.1:8765 user@server   # on another computer: the server's loopback, encrypted by SSH
 ```
 
 - **Who can reach it.** It listens on 127.0.0.1 unless `--host` says otherwise. It answers only to
@@ -838,8 +839,10 @@ fitatu-mcp --http --host 0.0.0.0 --allow-host nas.local --read-only   # the netw
   port (403), so browser pages, even behind the proxy, cannot call it. Any request
   without the token gets 401, and the server logs the client's address (never the token).
 - **No TLS.** The token and the diary travel in plain HTTP. Keep it on your own computer, a home
-  network or a VPN such as Tailscale; to reach it from the internet, put an HTTPS reverse proxy in
-  front (and add its name with `--allow-host`). Never forward the port as is.
+  network or a VPN such as Tailscale. From another computer, the simplest safe way is an SSH
+  tunnel to the default loopback address (above; the client then uses
+  `http://127.0.0.1:8765/mcp` on its own machine); from the internet, put an HTTPS reverse proxy
+  in front (and add its name with `--allow-host`). Never forward the port as is.
 - **The token is the account.** Anyone with it can do what the served tools allow: use `--read-only`
   or `--tools` for clients that only report. Change it by restarting with a new one.
 - **Sessions.** None: every request stands alone, so a restart breaks no client, and a client can
